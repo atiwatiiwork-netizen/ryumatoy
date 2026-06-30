@@ -1,15 +1,28 @@
-import type { Database, Order, OrderItem } from '../domain/entities';
+import type { Database, Order, OrderItem, Manufacturer, Franchise, Product } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, remaining } from '../domain/services/catalog';
 
 /**
  * Pure mutations — `(db) => db`. Each returns a new Database; the store applies
- * them optimistically and persists. These cover the core booking flow.
+ * them optimistically and persists. These cover the booking flow + admin catalog
+ * management (manufacturers / franchises / products).
  */
 
 let counter = 0;
 const id = (p: string) => `${p}-${Date.now()}-${counter++}`;
+
+/** Generate a fresh id for a new catalog row (used by the admin forms). */
+export const genId = (prefix: string) => id(prefix);
+
+/** Insert or replace a row by id within a collection. */
+function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
+  const i = rows.findIndex((r) => r.id === row.id);
+  if (i < 0) return [...rows, row];
+  const next = [...rows];
+  next[i] = row;
+  return next;
+}
 
 /** Submit a cart as an order awaiting admin approval (PRD §9 step 5). */
 export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) {
@@ -94,3 +107,18 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
     ],
   });
 }
+
+// ---- Admin catalog CRUD (PRD §16 จัดการสินค้า) ------------------------------
+
+export const upsertManufacturer = (m: Manufacturer) => (db: Database): Database => ({ ...db, manufacturers: upsertById(db.manufacturers, m) });
+export const removeManufacturer = (mid: string) => (db: Database): Database => ({ ...db, manufacturers: db.manufacturers.filter((m) => m.id !== mid) });
+
+export const upsertFranchise = (f: Franchise) => (db: Database): Database => ({ ...db, franchises: upsertById(db.franchises, f) });
+export const removeFranchise = (fid: string) => (db: Database): Database => ({ ...db, franchises: db.franchises.filter((f) => f.id !== fid) });
+
+export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...db, products: upsertById(db.products, p) });
+export const removeProduct = (pid: string) => (db: Database): Database => ({
+  ...db,
+  products: db.products.filter((p) => p.id !== pid),
+  variants: db.variants.filter((v) => v.product_id !== pid),
+});

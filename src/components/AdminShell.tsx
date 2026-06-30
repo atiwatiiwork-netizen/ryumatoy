@@ -18,6 +18,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const nav: { href: string; icon: IconName; label: string; active: boolean; badge?: number }[] = [
     { href: '/admin', icon: 'dashboard', label: 'Dashboard', active: path === '/admin' },
     { href: firstPending ? `/admin/orders/${firstPending}` : '/admin', icon: 'ticket', label: 'สลิป / ออเดอร์', active: path.startsWith('/admin/orders'), badge: pending.length },
+    { href: '/admin/products', icon: 'box', label: 'จัดการสินค้า', active: path.startsWith('/admin/products') },
   ];
 
   return (
