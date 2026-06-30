@@ -11,9 +11,17 @@ export type OrderStatus = 'pending_approval' | 'approved' | 'rejected';
 export type TransferStatus = 'listed' | 'pending_admin' | 'approved' | 'cancelled';
 export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond';
 
+/** ประเภท / Type — top category that groups makers (WCF, Resin, Bandai...). */
+export interface Category {
+  id: string;
+  name: string;
+  active: boolean; // only active types are offered on the storefront
+}
+
 export interface Manufacturer {
   id: string;
   name: string; // ค่าย เช่น "A+", "YZ"
+  category_id: string; // ประเภท/Type this maker belongs to
   logo_url?: string; // Supabase Storage URL of the maker icon
 }
 
@@ -156,6 +164,7 @@ export interface ShopSettings {
 /** The whole app database as one JSON object (single source of truth). */
 export interface Database {
   users: User[];
+  categories: Category[];
   manufacturers: Manufacturer[];
   franchises: Franchise[];
   series: Series[];

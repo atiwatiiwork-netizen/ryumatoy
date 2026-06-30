@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Manufacturer, Franchise, Series, Product } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, remaining } from '../domain/services/catalog';
@@ -109,6 +109,9 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
 }
 
 // ---- Admin catalog CRUD (PRD §16 จัดการสินค้า) ------------------------------
+
+export const upsertCategory = (c: Category) => (db: Database): Database => ({ ...db, categories: upsertById(db.categories, c) });
+export const removeCategory = (cid: string) => (db: Database): Database => ({ ...db, categories: db.categories.filter((c) => c.id !== cid) });
 
 export const upsertManufacturer = (m: Manufacturer) => (db: Database): Database => ({ ...db, manufacturers: upsertById(db.manufacturers, m) });
 export const removeManufacturer = (mid: string) => (db: Database): Database => ({ ...db, manufacturers: db.manufacturers.filter((m) => m.id !== mid) });

@@ -8,17 +8,14 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, typeLabel, seriesForFranchise } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise } from '@/domain/services/catalog';
 import {
-  genId, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
+  genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
   upsertSeries, removeSeries, upsertProduct, removeProduct,
 } from '@/data/mutations';
-import type { Product, ProductStatus, ProductType } from '@/domain/entities';
+import type { Product, ProductStatus } from '@/domain/entities';
 
-type Tab = 'products' | 'manufacturers' | 'franchises' | 'series';
-const TYPES: { v: ProductType; label: string }[] = [
-  { v: 'wcf', label: 'WCF' }, { v: 'figure', label: 'Figure' }, { v: 'resin', label: 'Resin' }, { v: 'other', label: 'อื่นๆ' },
-];
+type Tab = 'products' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
   { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
@@ -35,14 +32,67 @@ export default function AdminProductsPage() {
     <div>
       <div className="mb-5 text-2xl font-extrabold">จัดการสินค้า</div>
       <div className="mb-6 flex flex-wrap gap-2">
-        {([['products', 'สินค้า'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
+        {([['products', 'สินค้า'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
       </div>
       {tab === 'products' && <Products />}
+      {tab === 'categories' && <Categories />}
       {tab === 'franchises' && <Franchises />}
       {tab === 'manufacturers' && <Manufacturers />}
       {tab === 'series' && <SeriesTab />}
+    </div>
+  );
+}
+
+// ---- ประเภท (Categories / Type) --------------------------------------------
+function Categories() {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const [id, setId] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [active, setActive] = useState(true);
+
+  const reset = () => { setId(null); setName(''); setActive(true); };
+  const save = () => {
+    if (!name.trim()) return flash('กรอกชื่อประเภท');
+    dispatch(upsertCategory({ id: id ?? genId('cat'), name: name.trim(), active }));
+    flash(id ? 'บันทึกแล้ว' : 'เพิ่มประเภทแล้ว'); reset();
+  };
+  const del = (cid: string) => {
+    if (db.manufacturers.some((m) => m.category_id === cid)) return flash('ลบไม่ได้ — มีค่ายอยู่ใต้ประเภทนี้');
+    dispatch(removeCategory(cid)); flash('ลบประเภทแล้ว'); if (id === cid) reset();
+  };
+  const toggle = (cid: string) => {
+    const c = db.categories.find((x) => x.id === cid);
+    if (c) dispatch(upsertCategory({ ...c, active: !c.active }));
+  };
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[320px_1fr] lg:items-start">
+      <Panel>
+        <div className="mb-3 flex items-center justify-between"><span className="font-bold">{id ? 'แก้ไขประเภท' : 'เพิ่มประเภทใหม่'}</span>{id && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
+        <div className="flex flex-col gap-3">
+          <Field label="ชื่อประเภท (Type)"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น WCF, Resin, Bandai" /></Field>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> เปิดใช้งาน (โชว์บนหน้าร้าน)</label>
+          <Button onClick={save} icon={id ? 'check' : 'plus'}>{id ? 'บันทึก' : 'เพิ่มประเภท'}</Button>
+        </div>
+      </Panel>
+      <Panel>
+        <div className="mb-3 font-bold">ประเภททั้งหมด ({db.categories.length})</div>
+        <div className="flex flex-col divide-y divide-hair">
+          {db.categories.map((c) => (
+            <div key={c.id} className="flex items-center gap-3 py-3">
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{c.name}</div><div className="text-[11.5px] text-ink-faint">{db.manufacturers.filter((m) => m.category_id === c.id).length} ค่าย</div></div>
+              <button onClick={() => toggle(c.id)} className={cx('rounded-full border px-3 py-1 text-[12px] font-semibold', c.active ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-faint')}>{c.active ? 'เปิด' : 'ปิด'}</button>
+              <button onClick={() => { setId(c.id); setName(c.name); setActive(c.active); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <button onClick={() => del(c.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+            </div>
+          ))}
+          {db.categories.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีประเภท</div>}
+        </div>
+      </Panel>
     </div>
   );
 }
@@ -65,13 +115,15 @@ function Manufacturers() {
   const { flash } = useToast();
   const [id, setId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [categoryId, setCategoryId] = useState(db.categories[0]?.id ?? '');
   const [logo, setLogo] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
-  const reset = () => { setId(null); setName(''); setLogo(undefined); };
+  const reset = () => { setId(null); setName(''); setCategoryId(db.categories[0]?.id ?? ''); setLogo(undefined); };
   const save = () => {
     if (!name.trim()) return flash('กรอกชื่อค่าย');
-    dispatch(upsertManufacturer({ id: id ?? genId('m'), name: name.trim(), logo_url: logo }));
+    if (!categoryId) return flash('เลือกประเภท (ไปเพิ่มประเภทก่อน)');
+    dispatch(upsertManufacturer({ id: id ?? genId('m'), name: name.trim(), category_id: categoryId, logo_url: logo }));
     flash(id ? 'บันทึกค่ายแล้ว' : 'เพิ่มค่ายแล้ว'); reset();
   };
   const onFile = async (file?: File) => {
@@ -99,6 +151,11 @@ function Manufacturers() {
             <div className="text-[12px] text-ink-faint">Icon ค่าย<br />แตะเพื่ออัปโหลด (ไม่บังคับ)</div>
           </div>
           <Field label="ชื่อค่าย (Manufacturer)"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น A+, YZ" /></Field>
+          <Field label="ประเภท (Type)">
+            {db.categories.length === 0
+              ? <div className="text-[12px] text-ink-faint">ยังไม่มีประเภท — ไปเพิ่มที่แท็บ “ประเภท” ก่อน</div>
+              : <select className={inputCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{db.categories.map((c) => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (ปิด)'}</option>)}</select>}
+          </Field>
           <Button onClick={save} icon={id ? 'check' : 'plus'} disabled={busy}>{id ? 'บันทึก' : 'เพิ่มค่าย'}</Button>
         </div>
       </Panel>
@@ -110,8 +167,8 @@ function Manufacturers() {
               <div className="grid h-10 w-10 flex-shrink-0 place-items-center overflow-hidden rounded-lg border border-subtle bg-surface-3">
                 {m.logo_url ? <img src={m.logo_url} alt="" className="h-full w-full object-cover" /> : <Icon name="store" size={18} className="text-ink-faint" />}
               </div>
-              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{m.name}</div><div className="text-[11.5px] text-ink-faint">{db.products.filter((p) => p.manufacturer_id === m.id).length} สินค้า</div></div>
-              <button onClick={() => { setId(m.id); setName(m.name); setLogo(m.logo_url); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{m.name}</div><div className="text-[11.5px] text-ink-faint">{db.categories.find((c) => c.id === m.category_id)?.name ?? '—'} · {db.products.filter((p) => p.manufacturer_id === m.id).length} สินค้า</div></div>
+              <button onClick={() => { setId(m.id); setName(m.name); setCategoryId(m.category_id); setLogo(m.logo_url); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
               <button onClick={() => del(m.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
             </div>
           ))}
@@ -239,7 +296,6 @@ interface Draft {
   manufacturer_id: string;
   series_id: string;
   series_name: string;
-  type: ProductType;
   description: string;
   eta_note: string;
   price_total: string;
@@ -249,7 +305,7 @@ interface Draft {
   status: ProductStatus;
 }
 const emptyDraft = (fid: string, mid: string): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', type: 'wcf', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open',
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open',
 });
 
 function Products() {
@@ -275,7 +331,7 @@ function Products() {
       manufacturer_id: draft.manufacturer_id,
       series_id: draft.series_id || undefined,
       series_name: draft.series_name.trim(),
-      type: draft.type,
+      type: 'other',
       description: draft.description.trim(),
       images: existing?.images ?? [],
       eta_note: draft.eta_note.trim() || (draft.is_stock ? 'พร้อมส่ง' : 'TBA'),
@@ -293,7 +349,7 @@ function Products() {
 
   const edit = (p: Product) => setDraft({
     id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
-    series_name: p.series_name, type: p.type, description: p.description, eta_note: p.eta_note,
+    series_name: p.series_name, description: p.description, eta_note: p.eta_note,
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
   });
@@ -325,10 +381,7 @@ function Products() {
               <span className="mt-1 block text-[11px] text-ink-faint">เฉพาะซีรีย์ที่ค่ายนี้ทำ ({seriesOptions.length})</span>
             </Field>
             <Field label="ชื่อสินค้า"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Luffy — Thriller Park" /></Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="ประเภท"><select className={inputCls} value={draft.type} onChange={(e) => set('type', e.target.value as ProductType)}>{TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}</select></Field>
-              <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
-            </div>
+            <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ราคาเต็ม (฿)"><input className={inputCls} inputMode="numeric" value={draft.price_total} onChange={(e) => set('price_total', e.target.value)} placeholder="1290" /></Field>
@@ -351,7 +404,7 @@ function Products() {
               <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-stripe"><Icon name="box" size={20} className="text-primary-soft/25" /></div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
-                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {manufacturerOf(db, p)?.name} · {typeLabel(p.type)} · {baht(p.price_total)}</div>
+                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {manufacturerOf(db, p)?.name} · {categoryOf(db, p)?.name ?? '—'} · {baht(p.price_total)}</div>
               </div>
               <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
               <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>

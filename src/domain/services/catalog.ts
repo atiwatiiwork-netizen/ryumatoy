@@ -1,4 +1,4 @@
-import type { Database, Product, Franchise, Manufacturer, Series, ProductVariant } from '../entities';
+import type { Database, Product, Franchise, Manufacturer, Category, Series, ProductVariant } from '../entities';
 
 /** Catalog read helpers — derive views over the products graph. No mutation. */
 
@@ -12,6 +12,17 @@ export function manufacturerOf(db: Database, product: Product): Manufacturer | u
 
 export function manufacturerNameOf(db: Database, product: Product): string {
   return manufacturerOf(db, product)?.name ?? '';
+}
+
+/** ประเภท/Type of a product, derived from its maker's category. */
+export function categoryOf(db: Database, product: Product): Category | undefined {
+  const maker = manufacturerOf(db, product);
+  return maker ? db.categories.find((c) => c.id === maker.category_id) : undefined;
+}
+
+/** Makers under a category (used to narrow the ค่าย filter by Type). */
+export function makersOfCategory(db: Database, categoryId: string): Manufacturer[] {
+  return db.manufacturers.filter((m) => m.category_id === categoryId);
 }
 
 export function seriesOf(db: Database, product: Product): Series | undefined {
@@ -39,15 +50,16 @@ export const typeLabel = (t: Product['type']) => TYPE_LABEL[t];
 export function metaLine(db: Database, product: Product): string {
   const fr = franchiseOf(db, product);
   const maker = manufacturerNameOf(db, product);
-  return [fr?.abbr ?? '??', maker, typeLabel(product.type)].filter(Boolean).join('·');
+  const cat = categoryOf(db, product)?.name;
+  return [fr?.abbr ?? '??', maker, cat].filter(Boolean).join('·');
 }
 
 export interface ProductFilter {
   category?: 'preorder' | 'instock' | null;
+  categoryId?: string | null; // ประเภท/Type (via maker)
   franchiseId?: string | null;
   manufacturerId?: string | null;
   seriesId?: string | null;
-  type?: Product['type'] | null;
   status?: Product['status'] | null;
   query?: string;
 }
@@ -56,10 +68,10 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
   return db.products.filter((p) => {
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;
+    if (f.categoryId && categoryOf(db, p)?.id !== f.categoryId) return false;
     if (f.franchiseId && p.franchise_id !== f.franchiseId) return false;
     if (f.manufacturerId && p.manufacturer_id !== f.manufacturerId) return false;
     if (f.seriesId && p.series_id !== f.seriesId) return false;
-    if (f.type && p.type !== f.type) return false;
     if (f.status && p.status !== f.status) return false;
     if (f.query) {
       const q = f.query.toLowerCase();

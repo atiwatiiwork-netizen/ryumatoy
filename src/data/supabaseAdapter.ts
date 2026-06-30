@@ -49,9 +49,10 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings] =
+    const [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings] =
       await Promise.all([
         sb.from('users').select('*'),
+        sb.from('categories').select('*'),
         sb.from('manufacturers').select('*'),
         sb.from('franchises').select('*'),
         sb.from('series').select('*'),
@@ -66,7 +67,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings];
+    const results = [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
@@ -79,6 +80,7 @@ export const supabaseAdapter: PersistenceAdapter = {
 
     return {
       users: (users.data ?? []) as Database['users'],
+      categories: (categories.data ?? []) as Database['categories'],
       manufacturers: (manufacturers.data ?? []) as Database['manufacturers'],
       franchises: (franchises.data ?? []) as Database['franchises'],
       series: (series.data ?? []) as Database['series'],
@@ -103,6 +105,7 @@ export const supabaseAdapter: PersistenceAdapter = {
   async persist(next, base) {
     const sb = client();
     await syncTable(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]);
+    await syncTable(sb, 'categories', next.categories as unknown as Row[], base.categories as unknown as Row[]);
     await syncTable(sb, 'manufacturers', next.manufacturers as unknown as Row[], base.manufacturers as unknown as Row[]);
     await syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]);
     await syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]);

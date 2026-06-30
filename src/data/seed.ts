@@ -18,10 +18,16 @@ export const SEED_DATABASE: Database = {
     { id: 'u-admin', display_name: 'Ryuma Admin', rank: 'diamond', total_spent: 0, preferred_lang: 'th' },
   ],
 
+  categories: [
+    { id: 'cat-wcf', name: 'WCF', active: true },
+    { id: 'cat-resin', name: 'Resin', active: false },
+    { id: 'cat-bandai', name: 'Bandai', active: false },
+  ],
+
   manufacturers: [
-    { id: 'm-bandai', name: 'Bandai' },
-    { id: 'm-megahouse', name: 'MegaHouse' },
-    { id: 'm-prime1', name: 'Prime1Studio' },
+    { id: 'm-bandai', name: 'Bandai', category_id: 'cat-wcf' },
+    { id: 'm-megahouse', name: 'MegaHouse', category_id: 'cat-wcf' },
+    { id: 'm-prime1', name: 'Prime1Studio', category_id: 'cat-resin' },
   ],
 
   franchises: [

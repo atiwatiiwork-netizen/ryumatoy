@@ -5,8 +5,8 @@ import { useDatabase } from '@/state/DataProvider';
 import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
-import { filterProducts, seriesForFranchise, type ProductFilter } from '@/domain/services/catalog';
-import type { ProductStatus, ProductType } from '@/domain/entities';
+import { filterProducts, seriesForFranchise, makersOfCategory, type ProductFilter } from '@/domain/services/catalog';
+import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
   { key: 'open', label: 'เปิดจอง' },
@@ -14,29 +14,28 @@ const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
   { key: 'shipping', label: 'กำลังเดินทาง' },
   { key: 'arrived', label: 'ถึงไทยแล้ว' },
 ];
-const TYPES: { key: ProductType; label: string }[] = [
-  { key: 'wcf', label: 'WCF' },
-  { key: 'figure', label: 'Figure' },
-  { key: 'resin', label: 'Resin' },
-];
 
 export default function ShopPage() {
   const db = useDatabase();
   const [category, setCategory] = useState<ProductFilter['category']>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(null); // ประเภท/Type
   const [franchiseId, setFranchiseId] = useState<string | null>(null);
   const [manufacturerId, setManufacturerId] = useState<string | null>(null);
   const [seriesId, setSeriesId] = useState<string | null>(null);
   const [status, setStatus] = useState<ProductStatus | null>(null);
-  const [type, setType] = useState<ProductType | null>(null);
   const [query, setQuery] = useState('');
 
   const results = useMemo(
-    () => filterProducts(db, { category, franchiseId, manufacturerId, seriesId, status, type, query }),
-    [db, category, franchiseId, manufacturerId, seriesId, status, type, query],
+    () => filterProducts(db, { category, categoryId, franchiseId, manufacturerId, seriesId, status, query }),
+    [db, category, categoryId, franchiseId, manufacturerId, seriesId, status, query],
   );
 
   const preorderCount = db.products.filter((p) => !p.is_stock).length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
+  // ประเภท offered on the storefront = active categories only
+  const activeCategories = db.categories.filter((c) => c.active);
+  // ค่าย list narrows to makers under the selected ประเภท
+  const makerList = categoryId ? makersOfCategory(db, categoryId) : db.manufacturers;
   // ซีรีย์ shown only once a เรื่อง is picked (optionally narrowed by ค่าย)
   const seriesList = franchiseId ? seriesForFranchise(db, franchiseId, manufacturerId ?? undefined) : [];
 
@@ -57,15 +56,21 @@ export default function ShopPage() {
         <CategoryBanner active={category === 'instock'} onClick={() => setCategory(category === 'instock' ? null : 'instock')} title="In-Stock" count={stockCount} icon="bolt" grad="linear-gradient(120deg, rgba(22,163,74,.18), #0e1310)" border="border-[#16a34a]/50" />
       </div>
 
-      {/* mobile filter rails — order: เรื่อง → ค่าย → ซีรีย์ → สถานะ */}
+      {/* mobile filter rails — order: ประเภท → ค่าย → เรื่อง → ซีรีย์ → สถานะ */}
       <div className="lg:hidden">
+        {activeCategories.length > 1 && (
+          <ChipRail>
+            <Chip active={!categoryId} onClick={() => { setCategoryId(null); setManufacturerId(null); setSeriesId(null); }}>ทุกประเภท</Chip>
+            {activeCategories.map((c) => <Chip key={c.id} active={categoryId === c.id} onClick={() => { setCategoryId(c.id); setManufacturerId(null); setSeriesId(null); }}>{c.name}</Chip>)}
+          </ChipRail>
+        )}
+        <ChipRail>
+          <Chip active={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }}>ทุกค่าย</Chip>
+          {makerList.map((m) => <Chip key={m.id} active={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }}>{m.name}</Chip>)}
+        </ChipRail>
         <ChipRail>
           <Chip active={!franchiseId} onClick={() => { setFranchiseId(null); setSeriesId(null); }}>ทุกเรื่อง</Chip>
           {db.franchises.map((f) => <Chip key={f.id} active={franchiseId === f.id} onClick={() => { setFranchiseId(f.id); setSeriesId(null); }}>{f.name}</Chip>)}
-        </ChipRail>
-        <ChipRail>
-          <Chip active={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }}>ทุกค่าย</Chip>
-          {db.manufacturers.map((m) => <Chip key={m.id} active={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }}>{m.name}</Chip>)}
         </ChipRail>
         {seriesList.length > 0 && (
           <ChipRail>
@@ -81,26 +86,26 @@ export default function ShopPage() {
 
       <div className="lg:grid lg:grid-cols-[208px_1fr] lg:gap-6 lg:items-start">
         <aside className="sticky top-[86px] hidden rounded-card border border-subtle bg-surface-2 p-[18px] lg:block">
-          <FilterGroup title="เรื่อง (Franchise)">
+          {activeCategories.length > 1 && (
+            <FilterGroup title="ประเภท (Type)">
+              <Check label="ทั้งหมด" checked={!categoryId} onClick={() => { setCategoryId(null); setManufacturerId(null); setSeriesId(null); }} />
+              {activeCategories.map((c) => <Check key={c.id} label={c.name} checked={categoryId === c.id} onClick={() => { setCategoryId(c.id); setManufacturerId(null); setSeriesId(null); }} />)}
+            </FilterGroup>
+          )}
+          <FilterGroup title="ค่าย (Manufacturer)">
+            <Check label="ทั้งหมด" checked={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }} />
+            {makerList.map((m) => <Check key={m.id} label={m.name} checked={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }} />)}
+          </FilterGroup>
+          <FilterGroup title="เรื่อง (Franchise)" last={seriesList.length === 0}>
             <Check label="ทั้งหมด" checked={!franchiseId} onClick={() => { setFranchiseId(null); setSeriesId(null); }} />
             {db.franchises.map((f) => <Check key={f.id} label={f.name} checked={franchiseId === f.id} onClick={() => { setFranchiseId(f.id); setSeriesId(null); }} />)}
           </FilterGroup>
-          <FilterGroup title="ค่าย (Manufacturer)">
-            <Check label="ทั้งหมด" checked={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }} />
-            {db.manufacturers.map((m) => <Check key={m.id} label={m.name} checked={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }} />)}
-          </FilterGroup>
           {seriesList.length > 0 && (
-            <FilterGroup title="ซีรีย์ (Series)">
+            <FilterGroup title="ซีรีย์ (Series)" last>
               <Check label="ทั้งหมด" checked={!seriesId} onClick={() => setSeriesId(null)} />
               {seriesList.map((s) => <Check key={s.id} label={s.name} checked={seriesId === s.id} onClick={() => setSeriesId(s.id)} />)}
             </FilterGroup>
           )}
-          <FilterGroup title="ประเภท" last>
-            <div className="flex flex-wrap gap-1.5">
-              <TypeChip label="ทั้งหมด" active={!type} onClick={() => setType(null)} />
-              {TYPES.map((t) => <TypeChip key={t.key} label={t.label} active={type === t.key} onClick={() => setType(t.key)} />)}
-            </div>
-          </FilterGroup>
         </aside>
 
         <div>
@@ -148,14 +153,6 @@ function Check({ label, checked, onClick }: { label: string; checked?: boolean; 
       <span className={cx('grid h-[17px] w-[17px] flex-shrink-0 place-items-center rounded-[5px] border-[1.5px]', checked ? 'border-primary bg-primary' : 'border-subtle')}>
         {checked && <Icon name="check" size={12} className="text-white" />}
       </span>
-      {label}
-    </button>
-  );
-}
-
-function TypeChip({ label, active, onClick }: { label: string; active?: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={cx('rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold', active ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>
       {label}
     </button>
   );
