@@ -154,6 +154,16 @@ export interface User {
   preferred_lang: 'th' | 'en';
 }
 
+/** A payable account shown at checkout. Multiple may exist; `active` ones are
+ *  offered to customers (the first active is the default). */
+export interface PaymentAccount {
+  id: string;
+  name: string; // ชื่อบัญชี / พร้อมเพย์
+  number: string; // เลขบัญชี / เบอร์พร้อมเพย์
+  qr_url?: string; // Supabase Storage URL of the PromptPay QR image
+  active: boolean;
+}
+
 export interface ShopSettings {
   bank_name: string;
   bank_account: string;
@@ -175,5 +185,6 @@ export interface Database {
   transfers: TicketTransfer[];
   coupons: Coupon[];
   rankTiers: RankTier[];
+  paymentAccounts: PaymentAccount[];
   settings: ShopSettings;
 }

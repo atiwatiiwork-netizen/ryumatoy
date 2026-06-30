@@ -49,7 +49,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings] =
+    const [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -64,10 +64,11 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('ticket_transfers').select('*'),
         sb.from('coupons').select('*'),
         sb.from('rank_tiers').select('*'),
+        sb.from('payment_accounts').select('*'),
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings];
+    const results = [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
@@ -91,6 +92,7 @@ export const supabaseAdapter: PersistenceAdapter = {
       transfers: (transfers.data ?? []) as Database['transfers'],
       coupons: (coupons.data ?? []) as Database['coupons'],
       rankTiers: (rankTiers.data ?? []) as Database['rankTiers'],
+      paymentAccounts: (paymentAccounts.data ?? []) as Database['paymentAccounts'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -112,6 +114,7 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]);
     await syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]);
     await syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]);
+    await syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]);
 
     await syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never));
     await syncTable(

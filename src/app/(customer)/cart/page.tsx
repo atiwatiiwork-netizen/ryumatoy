@@ -5,11 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProductThumb, cx } from '@/components/ui';
-import { tierOf } from '@/domain/services/ranks';
 
 export default function CartPage() {
   const router = useRouter();
@@ -18,11 +16,8 @@ export default function CartPage() {
   const { flash } = useToast();
   const [code, setCode] = useState('');
 
-  const me = db.users.find((u) => u.id === CURRENT_USER_ID)!;
-  const discountPct = tierOf(db, me.rank)?.discount_percent ?? 0;
   const depositSum = cart.depositTotal();
-  const discount = Math.round((depositSum * discountPct) / 100);
-  const payNow = depositSum - discount;
+  const payNow = depositSum;
 
   if (cart.lines.length === 0) {
     return (
@@ -77,7 +72,6 @@ export default function CartPage() {
 
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4">
         <Row label="ยอดมัดจำรวม" value={baht(depositSum)} />
-        {discount > 0 && <Row label={`ส่วนลด ${me.rank} (${discountPct}%)`} value={`-${baht(discount)}`} green />}
         <div className="my-2.5 border-t border-subtle" />
         <div className="flex items-center justify-between">
           <span className="font-bold">ชำระตอนนี้</span>

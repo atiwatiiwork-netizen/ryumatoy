@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { CURRENT_USER_ID } from '@/data/seed';
@@ -17,15 +18,15 @@ export default function ProfilePage() {
   const r = RANK[me.rank];
 
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).length;
-  const myListings = db.transfers.filter((t) => t.from_user_id === CURRENT_USER_ID && t.status === 'listed').length;
   const progress = next ? Math.min(100, (me.total_spent / next.tier.min_spend) * 100) : 100;
 
-  const menu: { icon: IconName; label: string; right?: React.ReactNode }[] = [
-    { icon: 'ticket', label: 'ใบพรีของฉัน', right: <Pill>{myTickets}</Pill> },
-    { icon: 'swap', label: 'รายการขาย P2P', right: <Pill>{myListings}</Pill> },
+  // Only ใบพรีของฉัน is live this phase; the rest are coming soon.
+  const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode }[] = [
+    { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
+    { icon: 'swap', label: 'รายการขาย P2P' },
     { icon: 'bell', label: 'การแจ้งเตือน' },
-    { icon: 'store', label: 'ภาษา', right: <Pill>TH</Pill> },
-    { icon: 'settings', label: 'ธีม', right: <ThemeToggle /> },
+    { icon: 'store', label: 'ภาษา' },
+    { icon: 'settings', label: 'ธีม' },
   ];
 
   return (
@@ -57,28 +58,29 @@ export default function ProfilePage() {
       </div>
 
       <div className="mb-[18px] overflow-hidden rounded-card border border-subtle bg-surface-2">
-        {menu.map((m, i) => (
-          <div key={m.label} className={`flex items-center gap-3 px-4 py-3.5 ${i ? 'border-t border-hair' : ''}`}>
-            <Icon name={m.icon} size={20} className="text-primary-soft" />
-            <span className="flex-1 text-sm font-medium">{m.label}</span>
-            {m.right ?? <Icon name="chevronRight" size={18} className="text-ink-faint" />}
-          </div>
-        ))}
+        {menu.map((m, i) =>
+          m.href ? (
+            <Link key={m.label} href={m.href} className={`flex items-center gap-3 px-4 py-3.5 ${i ? 'border-t border-hair' : ''}`}>
+              <Icon name={m.icon} size={20} className="text-primary-soft" />
+              <span className="flex-1 text-sm font-medium">{m.label}</span>
+              {m.right}
+              <Icon name="chevronRight" size={18} className="text-ink-faint" />
+            </Link>
+          ) : (
+            <div key={m.label} className={`flex items-center gap-3 px-4 py-3.5 opacity-45 ${i ? 'border-t border-hair' : ''}`}>
+              <Icon name={m.icon} size={20} className="text-ink-faint" />
+              <span className="flex-1 text-sm font-medium">{m.label}</span>
+              <span className="rounded-md bg-surface-3 px-2 py-0.5 text-[10.5px] text-ink-faint">เร็วๆ นี้</span>
+            </div>
+          ),
+        )}
       </div>
 
-      <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={() => flash('ออกจากระบบ (เดโม)')}>ออกจากระบบ</Button>
+      <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={() => flash('ระบบ login กำลังจะมา (เฟสถัดไป)')}>ออกจากระบบ</Button>
     </div>
   );
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-lg bg-surface-3 px-2.5 py-0.5 text-xs font-bold text-ink-muted2">{children}</span>;
-}
-
-function ThemeToggle() {
-  return (
-    <div className="relative h-6 w-[42px] rounded-full bg-primary">
-      <div className="absolute right-0.5 top-0.5 h-5 w-5 rounded-full bg-white" />
-    </div>
-  );
 }

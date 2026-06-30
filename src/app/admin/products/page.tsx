@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
-import { supabase } from '@/data/supabaseClient';
+import { uploadImage } from '@/lib/upload';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -98,17 +98,6 @@ function Categories() {
 }
 
 // ---- ค่าย (Manufacturers) with logo upload ---------------------------------
-async function uploadLogo(file: File): Promise<string> {
-  if (!supabase) {
-    return new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result as string); r.readAsDataURL(file); });
-  }
-  const ext = file.name.split('.').pop() || 'png';
-  const path = `maker-${Date.now()}.${ext}`;
-  const { error } = await supabase.storage.from('logos').upload(path, file, { upsert: true, contentType: file.type });
-  if (error) throw error;
-  return supabase.storage.from('logos').getPublicUrl(path).data.publicUrl;
-}
-
 function Manufacturers() {
   const db = useDatabase();
   const dispatch = useDispatch();
@@ -129,7 +118,7 @@ function Manufacturers() {
   const onFile = async (file?: File) => {
     if (!file) return;
     setBusy(true);
-    try { setLogo(await uploadLogo(file)); flash('อัปโหลดรูปแล้ว'); }
+    try { setLogo(await uploadImage(file, 'maker')); flash('อัปโหลดรูปแล้ว'); }
     catch { flash('อัปโหลดไม่สำเร็จ'); }
     finally { setBusy(false); }
   };
@@ -303,9 +292,10 @@ interface Draft {
   is_stock: boolean;
   stock_qty: string;
   status: ProductStatus;
+  images: string[];
 }
 const emptyDraft = (fid: string, mid: string): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open',
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open', images: [],
 });
 
 function Products() {
@@ -313,8 +303,16 @@ function Products() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [draft, setDraft] = useState<Draft>(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
+  const [imgBusy, setImgBusy] = useState(false);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
+  const addImage = async (file?: File) => {
+    if (!file) return;
+    setImgBusy(true);
+    try { const url = await uploadImage(file, 'product'); setDraft((d) => ({ ...d, images: [...d.images, url] })); flash('เพิ่มรูปแล้ว'); }
+    catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
+    finally { setImgBusy(false); }
+  };
   const reset = () => setDraft(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
 
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
@@ -333,7 +331,7 @@ function Products() {
       series_name: draft.series_name.trim(),
       type: 'other',
       description: draft.description.trim(),
-      images: existing?.images ?? [],
+      images: draft.images,
       eta_note: draft.eta_note.trim() || (draft.is_stock ? 'พร้อมส่ง' : 'TBA'),
       price_total: price,
       deposit_amount: draft.is_stock ? price : (Number(draft.deposit_amount) || 0),
@@ -351,7 +349,7 @@ function Products() {
     id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
     series_name: p.series_name, description: p.description, eta_note: p.eta_note,
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
-    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
+    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status, images: p.images ?? [],
   });
 
   const del = (p: Product) => {
@@ -381,6 +379,21 @@ function Products() {
               <span className="mt-1 block text-[11px] text-ink-faint">เฉพาะซีรีย์ที่ค่ายนี้ทำ ({seriesOptions.length})</span>
             </Field>
             <Field label="ชื่อสินค้า"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Luffy — Thriller Park" /></Field>
+            <div>
+              <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">รูปสินค้า</div>
+              <div className="flex flex-wrap gap-2">
+                {draft.images.map((img, i) => (
+                  <div key={i} className="relative h-16 w-16 overflow-hidden rounded-lg border border-subtle">
+                    <img src={img} alt="" className="h-full w-full object-cover" />
+                    <button onClick={() => setDraft((d) => ({ ...d, images: d.images.filter((_, j) => j !== i) }))} className="absolute right-0 top-0 grid h-5 w-5 place-items-center bg-black/60 text-white"><Icon name="x" size={12} /></button>
+                  </div>
+                ))}
+                <label className="grid h-16 w-16 cursor-pointer place-items-center rounded-lg border border-dashed border-accent bg-surface-3 text-ink-faint">
+                  {imgBusy ? <Icon name="box" size={18} className="animate-pulse" /> : <Icon name="camera" size={18} />}
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => addImage(e.target.files?.[0])} />
+                </label>
+              </div>
+            </div>
             <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
             <div className="grid grid-cols-2 gap-3">

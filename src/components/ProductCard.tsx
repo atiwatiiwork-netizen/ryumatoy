@@ -14,7 +14,7 @@ export function ProductCard({ product }: { product: Product }) {
   return (
     <Link href={`/shop/${product.id}`} className="block overflow-hidden rounded-card border border-subtle bg-surface-2">
       <div className="relative">
-        <ProductThumb isStock={product.is_stock} radius="rounded-none" />
+        <ProductThumb isStock={product.is_stock} radius="rounded-none" src={product.images[0]} />
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>
       <div className="px-[11px] pb-3 pt-2.5">

@@ -48,7 +48,14 @@ export default function ProductDetailPage() {
         }
       />
 
-      <div className="mb-3.5"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" /></div>
+      <div className="mb-3.5"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} /></div>
+      {product.images.length > 1 && (
+        <div className="mb-3.5 flex gap-2 overflow-x-auto no-scrollbar">
+          {product.images.map((img, i) => (
+            <img key={i} src={img} alt="" className="h-16 w-16 flex-shrink-0 rounded-lg border border-subtle object-cover" />
+          ))}
+        </div>
+      )}
 
       <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} />
       <div className="mb-0.5 mt-2 font-mono text-[11px] text-ink-faint">{manufacturerNameOf(db, product)} · {fr?.name}{categoryOf(db, product) ? ` · ${categoryOf(db, product)!.name}` : ''}{seriesOf(db, product) ? ` · ${seriesOf(db, product)!.name}` : ''}</div>

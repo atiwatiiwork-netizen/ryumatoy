@@ -44,26 +44,18 @@ export default function SlipApprovalPage() {
       <Header title={`ตรวจสลิป · Order #${order.id.slice(-4)}`} onBack={() => router.push('/admin')} />
 
       <div className="grid gap-[18px] lg:grid-cols-[1.3fr_340px]">
-        {/* slip viewer */}
+        {/* slip viewer — real uploaded image when present */}
         <div className="flex min-h-[480px] flex-col items-center justify-center rounded-2xl border border-subtle bg-surface-2 p-5">
-          <div className="flex h-[420px] w-[280px] flex-col rounded-2xl bg-white p-[22px] text-[#0a0809]">
-            <div className="mb-[18px] flex items-center gap-2.5">
-              <div className="grid h-[34px] w-[34px] place-items-center rounded-[9px] bg-[#4b2ea6] font-extrabold text-white">S</div>
-              <div className="text-sm font-bold">โอนเงินสำเร็จ</div>
+          {order.slip_url && /^https?:|^data:/.test(order.slip_url) ? (
+            <a href={order.slip_url} target="_blank" rel="noreferrer">
+              <img src={order.slip_url} alt="สลิปโอนเงิน" className="max-h-[460px] rounded-xl object-contain" />
+            </a>
+          ) : (
+            <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-subtle text-ink-faint">
+              <Icon name="camera" size={28} />
+              <div className="mt-2 text-[12.5px]">ยังไม่มีรูปสลิป</div>
             </div>
-            <div className="text-xs text-[#6b7280]">30 มิ.ย. 2026 · 09:14 น.</div>
-            <div className="my-4 text-[34px] font-extrabold text-[#0c8457]">{baht(order.total_deposit)}</div>
-            <Field k="จาก" v={user?.display_name ?? '-'} />
-            <Field k="ไปยัง" v={db.settings.bank_account} />
-            <Field k="พร้อมเพย์" v={db.settings.promptpay_number} />
-            <Field k="Ref" v={`RYM${order.id.slice(-8).toUpperCase()}`} />
-            <div className="flex-1" />
-            <div className="text-center text-[11px] text-[#9ca3af]">{db.settings.bank_name}</div>
-          </div>
-          <div className="mt-4 flex gap-2.5">
-            <button className="grid h-10 w-10 place-items-center rounded-[11px] border border-subtle bg-surface-3 text-ink"><Icon name="search" size={18} /></button>
-            <button className="grid h-10 w-10 place-items-center rounded-[11px] border border-subtle bg-surface-3 text-ink"><Icon name="swap" size={18} /></button>
-          </div>
+          )}
         </div>
 
         {/* order detail */}
@@ -124,15 +116,6 @@ function Header({ title, onBack }: { title: string; onBack: () => void }) {
     <div className="mb-[22px] flex items-center gap-3">
       <button onClick={onBack} className="grid h-[38px] w-[38px] place-items-center rounded-[11px] border border-subtle bg-surface-2 text-ink"><Icon name="arrowLeft" size={19} /></button>
       <div className="text-xl font-extrabold">{title}</div>
-    </div>
-  );
-}
-
-function Field({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex justify-between border-b border-[#f0f0f0] py-[5px] text-[12.5px]">
-      <span className="text-[#6b7280]">{k}</span>
-      <span className="font-semibold text-[#111827]">{v}</span>
     </div>
   );
 }

@@ -137,6 +137,10 @@ export const SEED_DATABASE: Database = {
     { name: 'diamond', min_spend: 50000, discount_percent: 8, free_shipping_per_month: 99, early_access_hours: 48 },
   ],
 
+  paymentAccounts: [
+    { id: 'pay-1', name: 'Ryuma Toy Shop', number: '081-234-5678', active: true },
+  ],
+
   settings: {
     bank_name: 'ไทยพาณิชย์ (SCB)',
     bank_account: 'Ryuma Toy Shop',

@@ -7,9 +7,9 @@ import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { CURRENT_USER_ID } from '@/data/seed';
 import { baht } from '@/lib/theme';
+import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
-import { tierOf } from '@/domain/services/ranks';
 import { submitOrder } from '@/data/mutations';
 
 export default function CheckoutPage() {
@@ -19,16 +19,22 @@ export default function CheckoutPage() {
   const cart = useCart();
   const { flash } = useToast();
   const [slip, setSlip] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const me = db.users.find((u) => u.id === CURRENT_USER_ID)!;
-  const discountPct = tierOf(db, me.rank)?.discount_percent ?? 0;
-  const depositSum = cart.depositTotal();
-  const discount = Math.round((depositSum * discountPct) / 100);
-  const payNow = depositSum - discount;
+  const payNow = cart.depositTotal();
+  const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
+
+  const onSlip = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    try { setSlip(await uploadImage(file, 'slip')); flash('แนบสลิปแล้ว'); }
+    catch { flash('อัปโหลดสลิปไม่สำเร็จ'); }
+    finally { setBusy(false); }
+  };
 
   const submit = () => {
     if (!slip) return;
-    dispatch(submitOrder(CURRENT_USER_ID, cart.lines, 'slip://uploaded'));
+    dispatch(submitOrder(CURRENT_USER_ID, cart.lines, slip));
     cart.clear();
     flash('ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
@@ -67,9 +73,19 @@ export default function CheckoutPage() {
 
       <div className="mb-3.5 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">
         <div className="mb-3.5 text-sm font-bold">สแกนจ่ายผ่าน PromptPay</div>
-        <div className="mb-3.5 flex justify-center"><QrPanel size={172} /></div>
-        <CopyRow label="ชื่อบัญชี" value={db.settings.bank_account} onCopy={() => flash('คัดลอกแล้ว')} />
-        <CopyRow label="พร้อมเพย์" value={db.settings.promptpay_number} onCopy={() => flash('คัดลอกเบอร์แล้ว')} />
+        <div className="mb-3.5 flex justify-center">
+          {account?.qr_url
+            ? <img src={account.qr_url} alt="PromptPay QR" className="h-[172px] w-[172px] rounded-2xl bg-white object-contain p-2" />
+            : <QrPanel size={172} />}
+        </div>
+        {account ? (
+          <>
+            <CopyRow label="ชื่อบัญชี" value={account.name} onCopy={() => flash('คัดลอกแล้ว')} />
+            <CopyRow label="พร้อมเพย์" value={account.number} onCopy={() => flash('คัดลอกเบอร์แล้ว')} />
+          </>
+        ) : (
+          <div className="text-[13px] text-ink-faint">ยังไม่ได้ตั้งค่าบัญชีรับเงิน (Admin → ตั้งค่าการเงิน)</div>
+        )}
         <div className="my-3 border-t border-dashed border-subtle" />
         <div className="flex items-center justify-between">
           <span className="text-[13px] text-ink-muted">ยอดโอน</span>
@@ -77,16 +93,25 @@ export default function CheckoutPage() {
         </div>
       </div>
 
-      <button
-        onClick={() => setSlip('uploaded')}
-        className={cx('mb-4 w-full rounded-card border-[1.5px] border-dashed p-[22px] text-center', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.06]' : 'border-accent')}
+      <label
+        className={cx('mb-4 block cursor-pointer rounded-card border-[1.5px] border-dashed p-[18px] text-center', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.06]' : 'border-accent')}
       >
-        <Icon name={slip ? 'check' : 'camera'} size={28} className={cx('mx-auto mb-2', slip ? 'text-[#4ade80]' : 'text-primary-soft')} />
-        <div className="text-sm font-semibold">{slip ? 'แนบสลิปแล้ว ✓' : 'แตะเพื่อถ่าย / เลือกรูปสลิป'}</div>
-        <div className="mt-1 text-[11.5px] text-ink-faint">JPG / PNG ≤ 5MB · บังคับแนบ</div>
-      </button>
+        <input type="file" accept="image/*" className="hidden" onChange={(e) => onSlip(e.target.files?.[0])} />
+        {slip ? (
+          <div className="flex flex-col items-center gap-2">
+            <img src={slip} alt="สลิป" className="max-h-48 rounded-lg object-contain" />
+            <div className="text-[13px] font-semibold text-[#4ade80]">แนบสลิปแล้ว ✓ (แตะเพื่อเปลี่ยน)</div>
+          </div>
+        ) : (
+          <>
+            <Icon name={busy ? 'box' : 'camera'} size={28} className={cx('mx-auto mb-2', busy ? 'animate-pulse text-ink-faint' : 'text-primary-soft')} />
+            <div className="text-sm font-semibold">{busy ? 'กำลังอัปโหลด…' : 'แตะเพื่อถ่าย / เลือกรูปสลิป'}</div>
+            <div className="mt-1 text-[11.5px] text-ink-faint">JPG / PNG ≤ 5MB · บังคับแนบ</div>
+          </>
+        )}
+      </label>
 
-      <Button disabled={!slip} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
+      <Button disabled={!slip || busy} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
       <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ</div>
     </div>
   );
