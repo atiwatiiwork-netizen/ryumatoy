@@ -3,17 +3,19 @@
 import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
+import { supabase } from '@/data/supabaseClient';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, cx } from '@/components/ui';
-import { manufacturerNameOf, franchiseOf, typeLabel } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, typeLabel, seriesForFranchise } from '@/domain/services/catalog';
 import {
-  genId, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise, upsertProduct, removeProduct,
+  genId, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
+  upsertSeries, removeSeries, upsertProduct, removeProduct,
 } from '@/data/mutations';
 import type { Product, ProductStatus, ProductType } from '@/domain/entities';
 
-type Tab = 'manufacturers' | 'franchises' | 'products';
+type Tab = 'products' | 'manufacturers' | 'franchises' | 'series';
 const TYPES: { v: ProductType; label: string }[] = [
   { v: 'wcf', label: 'WCF' }, { v: 'figure', label: 'Figure' }, { v: 'resin', label: 'Resin' }, { v: 'other', label: 'อื่นๆ' },
 ];
@@ -21,114 +23,221 @@ const STATUSES: { v: ProductStatus; label: string }[] = [
   { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
 
+const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <label className="block"><span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">{label}</span>{children}</label>
+);
+const Panel = ({ children }: { children: React.ReactNode }) => <div className="rounded-2xl border border-subtle bg-surface-2 p-5">{children}</div>;
+
 export default function AdminProductsPage() {
   const [tab, setTab] = useState<Tab>('products');
   return (
     <div>
       <div className="mb-5 text-2xl font-extrabold">จัดการสินค้า</div>
-      <div className="mb-6 flex gap-2">
-        {([['products', 'สินค้า'], ['manufacturers', 'ค่าย'], ['franchises', 'เรื่อง']] as [Tab, string][]).map(([k, label]) => (
+      <div className="mb-6 flex flex-wrap gap-2">
+        {([['products', 'สินค้า'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
       </div>
-      {tab === 'manufacturers' && <Manufacturers />}
-      {tab === 'franchises' && <Franchises />}
       {tab === 'products' && <Products />}
+      {tab === 'franchises' && <Franchises />}
+      {tab === 'manufacturers' && <Manufacturers />}
+      {tab === 'series' && <SeriesTab />}
     </div>
   );
 }
 
-// ---- shared inputs ---------------------------------------------------------
-const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">{label}</span>{children}</label>;
-}
-function Panel({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-subtle bg-surface-2 p-5">{children}</div>;
+// ---- ค่าย (Manufacturers) with logo upload ---------------------------------
+async function uploadLogo(file: File): Promise<string> {
+  if (!supabase) {
+    return new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result as string); r.readAsDataURL(file); });
+  }
+  const ext = file.name.split('.').pop() || 'png';
+  const path = `maker-${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from('logos').upload(path, file, { upsert: true, contentType: file.type });
+  if (error) throw error;
+  return supabase.storage.from('logos').getPublicUrl(path).data.publicUrl;
 }
 
-// ---- Manufacturers (ค่าย) --------------------------------------------------
 function Manufacturers() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const [id, setId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [logo, setLogo] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
 
-  const add = () => {
-    if (!name.trim()) return;
-    dispatch(upsertManufacturer({ id: genId('m'), name: name.trim() }));
-    setName(''); flash('เพิ่มค่ายแล้ว');
+  const reset = () => { setId(null); setName(''); setLogo(undefined); };
+  const save = () => {
+    if (!name.trim()) return flash('กรอกชื่อค่าย');
+    dispatch(upsertManufacturer({ id: id ?? genId('m'), name: name.trim(), logo_url: logo }));
+    flash(id ? 'บันทึกค่ายแล้ว' : 'เพิ่มค่ายแล้ว'); reset();
+  };
+  const onFile = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    try { setLogo(await uploadLogo(file)); flash('อัปโหลดรูปแล้ว'); }
+    catch { flash('อัปโหลดไม่สำเร็จ'); }
+    finally { setBusy(false); }
   };
   const del = (mid: string) => {
-    if (db.franchises.some((f) => f.manufacturer_id === mid)) return flash('ลบไม่ได้ — มีเรื่องอยู่ใต้ค่ายนี้');
-    dispatch(removeManufacturer(mid)); flash('ลบค่ายแล้ว');
+    if (db.products.some((p) => p.manufacturer_id === mid)) return flash('ลบไม่ได้ — มีสินค้าใช้ค่ายนี้');
+    dispatch(removeManufacturer(mid)); flash('ลบค่ายแล้ว'); if (id === mid) reset();
   };
 
   return (
     <div className="grid gap-5 lg:grid-cols-[320px_1fr] lg:items-start">
       <Panel>
-        <div className="mb-3 font-bold">เพิ่มค่ายใหม่</div>
-        <Field label="ชื่อค่าย (Manufacturer)"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น Bandai" /></Field>
-        <div className="mt-4"><Button onClick={add} icon="plus">เพิ่มค่าย</Button></div>
+        <div className="mb-3 flex items-center justify-between"><span className="font-bold">{id ? 'แก้ไขค่าย' : 'เพิ่มค่ายใหม่'}</span>{id && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <label className="grid h-16 w-16 flex-shrink-0 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-accent bg-surface-3 text-ink-faint">
+              {busy ? <Icon name="box" size={20} className="animate-pulse" /> : logo ? <img src={logo} alt="" className="h-full w-full object-cover" /> : <Icon name="camera" size={20} />}
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+            </label>
+            <div className="text-[12px] text-ink-faint">Icon ค่าย<br />แตะเพื่ออัปโหลด (ไม่บังคับ)</div>
+          </div>
+          <Field label="ชื่อค่าย (Manufacturer)"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น A+, YZ" /></Field>
+          <Button onClick={save} icon={id ? 'check' : 'plus'} disabled={busy}>{id ? 'บันทึก' : 'เพิ่มค่าย'}</Button>
+        </div>
       </Panel>
       <Panel>
         <div className="mb-3 font-bold">ค่ายทั้งหมด ({db.manufacturers.length})</div>
         <div className="flex flex-col divide-y divide-hair">
           {db.manufacturers.map((m) => (
-            <Row key={m.id} title={m.name} sub={`${db.franchises.filter((f) => f.manufacturer_id === m.id).length} เรื่อง`} onDelete={() => del(m.id)} />
+            <div key={m.id} className="flex items-center gap-3 py-3">
+              <div className="grid h-10 w-10 flex-shrink-0 place-items-center overflow-hidden rounded-lg border border-subtle bg-surface-3">
+                {m.logo_url ? <img src={m.logo_url} alt="" className="h-full w-full object-cover" /> : <Icon name="store" size={18} className="text-ink-faint" />}
+              </div>
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{m.name}</div><div className="text-[11.5px] text-ink-faint">{db.products.filter((p) => p.manufacturer_id === m.id).length} สินค้า</div></div>
+              <button onClick={() => { setId(m.id); setName(m.name); setLogo(m.logo_url); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <button onClick={() => del(m.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+            </div>
           ))}
+          {db.manufacturers.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีค่าย</div>}
         </div>
       </Panel>
     </div>
   );
 }
 
-// ---- Franchises (เรื่อง) ---------------------------------------------------
+// ---- เรื่อง (Franchises) ---------------------------------------------------
 function Franchises() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const [id, setId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [abbr, setAbbr] = useState('');
-  const [manId, setManId] = useState(db.manufacturers[0]?.id ?? '');
 
-  const add = () => {
-    if (!name.trim() || !abbr.trim() || !manId) return flash('กรอกชื่อ/ตัวย่อ/ค่ายให้ครบ');
-    dispatch(upsertFranchise({ id: genId('f'), name: name.trim(), abbr: abbr.trim().toLowerCase(), manufacturer_id: manId }));
-    setName(''); setAbbr(''); flash('เพิ่มเรื่องแล้ว');
+  const reset = () => { setId(null); setName(''); setAbbr(''); };
+  const save = () => {
+    if (!name.trim() || !abbr.trim()) return flash('กรอกชื่อ + ตัวย่อ');
+    dispatch(upsertFranchise({ id: id ?? genId('f'), name: name.trim(), abbr: abbr.trim().toLowerCase() }));
+    flash(id ? 'บันทึกแล้ว' : 'เพิ่มเรื่องแล้ว'); reset();
   };
   const del = (fid: string) => {
-    if (db.products.some((p) => p.franchise_id === fid)) return flash('ลบไม่ได้ — มีสินค้าอยู่ใต้เรื่องนี้');
-    dispatch(removeFranchise(fid)); flash('ลบเรื่องแล้ว');
+    if (db.series.some((s) => s.franchise_id === fid)) return flash('ลบไม่ได้ — มีซีรีย์ใต้เรื่องนี้');
+    if (db.products.some((p) => p.franchise_id === fid)) return flash('ลบไม่ได้ — มีสินค้าใต้เรื่องนี้');
+    dispatch(removeFranchise(fid)); flash('ลบเรื่องแล้ว'); if (id === fid) reset();
   };
 
   return (
     <div className="grid gap-5 lg:grid-cols-[320px_1fr] lg:items-start">
       <Panel>
-        <div className="mb-3 font-bold">เพิ่มเรื่องใหม่</div>
+        <div className="mb-3 flex items-center justify-between"><span className="font-bold">{id ? 'แก้ไขเรื่อง' : 'เพิ่มเรื่องใหม่'}</span>{id && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
         <div className="flex flex-col gap-3">
           <Field label="ชื่อเรื่อง (Franchise)"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น One Piece" /></Field>
           <Field label="ตัวย่อ (abbr) — ใช้ออกเลข Ticket"><input className={inputCls} value={abbr} onChange={(e) => setAbbr(e.target.value)} placeholder="เช่น op" /></Field>
-          <Field label="ค่าย"><select className={inputCls} value={manId} onChange={(e) => setManId(e.target.value)}>{db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>
+          <Button onClick={save} icon={id ? 'check' : 'plus'}>{id ? 'บันทึก' : 'เพิ่มเรื่อง'}</Button>
         </div>
-        <div className="mt-4"><Button onClick={add} icon="plus">เพิ่มเรื่อง</Button></div>
       </Panel>
       <Panel>
         <div className="mb-3 font-bold">เรื่องทั้งหมด ({db.franchises.length})</div>
         <div className="flex flex-col divide-y divide-hair">
           {db.franchises.map((f) => (
-            <Row key={f.id} title={`${f.name}`} sub={`${f.abbr.toUpperCase()} · ${manufacturerNameOf(db, { franchise_id: f.id } as Product)} · ${db.products.filter((p) => p.franchise_id === f.id).length} สินค้า`} onDelete={() => del(f.id)} />
+            <div key={f.id} className="flex items-center gap-3 py-3">
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{f.name}</div><div className="font-mono text-[11.5px] text-ink-faint">{f.abbr.toUpperCase()} · {db.series.filter((s) => s.franchise_id === f.id).length} ซีรีย์ · {db.products.filter((p) => p.franchise_id === f.id).length} สินค้า</div></div>
+              <button onClick={() => { setId(f.id); setName(f.name); setAbbr(f.abbr); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <button onClick={() => del(f.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+            </div>
           ))}
+          {db.franchises.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีเรื่อง</div>}
         </div>
       </Panel>
     </div>
   );
 }
 
-// ---- Products (สินค้า) -----------------------------------------------------
+// ---- ซีรีย์ (Series) -------------------------------------------------------
+function SeriesTab() {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const [id, setId] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [franchiseId, setFranchiseId] = useState(db.franchises[0]?.id ?? '');
+  const [makers, setMakers] = useState<string[]>([]);
+
+  const reset = () => { setId(null); setName(''); setFranchiseId(db.franchises[0]?.id ?? ''); setMakers([]); };
+  const toggleMaker = (mid: string) => setMakers((arr) => (arr.includes(mid) ? arr.filter((x) => x !== mid) : [...arr, mid]));
+  const save = () => {
+    if (!name.trim() || !franchiseId) return flash('กรอกชื่อซีรีย์ + เลือกเรื่อง');
+    dispatch(upsertSeries({ id: id ?? genId('s'), name: name.trim(), franchise_id: franchiseId, maker_ids: makers }));
+    flash(id ? 'บันทึกแล้ว' : 'เพิ่มซีรีย์แล้ว'); reset();
+  };
+  const del = (sid: string) => {
+    if (db.products.some((p) => p.series_id === sid)) return flash('ลบไม่ได้ — มีสินค้าใช้ซีรีย์นี้');
+    dispatch(removeSeries(sid)); flash('ลบซีรีย์แล้ว'); if (id === sid) reset();
+  };
+  const makerNames = (ids: string[]) => ids.map((i) => db.manufacturers.find((m) => m.id === i)?.name).filter(Boolean).join(', ') || '—';
+
+  if (db.franchises.length === 0) return <Panel><div className="text-[13px] text-ink-faint">ยังไม่มีเรื่อง — ไปเพิ่ม “เรื่อง” ก่อน แล้วค่อยสร้างซีรีย์</div></Panel>;
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[360px_1fr] lg:items-start">
+      <Panel>
+        <div className="mb-3 flex items-center justify-between"><span className="font-bold">{id ? 'แก้ไขซีรีย์' : 'เพิ่มซีรีย์ใหม่'}</span>{id && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
+        <div className="flex flex-col gap-3">
+          <Field label="ชื่อซีรีย์"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น Thriller Park" /></Field>
+          <Field label="เรื่อง"><select className={inputCls} value={franchiseId} onChange={(e) => setFranchiseId(e.target.value)}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
+          <div>
+            <div className="mb-2 text-[12.5px] font-semibold text-ink-muted">ค่ายที่ทำซีรีย์นี้ (ติ๊กได้หลายค่าย)</div>
+            <div className="flex flex-wrap gap-2">
+              {db.manufacturers.length === 0 && <span className="text-[12px] text-ink-faint">ยังไม่มีค่าย — ไปเพิ่มค่ายก่อน</span>}
+              {db.manufacturers.map((m) => {
+                const on = makers.includes(m.id);
+                return <button key={m.id} onClick={() => toggleMaker(m.id)} className={cx('rounded-full border px-3 py-1.5 text-[12.5px] font-semibold', on ? 'border-accent bg-[#b91c1c]/[0.16] text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>{on && '✓ '}{m.name}</button>;
+              })}
+            </div>
+          </div>
+          <Button onClick={save} icon={id ? 'check' : 'plus'}>{id ? 'บันทึก' : 'เพิ่มซีรีย์'}</Button>
+        </div>
+      </Panel>
+      <Panel>
+        <div className="mb-3 font-bold">ซีรีย์ทั้งหมด ({db.series.length})</div>
+        <div className="flex flex-col divide-y divide-hair">
+          {db.series.map((s) => (
+            <div key={s.id} className="flex items-center gap-3 py-3">
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{s.name}</div><div className="text-[11.5px] text-ink-faint">{db.franchises.find((f) => f.id === s.franchise_id)?.name} · ค่าย: {makerNames(s.maker_ids)}</div></div>
+              <button onClick={() => { setId(s.id); setName(s.name); setFranchiseId(s.franchise_id); setMakers(s.maker_ids); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <button onClick={() => del(s.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+            </div>
+          ))}
+          {db.series.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีซีรีย์</div>}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+// ---- สินค้า (Products) — cascade เรื่อง → ค่าย → ซีรีย์ ----------------------
 interface Draft {
   id?: string;
   franchise_id: string;
+  manufacturer_id: string;
+  series_id: string;
   series_name: string;
   type: ProductType;
   description: string;
@@ -137,81 +246,90 @@ interface Draft {
   deposit_amount: string;
   is_stock: boolean;
   stock_qty: string;
-  has_variants: boolean;
   status: ProductStatus;
 }
-const emptyDraft = (franchiseId: string): Draft => ({
-  franchise_id: franchiseId, series_name: '', type: 'wcf', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', has_variants: false, status: 'open',
+const emptyDraft = (fid: string, mid: string): Draft => ({
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', type: 'wcf', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open',
 });
 
 function Products() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
-  const [draft, setDraft] = useState<Draft>(emptyDraft(db.franchises[0]?.id ?? ''));
+  const [draft, setDraft] = useState<Draft>(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
+  const reset = () => setDraft(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
+
+  const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
 
   const save = () => {
-    if (!draft.franchise_id) return flash('เลือกเรื่องก่อน (ต้องมีค่าย/เรื่องก่อน)');
+    if (!draft.franchise_id || !draft.manufacturer_id) return flash('เลือกเรื่อง + ค่าย');
     if (!draft.series_name.trim()) return flash('กรอกชื่อสินค้า');
     const price = Number(draft.price_total) || 0;
-    const deposit = Number(draft.deposit_amount) || 0;
     if (price <= 0) return flash('กรอกราคาเต็ม');
     const existing = draft.id ? db.products.find((p) => p.id === draft.id) : undefined;
     const product: Product = {
       id: draft.id ?? genId('p'),
       franchise_id: draft.franchise_id,
+      manufacturer_id: draft.manufacturer_id,
+      series_id: draft.series_id || undefined,
       series_name: draft.series_name.trim(),
       type: draft.type,
       description: draft.description.trim(),
       images: existing?.images ?? [],
       eta_note: draft.eta_note.trim() || (draft.is_stock ? 'พร้อมส่ง' : 'TBA'),
       price_total: price,
-      deposit_amount: draft.is_stock ? price : deposit,
+      deposit_amount: draft.is_stock ? price : (Number(draft.deposit_amount) || 0),
       is_stock: draft.is_stock,
       stock_qty: draft.is_stock ? Number(draft.stock_qty) || 0 : undefined,
-      has_variants: draft.has_variants,
+      has_variants: false,
       status: draft.status,
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
     dispatch(upsertProduct(product));
-    flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว');
-    setDraft(emptyDraft(db.franchises[0]?.id ?? ''));
+    flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
   };
 
   const edit = (p: Product) => setDraft({
-    id: p.id, franchise_id: p.franchise_id, series_name: p.series_name, type: p.type, description: p.description,
-    eta_note: p.eta_note, price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
-    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', has_variants: p.has_variants, status: p.status,
+    id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
+    series_name: p.series_name, type: p.type, description: p.description, eta_note: p.eta_note,
+    price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
+    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
   });
 
   const del = (p: Product) => {
-    const usedByTicket = db.tickets.some((t) => t.product_id === p.id);
-    const usedByOrder = db.orders.some((o) => o.items.some((i) => i.product_id === p.id));
-    if (usedByTicket || usedByOrder) return flash('ลบไม่ได้ — มีใบพรี/ออเดอร์อ้างอิงสินค้านี้');
-    dispatch(removeProduct(p.id)); flash('ลบสินค้าแล้ว');
-    if (draft.id === p.id) setDraft(emptyDraft(db.franchises[0]?.id ?? ''));
+    if (db.tickets.some((t) => t.product_id === p.id) || db.orders.some((o) => o.items.some((i) => i.product_id === p.id))) return flash('ลบไม่ได้ — มีใบพรี/ออเดอร์อ้างอิง');
+    dispatch(removeProduct(p.id)); flash('ลบสินค้าแล้ว'); if (draft.id === p.id) reset();
   };
 
+  const ready = db.franchises.length > 0 && db.manufacturers.length > 0;
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[380px_1fr] lg:items-start">
+    <div className="grid gap-5 lg:grid-cols-[400px_1fr] lg:items-start">
       <Panel>
-        <div className="mb-3 flex items-center justify-between">
-          <span className="font-bold">{editing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</span>
-          {editing && <button onClick={() => setDraft(emptyDraft(db.franchises[0]?.id ?? ''))} className="text-xs text-primary-soft">+ เพิ่มใหม่แทน</button>}
-        </div>
-        {db.franchises.length === 0 ? (
-          <div className="text-[13px] text-ink-faint">ยังไม่มีเรื่อง — ไปเพิ่ม “ค่าย” และ “เรื่อง” ก่อน แล้วค่อยเพิ่มสินค้า</div>
+        <div className="mb-3 flex items-center justify-between"><span className="font-bold">{editing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</span>{editing && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
+        {!ready ? (
+          <div className="text-[13px] text-ink-faint">ต้องมี “เรื่อง” และ “ค่าย” อย่างน้อยอย่างละ 1 ก่อน — ไปเพิ่มที่แท็บเรื่อง/ค่าย</div>
         ) : (
           <div className="flex flex-col gap-3">
-            <Field label="เรื่อง (Franchise)"><select className={inputCls} value={draft.franchise_id} onChange={(e) => set('franchise_id', e.target.value)}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
-            <Field label="ชื่อสินค้า / ซีรีย์"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น WCF Vol.38 — Luffy" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="1. เรื่อง"><select className={inputCls} value={draft.franchise_id} onChange={(e) => setDraft((d) => ({ ...d, franchise_id: e.target.value, series_id: '' }))}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
+              <Field label="2. ค่าย"><select className={inputCls} value={draft.manufacturer_id} onChange={(e) => setDraft((d) => ({ ...d, manufacturer_id: e.target.value, series_id: '' }))}>{db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>
+            </div>
+            <Field label="3. ซีรีย์ (ถ้ามี)">
+              <select className={inputCls} value={draft.series_id} onChange={(e) => set('series_id', e.target.value)}>
+                <option value="">— ไม่มี —</option>
+                {seriesOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <span className="mt-1 block text-[11px] text-ink-faint">เฉพาะซีรีย์ที่ค่ายนี้ทำ ({seriesOptions.length})</span>
+            </Field>
+            <Field label="ชื่อสินค้า"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Luffy — Thriller Park" /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ประเภท"><select className={inputCls} value={draft.type} onChange={(e) => set('type', e.target.value as ProductType)}>{TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}</select></Field>
               <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
             </div>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> เป็นสินค้าพร้อมส่ง (in-stock)</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ราคาเต็ม (฿)"><input className={inputCls} inputMode="numeric" value={draft.price_total} onChange={(e) => set('price_total', e.target.value)} placeholder="1290" /></Field>
               {draft.is_stock
@@ -220,7 +338,7 @@ function Products() {
             </div>
             <Field label="กำหนดการ (ETA)"><input className={inputCls} value={draft.eta_note} onChange={(e) => set('eta_note', e.target.value)} placeholder="เช่น Q3 2026" /></Field>
             <Field label="รายละเอียด"><textarea className={cx(inputCls, 'h-20 resize-none')} value={draft.description} onChange={(e) => set('description', e.target.value)} /></Field>
-            <div className="mt-1"><Button onClick={save} icon={editing ? 'check' : 'plus'}>{editing ? 'บันทึก' : 'เพิ่มสินค้า'}</Button></div>
+            <Button onClick={save} icon={editing ? 'check' : 'plus'}>{editing ? 'บันทึก' : 'เพิ่มสินค้า'}</Button>
           </div>
         )}
       </Panel>
@@ -233,7 +351,7 @@ function Products() {
               <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-stripe"><Icon name="box" size={20} className="text-primary-soft/25" /></div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
-                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {typeLabel(p.type)} · {baht(p.price_total)}</div>
+                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {manufacturerOf(db, p)?.name} · {typeLabel(p.type)} · {baht(p.price_total)}</div>
               </div>
               <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
               <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
@@ -243,19 +361,6 @@ function Products() {
           {db.products.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีสินค้า</div>}
         </div>
       </Panel>
-    </div>
-  );
-}
-
-// ---- shared list row -------------------------------------------------------
-function Row({ title, sub, onDelete }: { title: string; sub: string; onDelete: () => void }) {
-  return (
-    <div className="flex items-center gap-3 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{title}</div>
-        <div className="text-[11.5px] text-ink-faint">{sub}</div>
-      </div>
-      <button onClick={onDelete} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
     </div>
   );
 }

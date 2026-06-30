@@ -13,14 +13,27 @@ export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond';
 
 export interface Manufacturer {
   id: string;
-  name: string; // ค่าย เช่น "Bandai"
+  name: string; // ค่าย เช่น "A+", "YZ"
+  logo_url?: string; // Supabase Storage URL of the maker icon
 }
 
+/** เรื่อง / IP — independent of maker (One Piece, Naruto). */
 export interface Franchise {
   id: string;
-  name: string; // เรื่อง เช่น "One Piece"
-  abbr: string; // 'op','nr','db'
-  manufacturer_id: string;
+  name: string; // "One Piece"
+  abbr: string; // 'op','nr','db' — used in ticket numbers
+}
+
+/**
+ * ซีรีย์ / product line under a franchise (e.g. "Thriller Park" under One Piece).
+ * `maker_ids` lists which manufacturers produce this series (many-to-many) — a
+ * series can be shared by several ค่าย, and some ค่าย may not carry it.
+ */
+export interface Series {
+  id: string;
+  name: string;
+  franchise_id: string;
+  maker_ids: string[];
 }
 
 export interface ProductVariant {
@@ -34,8 +47,10 @@ export interface ProductVariant {
 
 export interface Product {
   id: string;
-  franchise_id: string;
-  series_name: string; // "WCF Vol.38"
+  franchise_id: string; // เรื่อง
+  manufacturer_id: string; // ค่าย
+  series_id?: string; // ซีรีย์ (optional)
+  series_name: string; // ชื่อสินค้า (display title)
   type: ProductType;
   description: string;
   description_en?: string;
@@ -143,6 +158,7 @@ export interface Database {
   users: User[];
   manufacturers: Manufacturer[];
   franchises: Franchise[];
+  series: Series[];
   products: Product[];
   variants: ProductVariant[];
   orders: Order[];

@@ -49,11 +49,12 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, manufacturers, franchises, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings] =
+    const [users, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('manufacturers').select('*'),
         sb.from('franchises').select('*'),
+        sb.from('series').select('*'),
         sb.from('products').select('*'),
         sb.from('product_variants').select('*'),
         sb.from('orders').select('*'),
@@ -65,7 +66,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, manufacturers, franchises, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings];
+    const results = [users, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
@@ -80,6 +81,7 @@ export const supabaseAdapter: PersistenceAdapter = {
       users: (users.data ?? []) as Database['users'],
       manufacturers: (manufacturers.data ?? []) as Database['manufacturers'],
       franchises: (franchises.data ?? []) as Database['franchises'],
+      series: (series.data ?? []) as Database['series'],
       products: (products.data ?? []) as Database['products'],
       variants: (variants.data ?? []) as Database['variants'],
       orders: ordersWithItems as unknown as Database['orders'],
@@ -103,6 +105,7 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]);
     await syncTable(sb, 'manufacturers', next.manufacturers as unknown as Row[], base.manufacturers as unknown as Row[]);
     await syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]);
+    await syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]);
     await syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]);
     await syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]);
     await syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]);

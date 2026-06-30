@@ -25,45 +25,50 @@ export const SEED_DATABASE: Database = {
   ],
 
   franchises: [
-    { id: 'f-op', name: 'One Piece', abbr: 'op', manufacturer_id: 'm-bandai' },
-    { id: 'f-nr', name: 'Naruto', abbr: 'nr', manufacturer_id: 'm-megahouse' },
-    { id: 'f-db', name: 'Dragon Ball', abbr: 'db', manufacturer_id: 'm-prime1' },
-    { id: 'f-bl', name: 'Bleach', abbr: 'bl', manufacturer_id: 'm-megahouse' },
+    { id: 'f-op', name: 'One Piece', abbr: 'op' },
+    { id: 'f-nr', name: 'Naruto', abbr: 'nr' },
+    { id: 'f-db', name: 'Dragon Ball', abbr: 'db' },
+    { id: 'f-bl', name: 'Bleach', abbr: 'bl' },
+  ],
+
+  series: [
+    { id: 's-op-wcf', name: 'WCF Vol.38', franchise_id: 'f-op', maker_ids: ['m-bandai', 'm-megahouse'] },
+    { id: 's-nr-gem', name: 'GEM Series', franchise_id: 'f-nr', maker_ids: ['m-megahouse'] },
   ],
 
   products: [
     {
-      id: 'p-1', franchise_id: 'f-op', series_name: 'WCF Vol.38 — Luffy Gear 5', type: 'wcf',
+      id: 'p-1', franchise_id: 'f-op', manufacturer_id: 'm-bandai', series_id: 's-op-wcf', series_name: 'Luffy Gear 5', type: 'wcf',
       description: 'World Collectable Figure ลอตใหม่ล่าสุด ลูฟี่กียร์ 5 พร้อมฐานพิเศษ',
       images: [], eta_note: 'Q3 2026', price_total: 1290, deposit_amount: 590,
       is_stock: false, has_variants: true, status: 'open', created_at: '2026-06-20',
     },
     {
-      id: 'p-2', franchise_id: 'f-nr', series_name: 'GEM Series — Uchiha Sasuke', type: 'figure',
+      id: 'p-2', franchise_id: 'f-nr', manufacturer_id: 'm-megahouse', series_id: 's-nr-gem', series_name: 'Uchiha Sasuke', type: 'figure',
       description: 'GEM Series ซาสึเกะ ดีเทลสูง พร้อมเอฟเฟกต์ชิโดริ',
       images: [], eta_note: 'Q4 2026', price_total: 4200, deposit_amount: 1500,
       is_stock: false, has_variants: false, status: 'production', created_at: '2026-06-12',
     },
     {
-      id: 'p-3', franchise_id: 'f-db', series_name: 'Super Saiyan Goku 1/4', type: 'resin',
+      id: 'p-3', franchise_id: 'f-db', manufacturer_id: 'm-prime1', series_name: 'Super Saiyan Goku 1/4', type: 'resin',
       description: 'เรซินสเกล 1/4 โกคูซูเปอร์ไซย่า งานปั้นพรีเมียม Prime1Studio',
       images: [], eta_note: 'Q1 2027', price_total: 28900, deposit_amount: 9000,
       is_stock: false, has_variants: false, status: 'shipping', created_at: '2026-05-30',
     },
     {
-      id: 'p-4', franchise_id: 'f-op', series_name: 'WCF Vol.37 — Zoro', type: 'wcf',
+      id: 'p-4', franchise_id: 'f-op', manufacturer_id: 'm-bandai', series_name: 'Zoro', type: 'wcf',
       description: 'โซโลลอตก่อนหน้า ถึงไทยแล้ว พร้อมเรียกเก็บส่วนต่าง',
       images: [], eta_note: 'ถึงไทยแล้ว', price_total: 1190, deposit_amount: 500,
       is_stock: false, has_variants: false, status: 'arrived', created_at: '2026-04-18',
     },
     {
-      id: 'p-5', franchise_id: 'f-bl', series_name: 'GEM — Kurosaki Ichigo', type: 'figure',
+      id: 'p-5', franchise_id: 'f-bl', manufacturer_id: 'm-megahouse', series_name: 'Kurosaki Ichigo', type: 'figure',
       description: 'อิจิโกะร่างบังไค พร้อมส่งทันที',
       images: [], eta_note: 'พร้อมส่ง', price_total: 3600, deposit_amount: 3600,
       is_stock: true, stock_qty: 4, has_variants: false, status: 'open', created_at: '2026-06-25',
     },
     {
-      id: 'p-6', franchise_id: 'f-nr', series_name: 'WCF — Kakashi Hatake', type: 'wcf',
+      id: 'p-6', franchise_id: 'f-nr', manufacturer_id: 'm-megahouse', series_name: 'Kakashi Hatake', type: 'wcf',
       description: 'คาคาชิ WCF พร้อมส่ง',
       images: [], eta_note: 'พร้อมส่ง', price_total: 890, deposit_amount: 890,
       is_stock: true, stock_qty: 7, has_variants: false, status: 'open', created_at: '2026-06-22',

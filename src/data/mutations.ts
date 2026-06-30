@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Manufacturer, Franchise, Product } from '../domain/entities';
+import type { Database, Order, OrderItem, Manufacturer, Franchise, Series, Product } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, remaining } from '../domain/services/catalog';
@@ -115,6 +115,9 @@ export const removeManufacturer = (mid: string) => (db: Database): Database => (
 
 export const upsertFranchise = (f: Franchise) => (db: Database): Database => ({ ...db, franchises: upsertById(db.franchises, f) });
 export const removeFranchise = (fid: string) => (db: Database): Database => ({ ...db, franchises: db.franchises.filter((f) => f.id !== fid) });
+
+export const upsertSeries = (s: Series) => (db: Database): Database => ({ ...db, series: upsertById(db.series, s) });
+export const removeSeries = (sid: string) => (db: Database): Database => ({ ...db, series: db.series.filter((s) => s.id !== sid) });
 
 export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...db, products: upsertById(db.products, p) });
 export const removeProduct = (pid: string) => (db: Database): Database => ({

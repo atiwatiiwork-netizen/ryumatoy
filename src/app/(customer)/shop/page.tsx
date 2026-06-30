@@ -5,7 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
-import { filterProducts, type ProductFilter } from '@/domain/services/catalog';
+import { filterProducts, seriesForFranchise, type ProductFilter } from '@/domain/services/catalog';
 import type { ProductStatus, ProductType } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -23,20 +23,22 @@ const TYPES: { key: ProductType; label: string }[] = [
 export default function ShopPage() {
   const db = useDatabase();
   const [category, setCategory] = useState<ProductFilter['category']>(null);
-  const [manufacturerId, setManufacturerId] = useState<string | null>(null);
   const [franchiseId, setFranchiseId] = useState<string | null>(null);
+  const [manufacturerId, setManufacturerId] = useState<string | null>(null);
+  const [seriesId, setSeriesId] = useState<string | null>(null);
   const [status, setStatus] = useState<ProductStatus | null>(null);
   const [type, setType] = useState<ProductType | null>(null);
   const [query, setQuery] = useState('');
 
   const results = useMemo(
-    () => filterProducts(db, { category, manufacturerId, franchiseId, status, type, query }),
-    [db, category, manufacturerId, franchiseId, status, type, query],
+    () => filterProducts(db, { category, franchiseId, manufacturerId, seriesId, status, type, query }),
+    [db, category, franchiseId, manufacturerId, seriesId, status, type, query],
   );
 
   const preorderCount = db.products.filter((p) => !p.is_stock).length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
-  const franchises = manufacturerId ? db.franchises.filter((f) => f.manufacturer_id === manufacturerId) : db.franchises;
+  // ซีรีย์ shown only once a เรื่อง is picked (optionally narrowed by ค่าย)
+  const seriesList = franchiseId ? seriesForFranchise(db, franchiseId, manufacturerId ?? undefined) : [];
 
   return (
     <div>
@@ -45,28 +47,32 @@ export default function ShopPage() {
         <button className="grid h-[42px] w-[42px] place-items-center rounded-[11px] border border-subtle bg-surface-3 text-ink"><Icon name="sliders" size={20} /></button>
       </div>
 
-      {/* search (mobile) */}
       <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-subtle bg-surface-3 px-[13px] py-[11px] lg:hidden">
         <Icon name="search" size={18} className="text-ink-faint" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ค้นหาฟิกเกอร์ / เรื่อง / ค่าย" className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink-faint" />
       </div>
 
-      {/* category band */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:mb-6 lg:gap-4">
         <CategoryBanner active={category === 'preorder'} onClick={() => setCategory(category === 'preorder' ? null : 'preorder')} title="Pre-Order" count={preorderCount} icon="box" grad="linear-gradient(120deg, rgba(185,28,28,.34), #1a0f0e)" border="border-primary" />
         <CategoryBanner active={category === 'instock'} onClick={() => setCategory(category === 'instock' ? null : 'instock')} title="In-Stock" count={stockCount} icon="bolt" grad="linear-gradient(120deg, rgba(22,163,74,.18), #0e1310)" border="border-[#16a34a]/50" />
       </div>
 
-      {/* mobile filter chip rails */}
+      {/* mobile filter rails — order: เรื่อง → ค่าย → ซีรีย์ → สถานะ */}
       <div className="lg:hidden">
         <ChipRail>
-          <Chip active={!manufacturerId} onClick={() => { setManufacturerId(null); setFranchiseId(null); }}>ทุกค่าย</Chip>
-          {db.manufacturers.map((m) => <Chip key={m.id} active={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setFranchiseId(null); }}>{m.name}</Chip>)}
+          <Chip active={!franchiseId} onClick={() => { setFranchiseId(null); setSeriesId(null); }}>ทุกเรื่อง</Chip>
+          {db.franchises.map((f) => <Chip key={f.id} active={franchiseId === f.id} onClick={() => { setFranchiseId(f.id); setSeriesId(null); }}>{f.name}</Chip>)}
         </ChipRail>
         <ChipRail>
-          <Chip active={!franchiseId} onClick={() => setFranchiseId(null)}>ทุกเรื่อง</Chip>
-          {franchises.map((f) => <Chip key={f.id} active={franchiseId === f.id} onClick={() => setFranchiseId(f.id)}>{f.name}</Chip>)}
+          <Chip active={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }}>ทุกค่าย</Chip>
+          {db.manufacturers.map((m) => <Chip key={m.id} active={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }}>{m.name}</Chip>)}
         </ChipRail>
+        {seriesList.length > 0 && (
+          <ChipRail>
+            <Chip active={!seriesId} onClick={() => setSeriesId(null)}>ทุกซีรีย์</Chip>
+            {seriesList.map((s) => <Chip key={s.id} active={seriesId === s.id} onClick={() => setSeriesId(s.id)}>{s.name}</Chip>)}
+          </ChipRail>
+        )}
         <ChipRail last>
           <Chip active={!status} onClick={() => setStatus(null)}>ทุกสถานะ</Chip>
           {STATUS_FILTERS.map((s) => <Chip key={s.key} active={status === s.key} onClick={() => setStatus(s.key)}>{s.label}</Chip>)}
@@ -74,16 +80,21 @@ export default function ShopPage() {
       </div>
 
       <div className="lg:grid lg:grid-cols-[208px_1fr] lg:gap-6 lg:items-start">
-        {/* desktop sidebar */}
         <aside className="sticky top-[86px] hidden rounded-card border border-subtle bg-surface-2 p-[18px] lg:block">
-          <FilterGroup title="ค่าย (Manufacturer)">
-            <Check label="ทั้งหมด" checked={!manufacturerId} onClick={() => { setManufacturerId(null); setFranchiseId(null); }} />
-            {db.manufacturers.map((m) => <Check key={m.id} label={m.name} checked={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setFranchiseId(null); }} />)}
-          </FilterGroup>
           <FilterGroup title="เรื่อง (Franchise)">
-            <Check label="ทั้งหมด" checked={!franchiseId} onClick={() => setFranchiseId(null)} />
-            {franchises.map((f) => <Check key={f.id} label={f.name} checked={franchiseId === f.id} onClick={() => setFranchiseId(f.id)} />)}
+            <Check label="ทั้งหมด" checked={!franchiseId} onClick={() => { setFranchiseId(null); setSeriesId(null); }} />
+            {db.franchises.map((f) => <Check key={f.id} label={f.name} checked={franchiseId === f.id} onClick={() => { setFranchiseId(f.id); setSeriesId(null); }} />)}
           </FilterGroup>
+          <FilterGroup title="ค่าย (Manufacturer)">
+            <Check label="ทั้งหมด" checked={!manufacturerId} onClick={() => { setManufacturerId(null); setSeriesId(null); }} />
+            {db.manufacturers.map((m) => <Check key={m.id} label={m.name} checked={manufacturerId === m.id} onClick={() => { setManufacturerId(m.id); setSeriesId(null); }} />)}
+          </FilterGroup>
+          {seriesList.length > 0 && (
+            <FilterGroup title="ซีรีย์ (Series)">
+              <Check label="ทั้งหมด" checked={!seriesId} onClick={() => setSeriesId(null)} />
+              {seriesList.map((s) => <Check key={s.id} label={s.name} checked={seriesId === s.id} onClick={() => setSeriesId(s.id)} />)}
+            </FilterGroup>
+          )}
           <FilterGroup title="ประเภท" last>
             <div className="flex flex-wrap gap-1.5">
               <TypeChip label="ทั้งหมด" active={!type} onClick={() => setType(null)} />
