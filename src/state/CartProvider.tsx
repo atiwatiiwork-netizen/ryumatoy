@@ -1,0 +1,89 @@
+'use client';
+
+import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import type { ReactNode } from 'react';
+
+/**
+ * Cart — UI-only state until checkout. Each line references a product (+ optional
+ * variant) and carries the deposit charged now. Totals derive from these lines.
+ */
+export interface CartLine {
+  productId: string;
+  variantId?: string;
+  qty: number;
+  depositEach: number;
+  priceEach: number;
+}
+
+interface CartState {
+  lines: CartLine[];
+  coupon: string | null;
+  count: number;
+  add: (line: Omit<CartLine, 'qty'> & { qty?: number }) => void;
+  setQty: (productId: string, variantId: string | undefined, qty: number) => void;
+  remove: (productId: string, variantId?: string) => void;
+  applyCoupon: (code: string | null) => void;
+  clear: () => void;
+  depositTotal: () => number;
+}
+
+const CartContext = createContext<CartState | null>(null);
+
+const same = (a: CartLine, productId: string, variantId?: string) =>
+  a.productId === productId && a.variantId === variantId;
+
+export function CartProvider({ children }: { children: ReactNode }) {
+  const [lines, setLines] = useState<CartLine[]>([]);
+  const [coupon, setCoupon] = useState<string | null>(null);
+
+  const add = useCallback((line: Omit<CartLine, 'qty'> & { qty?: number }) => {
+    const qty = line.qty ?? 1;
+    setLines((prev) => {
+      const i = prev.findIndex((l) => same(l, line.productId, line.variantId));
+      if (i >= 0) {
+        const next = [...prev];
+        next[i] = { ...next[i], qty: next[i].qty + qty };
+        return next;
+      }
+      return [...prev, { ...line, qty }];
+    });
+  }, []);
+
+  const setQty = useCallback((productId: string, variantId: string | undefined, qty: number) => {
+    setLines((prev) =>
+      prev.map((l) => (same(l, productId, variantId) ? { ...l, qty } : l)).filter((l) => l.qty > 0),
+    );
+  }, []);
+
+  const remove = useCallback((productId: string, variantId?: string) => {
+    setLines((prev) => prev.filter((l) => !same(l, productId, variantId)));
+  }, []);
+
+  const clear = useCallback(() => {
+    setLines([]);
+    setCoupon(null);
+  }, []);
+
+  const value = useMemo<CartState>(
+    () => ({
+      lines,
+      coupon,
+      count: lines.reduce((n, l) => n + l.qty, 0),
+      add,
+      setQty,
+      remove,
+      applyCoupon: setCoupon,
+      clear,
+      depositTotal: () => lines.reduce((sum, l) => sum + l.depositEach * l.qty, 0),
+    }),
+    [lines, coupon, add, setQty, remove, clear],
+  );
+
+  return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
+}
+
+export function useCart(): CartState {
+  const ctx = useContext(CartContext);
+  if (!ctx) throw new Error('useCart must be used within CartProvider');
+  return ctx;
+}
