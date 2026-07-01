@@ -14,7 +14,6 @@ import { PreviewSwitcher } from './PreviewSwitcher';
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
   { href: '/shop', icon: 'store', label: 'ช็อป', topLabel: 'ช็อป' },
-  { href: '/wallet', icon: 'wallet', label: 'กระเป๋า', topLabel: 'กระเป๋าใบพรี' },
   { href: '/profile', icon: 'user', label: 'โปรไฟล์', topLabel: 'โปรไฟล์' },
 ];
 

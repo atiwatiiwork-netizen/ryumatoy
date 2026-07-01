@@ -32,6 +32,7 @@ export const RANK = {
   silver: { emoji: '🥈', cls: 'text-[#d7dde6] border-[#94a3b8]/50', grad: 'linear-gradient(135deg, rgba(148,163,184,.25), rgba(100,116,139,.12))', label: 'Silver' },
   gold: { emoji: '🥇', cls: 'text-[#f1d27a] border-[#d4af37]/[0.55]', grad: 'linear-gradient(135deg, rgba(212,175,55,.3), rgba(161,98,7,.15))', label: 'Gold' },
   diamond: { emoji: '💎', cls: 'text-[#9fe9f5] border-[#38bdf8]/[0.55]', grad: 'linear-gradient(135deg, rgba(56,189,248,.28), rgba(14,165,233,.12))', label: 'Diamond' },
+  legend: { emoji: '👑', cls: 'text-[#f7c9ff] border-[#c084fc]/[0.55]', grad: 'linear-gradient(135deg, rgba(192,132,252,.3), rgba(147,51,234,.14))', label: 'Legend' },
 } as const;
 export type RankKey = keyof typeof RANK;
 

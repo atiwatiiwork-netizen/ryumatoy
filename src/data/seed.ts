@@ -12,7 +12,7 @@ export const CURRENT_USER_ID = ME;
 
 export const SEED_DATABASE: Database = {
   users: [
-    { id: ME, display_name: 'Atiwat T.', facebook_id: 'fb-001', rank: 'gold', total_spent: 32400, preferred_lang: 'th' },
+    { id: ME, display_name: 'Atiwat T.', facebook_id: 'fb-001', rank: 'bronze', total_spent: 32400, preferred_lang: 'th', rank_seen: 'bronze' },
     { id: 'u-2', display_name: 'Ploy K.', facebook_id: 'fb-002', rank: 'silver', total_spent: 8200, preferred_lang: 'th' },
     { id: 'u-3', display_name: 'Nut R.', facebook_id: 'fb-003', rank: 'diamond', total_spent: 64000, preferred_lang: 'th' },
     { id: 'u-admin', display_name: 'Ryuma Admin', rank: 'diamond', total_spent: 0, preferred_lang: 'th' },
@@ -127,6 +127,8 @@ export const SEED_DATABASE: Database = {
 
   remainingPayments: [],
 
+  rankRequests: [],
+
   transfers: [
     { id: 'tr-1', ticket_id: 't-3', from_user_id: ME, asking_price: 1500, status: 'listed', note: 'จ่ายครบแล้ว พร้อมโอน', listed_at: '2026-06-28' },
   ],
@@ -159,5 +161,10 @@ export const SEED_DATABASE: Database = {
     deposit_mega: 500,
     eta_min_days: 7,
     eta_max_days: 10,
+    rank_silver_pieces: 1,
+    rank_gold_pieces: 50,
+    rank_gold_deposit_pct: 50,
+    instock_disc_gold_type: 'percent',
+    instock_disc_gold_value: 0,
   },
 };

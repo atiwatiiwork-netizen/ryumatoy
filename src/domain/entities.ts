@@ -11,7 +11,7 @@ export type TicketStatus = 'pending_approval' | 'active' | 'paid_full' | 'transf
 export type Carrier = 'ems' | 'jt' | 'flash' | 'kerry';
 export type OrderStatus = 'pending_approval' | 'approved' | 'rejected';
 export type TransferStatus = 'listed' | 'pending_admin' | 'approved' | 'cancelled';
-export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond';
+export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond' | 'legend';
 
 /** ประเภท / Type — top category that groups makers (WCF, Resin, Bandai...). */
 export interface Category {
@@ -215,6 +215,20 @@ export interface User {
   total_spent: number;
   avatar_url?: string;
   preferred_lang: 'th' | 'en';
+  rank_seen?: RankName; // rank the user was already congratulated for (popup shows once)
+}
+
+/** A pending/approved request to promote a user's rank (auto-raised at thresholds or admin-forced). */
+export type RankRequestStatus = 'pending' | 'approved' | 'rejected';
+export interface RankRequest {
+  id: string;
+  user_id: string;
+  from_rank: RankName;
+  to_rank: RankName;
+  pieces: number; // qty accumulated at request time
+  status: RankRequestStatus;
+  created_at: string;
+  resolved_at?: string;
 }
 
 /** A payable account shown at checkout. Multiple may exist; `active` ones are
@@ -241,6 +255,12 @@ export interface ShopSettings {
   deposit_mega: number; // 500
   eta_min_days: number; // 7  — ETA window after leaving China
   eta_max_days: number; // 10
+  // Rank system (piece-based). Thresholds are editable here.
+  rank_silver_pieces: number; // 1  — buy/pre-order this many pieces → request Silver
+  rank_gold_pieces: number; // 50 — accumulate this many → request Gold
+  rank_gold_deposit_pct: number; // 50 — Gold pays this % of the standard deposit (rest rolls into remaining; total unchanged)
+  instock_disc_gold_type: 'percent' | 'baht'; // Gold in-stock discount kind
+  instock_disc_gold_value: number; // 0 by default
 }
 
 /** The whole app database as one JSON object (single source of truth). */
@@ -257,6 +277,7 @@ export interface Database {
   orders: Order[];
   tickets: PreorderTicket[];
   remainingPayments: RemainingPayment[];
+  rankRequests: RankRequest[];
   transfers: TicketTransfer[];
   coupons: Coupon[];
   rankTiers: RankTier[];

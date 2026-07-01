@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf } from '../domain/services/catalog';
@@ -162,6 +162,51 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
     }),
   };
 };
+
+// ── Rank system ────────────────────────────────────────────────────────────
+import { rankIndex } from '../domain/services/ranks';
+
+/** Raise a pending rank-change request (skips if one to the same rank is already pending). */
+export const requestRank = (userId: string, toRank: RankName, pieces: number) => (db: Database): Database => {
+  const u = db.users.find((x) => x.id === userId);
+  if (!u || rankIndex(toRank) <= rankIndex(u.rank)) return db;
+  if (db.rankRequests.some((r) => r.user_id === userId && r.to_rank === toRank && r.status === 'pending')) return db;
+  return {
+    ...db,
+    rankRequests: [
+      { id: id('rr'), user_id: userId, from_rank: u.rank, to_rank: toRank, pieces, status: 'pending', created_at: new Date().toISOString() },
+      ...db.rankRequests,
+    ],
+  };
+};
+
+/** Approve a rank request → promote the user (up only). Popup fires (rank_seen not touched). */
+export const approveRankRequest = (reqId: string) => (db: Database): Database => {
+  const req = db.rankRequests.find((r) => r.id === reqId);
+  if (!req || req.status !== 'pending') return db;
+  return {
+    ...db,
+    rankRequests: db.rankRequests.map((r) => (r.id === reqId ? { ...r, status: 'approved', resolved_at: new Date().toISOString() } : r)),
+    users: db.users.map((u) => (u.id === req.user_id && rankIndex(req.to_rank) > rankIndex(u.rank) ? { ...u, rank: req.to_rank } : u)),
+  };
+};
+
+export const rejectRankRequest = (reqId: string) => (db: Database): Database => ({
+  ...db,
+  rankRequests: db.rankRequests.map((r) => (r.id === reqId && r.status === 'pending' ? { ...r, status: 'rejected', resolved_at: new Date().toISOString() } : r)),
+});
+
+/** Admin grants a rank directly (bypasses conditions). Popup fires (rank_seen not touched). */
+export const grantRank = (userId: string, rank: RankName) => (db: Database): Database => ({
+  ...db,
+  users: db.users.map((u) => (u.id === userId ? { ...u, rank } : u)),
+});
+
+/** Mark the user's current rank as "seen" so the congrats popup stops showing. */
+export const markRankSeen = (userId: string) => (db: Database): Database => ({
+  ...db,
+  users: db.users.map((u) => (u.id === userId ? { ...u, rank_seen: u.rank } : u)),
+});
 
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
