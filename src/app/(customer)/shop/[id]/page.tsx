@@ -33,7 +33,7 @@ export default function ProductDetailPage() {
   const fr = franchiseOf(db, product);
 
   const addToCart = () => {
-    cart.add({ productId: product.id, variantId: batch ? undefined : variantId, depositEach: deposit, priceEach: price });
+    cart.add({ productId: product.id, variantId: batch ? undefined : variantId, batchId: batch?.id, depositEach: deposit, priceEach: price });
     flash('เพิ่มลงตะกร้าแล้ว');
     router.push('/cart');
   };

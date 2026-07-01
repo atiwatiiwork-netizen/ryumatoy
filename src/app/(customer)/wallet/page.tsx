@@ -11,7 +11,15 @@ import { StatusBadge, cx } from '@/components/ui';
 import { manufacturerOf } from '@/domain/services/catalog';
 import type { PreorderTicket } from '@/domain/entities';
 
-type Tab = 'all' | 'active' | 'paid_full';
+type Tab = 'all' | 'preorder' | 'shipping' | 'done';
+
+// ทั้งหมด / ใบพรี (จอง+ผลิต) / กำลังเดินทาง / เรียบร้อย (ถึงไทย/จ่ายครบ)
+function matchTab(tab: Tab, ps: string, status: string): boolean {
+  if (tab === 'all') return true;
+  if (tab === 'preorder') return ps === 'open' || ps === 'production';
+  if (tab === 'shipping') return ps === 'shipping';
+  return ps === 'arrived' || ps === 'closed' || status === 'paid_full';
+}
 
 export default function WalletPage() {
   const db = useDatabase();
@@ -22,7 +30,7 @@ export default function WalletPage() {
   const totalDue = mine.reduce((s, t) => s + (t.remaining_amount - t.remaining_paid), 0);
 
   const filtered = mine
-    .filter((t) => (tab === 'all' ? true : tab === 'active' ? t.status === 'active' : t.status === 'paid_full'))
+    .filter((t) => matchTab(tab, t.product_status, t.status))
     .sort((a, b) => (newest ? (a.created_at < b.created_at ? 1 : -1) : a.created_at < b.created_at ? -1 : 1));
 
   // group by ค่าย (maker), preserving the sorted order within each group
@@ -43,10 +51,12 @@ export default function WalletPage() {
       <div className="mb-4 mt-1 text-[13px] text-ink-muted">{mine.length} ใบ · ค้างชำระรวม <span className="font-bold text-primary-soft">{baht(totalDue)}</span></div>
 
       <div className="mb-[18px] flex items-center gap-2">
-        {([['all', 'ทั้งหมด'], ['active', 'Active'], ['paid_full', 'จ่ายครบ']] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-[13px] font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
-        ))}
-        <button onClick={() => setNewest((v) => !v)} className="ml-auto flex items-center gap-1.5 rounded-full border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-semibold text-ink-muted2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {([['all', 'ทั้งหมด'], ['preorder', 'ใบพรี'], ['shipping', 'กำลังเดินทาง'], ['done', 'เรียบร้อย']] as [Tab, string][]).map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)} className={cx('whitespace-nowrap rounded-full border px-3.5 py-2 text-[13px] font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
+          ))}
+        </div>
+        <button onClick={() => setNewest((v) => !v)} className="ml-auto flex flex-shrink-0 items-center gap-1.5 rounded-full border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-semibold text-ink-muted2">
           <Icon name="swap" size={15} /> {newest ? 'ใหม่→เก่า' : 'เก่า→ใหม่'}
         </button>
       </div>

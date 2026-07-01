@@ -6,7 +6,7 @@ import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
-import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, type ProductFilter } from '@/domain/services/catalog';
+import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, batchRemaining, type ProductFilter } from '@/domain/services/catalog';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -34,6 +34,7 @@ export default function ShopPage() {
   // reopened stock batches matching the same filters (shown as extra "รอบใหม่" cards)
   const openBatches = category === 'instock' ? [] : db.batches.filter((b) => {
     if (b.status !== 'open') return false;
+    if (batchRemaining(db, b.id, b.stock_qty) <= 0) return false; // sold out
     const p = db.products.find((x) => x.id === b.product_id);
     if (!p) return false;
     if (categoryId && categoryOf(db, p)?.id !== categoryId) return false;

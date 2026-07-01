@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 export interface CartLine {
   productId: string;
   variantId?: string;
+  batchId?: string; // reopened stock batch, if bought from one
   qty: number;
   depositEach: number;
   priceEach: number;

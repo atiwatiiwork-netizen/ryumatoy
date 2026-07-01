@@ -7,7 +7,7 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
 import { orderedQtyOf, franchiseOf } from '@/domain/services/catalog';
-import { closeProduction, reopenBatch } from '@/data/mutations';
+import { closeProduction } from '@/data/mutations';
 
 const inputCls = 'w-20 rounded-lg border border-subtle bg-surface-3 px-2.5 py-2 text-center text-sm text-ink outline-none focus:border-accent';
 
@@ -86,55 +86,6 @@ export default function ProductionPage() {
             </div>
           </>
         )}
-      </div>
-
-      <SurplusReopen makerId={makerId} />
-    </div>
-  );
-}
-
-/** สต๊อกส่วนเกินจากการปิดรอบ → เปิดขายต่อเป็น batch บน SKU เดิม (ราคาใหม่ได้). */
-function SurplusReopen({ makerId }: { makerId: string }) {
-  const db = useDatabase();
-  const dispatch = useDispatch();
-  const { flash } = useToast();
-  const [form, setForm] = useState<Record<string, { price: string; qty: string }>>({});
-
-  const surplusProducts = db.products.filter((p) => p.manufacturer_id === makerId && (p.surplus_qty ?? 0) > 0);
-  const openBatchQty = (pid: string) => db.batches.filter((b) => b.product_id === pid && b.status === 'open').reduce((s, b) => s + b.stock_qty, 0);
-
-  const reopen = (pid: string, surplus: number, defaultPrice: number, defaultDeposit: number) => {
-    const f = form[pid] ?? { price: String(defaultPrice), qty: String(surplus) };
-    const price = Number(f.price) || defaultPrice;
-    const qty = Number(f.qty) || surplus;
-    dispatch(reopenBatch(pid, { price, deposit: defaultDeposit, qty }));
-    flash(`เปิดขายสต๊อก ${qty} ตัว @ ${baht(price)}`);
-    setForm((s) => ({ ...s, [pid]: { price: String(price), qty: '' } }));
-  };
-
-  if (surplusProducts.length === 0) return null;
-
-  return (
-    <div className="mt-6 rounded-2xl border border-subtle bg-surface-2 p-5">
-      <div className="mb-1 font-bold">สต๊อกเหลือ → เปิดขายต่อ</div>
-      <div className="mb-4 text-[12.5px] text-ink-faint">ส่วนเกินจากการปิดรอบ เปิดขายเป็นล็อตใหม่บนสินค้าเดิมได้ (ตั้งราคาใหม่หรือคงเดิม) — คนจองรอบก่อนราคาไม่กระทบ</div>
-      <div className="flex flex-col divide-y divide-hair">
-        {surplusProducts.map((p) => {
-          const surplus = p.surplus_qty ?? 0;
-          const listed = openBatchQty(p.id);
-          const f = form[p.id] ?? { price: String(p.price_total), qty: String(surplus) };
-          return (
-            <div key={p.id} className="flex flex-wrap items-center gap-3 py-3">
-              <div className="min-w-[160px] flex-1">
-                <div className="truncate text-sm font-semibold">{p.series_name}</div>
-                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกิน {surplus}{listed > 0 ? ` · เปิดขายแล้ว ${listed}` : ''}</div>
-              </div>
-              <label className="text-[12px] text-ink-muted">ราคา <input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm text-ink outline-none" inputMode="numeric" value={f.price} onChange={(e) => setForm((s) => ({ ...s, [p.id]: { ...f, price: e.target.value } }))} /></label>
-              <label className="text-[12px] text-ink-muted">จำนวน <input className="ml-1 w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" value={f.qty} onChange={(e) => setForm((s) => ({ ...s, [p.id]: { ...f, qty: e.target.value } }))} /></label>
-              <button onClick={() => reopen(p.id, surplus, p.price_total, p.deposit_amount)} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดขาย</button>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

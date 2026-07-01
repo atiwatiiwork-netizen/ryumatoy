@@ -90,3 +90,34 @@ export const remaining = (price: number, deposit: number) => Math.max(0, price -
 export function orderedQtyOf(db: Database, productId: string): number {
   return db.tickets.filter((t) => t.product_id === productId).reduce((s, t) => s + t.qty, 0);
 }
+
+// ---- Surplus stock accounting (reopened batches) ---------------------------
+
+const batchIdsOf = (db: Database, productId: string) => db.batches.filter((b) => b.product_id === productId).map((b) => b.id);
+
+/** Qty of a batch already bought (sum of ticket qty referencing it). */
+export function batchSoldQty(db: Database, batchId: string): number {
+  return db.tickets.filter((t) => t.batch_id === batchId).reduce((s, t) => s + t.qty, 0);
+}
+
+/** Remaining unsold qty of a single batch. */
+export function batchRemaining(db: Database, batchId: string, stockQty: number): number {
+  return Math.max(0, stockQty - batchSoldQty(db, batchId));
+}
+
+/** Total surplus stock of a product still unsold (surplus_qty − sold across its batches). */
+export function stockSoldQty(db: Database, productId: string): number {
+  const ids = batchIdsOf(db, productId);
+  return db.tickets.filter((t) => t.batch_id && ids.includes(t.batch_id)).reduce((s, t) => s + t.qty, 0);
+}
+export function stockRemaining(db: Database, product: Product): number {
+  return Math.max(0, (product.surplus_qty ?? 0) - stockSoldQty(db, product.id));
+}
+
+/** Who bought this product's surplus stock — buyer name + qty + ticket no. */
+export function stockBuyers(db: Database, productId: string): { name: string; qty: number; ticket_no: string }[] {
+  const ids = batchIdsOf(db, productId);
+  return db.tickets
+    .filter((t) => t.batch_id && ids.includes(t.batch_id))
+    .map((t) => ({ name: db.users.find((u) => u.id === t.owner_id)?.display_name ?? '—', qty: t.qty, ticket_no: t.ticket_no }));
+}

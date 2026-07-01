@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ProductBatch } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { baht } from '@/lib/theme';
-import { metaLine } from '@/domain/services/catalog';
+import { metaLine, batchRemaining } from '@/domain/services/catalog';
 import { ProductThumb } from './ui';
 
 /** A reopened stock batch shown on the shop — same figure, its own lot/price. */
@@ -23,7 +23,7 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
         <div className="line-clamp-2 min-h-[34px] text-[13px] font-semibold leading-tight">{product.series_name}</div>
         <div className="mt-1.5 flex items-center gap-2">
           <span className="text-[15px] font-extrabold text-primary-soft">{baht(batch.price_total)}</span>
-          <span className="text-[11px] text-ink-faint">เหลือ {batch.stock_qty}</span>
+          <span className="text-[11px] text-ink-faint">เหลือ {batchRemaining(db, batch.id, batch.stock_qty)}</span>
         </div>
       </div>
     </Link>

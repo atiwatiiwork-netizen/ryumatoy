@@ -109,6 +109,7 @@ export interface OrderItem {
   // product price is edited later. Optional for back-compat with older rows.
   unit_price?: number;
   unit_deposit?: number;
+  batch_id?: string; // set when the buy came from a reopened stock batch
   coupon_id?: string;
 }
 
@@ -128,6 +129,7 @@ export interface PreorderTicket {
   ticket_no: string; // OP-2026-06-0001
   product_id: string;
   variant_id?: string;
+  batch_id?: string; // bought from a reopened stock batch (for stock accounting + buyers list)
   owner_id: string;
   original_buyer_id: string;
   qty: number;

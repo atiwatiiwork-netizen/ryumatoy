@@ -38,6 +38,7 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) 
       // snapshot the price/deposit at order time — never re-read the product later
       unit_price: l.priceEach,
       unit_deposit: l.depositEach,
+      batch_id: l.batchId,
     }));
     const order: Order = {
       id: orderId,
@@ -70,6 +71,7 @@ export function approveOrder(orderId: string) {
         ticket_no: nextTicketNo(db, abbr),
         product_id: product.id,
         variant_id: item.variant_id,
+        batch_id: item.batch_id,
         owner_id: order.user_id,
         original_buyer_id: order.user_id,
         qty: item.qty,
