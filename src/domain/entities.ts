@@ -84,7 +84,11 @@ export interface OrderItem {
   product_id: string;
   variant_id?: string;
   qty: number;
-  deposit_amount: number;
+  deposit_amount: number; // total deposit for this line (= unit_deposit × qty)
+  // Price SNAPSHOT captured at order time — locks the customer's price even if the
+  // product price is edited later. Optional for back-compat with older rows.
+  unit_price?: number;
+  unit_deposit?: number;
   coupon_id?: string;
 }
 

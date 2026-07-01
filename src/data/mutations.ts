@@ -1,7 +1,7 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
-import { franchiseOf, remaining } from '../domain/services/catalog';
+import { franchiseOf } from '../domain/services/catalog';
 
 /**
  * Pure mutations — `(db) => db`. Each returns a new Database; the store applies
@@ -35,6 +35,9 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) 
       variant_id: l.variantId,
       qty: l.qty,
       deposit_amount: l.depositEach * l.qty,
+      // snapshot the price/deposit at order time — never re-read the product later
+      unit_price: l.priceEach,
+      unit_deposit: l.depositEach,
     }));
     const order: Order = {
       id: orderId,
@@ -59,8 +62,9 @@ export function approveOrder(orderId: string) {
       const product = db.products.find((p) => p.id === item.product_id)!;
       const variant = db.variants.find((v) => v.id === item.variant_id);
       const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
-      const price = variant?.price_total ?? product.price_total;
-      const deposit = item.deposit_amount;
+      // derive from the ORDER-TIME snapshot; fall back to current product for old rows
+      const unitPrice = item.unit_price ?? variant?.price_total ?? product.price_total;
+      const unitDeposit = item.unit_deposit ?? variant?.deposit_amount ?? product.deposit_amount;
       return {
         id: id('t'),
         ticket_no: nextTicketNo(db, abbr),
@@ -69,8 +73,8 @@ export function approveOrder(orderId: string) {
         owner_id: order.user_id,
         original_buyer_id: order.user_id,
         qty: item.qty,
-        deposit_paid: deposit,
-        remaining_amount: remaining(price, variant?.deposit_amount ?? product.deposit_amount) * item.qty,
+        deposit_paid: unitDeposit * item.qty,
+        remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
         remaining_paid: 0,
         status: 'active' as const,
         product_status: product.status,
