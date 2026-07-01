@@ -8,7 +8,7 @@ import { CURRENT_USER_ID } from '@/data/seed';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
-import { Button, BackBar, ProgressBar, QrPanel, cx } from '@/components/ui';
+import { Button, BackBar, ProgressBar, QrPanel, TicketQr, cx } from '@/components/ui';
 import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
@@ -76,7 +76,7 @@ export default function TicketDetailPage() {
         <div className="absolute -left-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="absolute -right-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="mb-3.5 font-mono text-[15px] tracking-wider text-primary-soft">{ticket.ticket_no}</div>
-        <div className="flex justify-center"><QrPanel size={160} /></div>
+        <div className="flex justify-center"><TicketQr value={typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(ticket.ticket_no)}` : ticket.ticket_no} size={150} /></div>
         <div className="mt-3 text-[11.5px] text-ink-faint">แสดง QR นี้เพื่อยืนยันตัวตนตอนรับของ</div>
       </div>
 

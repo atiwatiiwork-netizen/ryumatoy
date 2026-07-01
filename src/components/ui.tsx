@@ -1,4 +1,5 @@
 import type { ReactNode, ButtonHTMLAttributes } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Icon, type IconName } from './Icon';
 import { STATUS, RANK, type StatusKey, type RankKey } from '@/lib/theme';
 
@@ -124,7 +125,16 @@ export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon 
   );
 }
 
-/** White QR panel placeholder (checkout + ticket). */
+/** Real, scannable QR (encodes a URL/text). `size` = QR module area; total = size + 2*pad. */
+export function TicketQr({ value, size = 150, pad = 12, className }: { value: string; size?: number; pad?: number; className?: string }) {
+  return (
+    <div className={cx('rounded-xl bg-white', className)} style={{ padding: pad }}>
+      <QRCodeSVG value={value} size={size} level="M" bgColor="#ffffff" fgColor="#0a0809" />
+    </div>
+  );
+}
+
+/** White QR panel placeholder (checkout PromptPay fallback only — NOT a real QR). */
 export function QrPanel({ size = 160 }: { size?: number }) {
   return (
     <div className="grid grid-cols-7 grid-rows-7 gap-[2px] rounded-2xl bg-white p-3" style={{ width: size, height: size }}>

@@ -8,7 +8,7 @@ import { uploadImage } from '@/lib/upload';
 import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
-import { Button, StatusBadge, cx } from '@/components/ui';
+import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
 import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
@@ -337,9 +337,13 @@ function StatusRow({ product: p }: { product: Product }) {
   const arrivedIdx = LOT_STEPS.indexOf('arrived');
   const next = idx < arrivedIdx ? LOT_STEPS[idx + 1] : null;
   const [open, setOpen] = useState(false);
+  const [showBuyers, setShowBuyers] = useState(false);
   const [track, setTrack] = useState(p.tracking_no ?? '');
   const [shippedAt, setShippedAt] = useState(p.shipped_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
   const [finalQty, setFinalQty] = useState(String(ordered));
+  const buyers = db.tickets.filter((t) => t.product_id === p.id);
+  const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
+  const ticketUrl = (no: string) => (typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(no)}` : no);
 
   const advance = (extra?: { tracking_no?: string; shipped_at?: string }) => {
     if (!next) return;
@@ -360,10 +364,13 @@ function StatusRow({ product: p }: { product: Product }) {
   return (
     <div className="py-2.5">
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
+        <button onClick={() => setShowBuyers((o) => !o)} className="min-w-0 flex-1 text-left">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13.5px] font-semibold hover:text-primary-soft">{p.series_name}</span>
+            <span className={cx('inline-block text-[10px] text-ink-faint transition-transform', showBuyers && 'rotate-180')}>▾</span>
+          </div>
           <div className="text-[11px] text-ink-faint">{franchiseOf(db, p)?.name} · จอง {ordered} ตัว{p.production_qty != null ? ` · สั่ง ${p.production_qty}` : ''}</div>
-        </div>
+        </button>
         {p.status === 'open' ? (
           <button onClick={() => setOpen((o) => !o)} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">ปิดใบพรี →</button>
         ) : !next ? (
@@ -387,6 +394,28 @@ function StatusRow({ product: p }: { product: Product }) {
           <input value={track} onChange={(e) => setTrack(e.target.value)} placeholder="เลข Track จีน→ไทย" className={cx(inputCls, 'py-2')} />
           <input type="date" value={shippedAt} onChange={(e) => setShippedAt(e.target.value)} className={cx(inputCls, 'w-[150px] py-2')} />
           <button onClick={() => (track.trim() ? advance({ tracking_no: track.trim(), shipped_at: shippedAt }) : flash('ใส่เลข Track ก่อน'))} className="whitespace-nowrap rounded-lg bg-cta px-4 text-[12.5px] font-bold text-white">ยืนยัน</button>
+        </div>
+      )}
+
+      {/* dropdown รายชื่อลูกค้าที่พรีล็อตนี้ */}
+      {showBuyers && (
+        <div className="mt-2 rounded-lg border border-subtle bg-surface-3 p-2">
+          {buyers.length === 0 ? (
+            <div className="py-2 text-center text-[12px] text-ink-faint">ยังไม่มีลูกค้าพรีล็อตนี้</div>
+          ) : (
+            <div className="flex flex-col divide-y divide-hair">
+              {buyers.map((t) => (
+                <Link key={t.id} href={`/wallet/${encodeURIComponent(t.ticket_no)}`} className="flex items-center gap-3 rounded-md px-1 py-2 hover:bg-white/[0.03]">
+                  <TicketQr value={ticketUrl(t.ticket_no)} size={40} pad={5} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-semibold">{userName(t.owner_id)}</div>
+                    <div className="text-[11px] text-ink-faint">{new Date(t.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })} · <span className="font-mono">{t.ticket_no}</span></div>
+                  </div>
+                  <span className="whitespace-nowrap text-[11px] font-bold text-primary-soft">ดูตั๋ว →</span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
