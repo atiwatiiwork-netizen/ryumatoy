@@ -28,18 +28,25 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
 export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) {
   return (db: Database): Database => {
     const orderId = id('o');
-    const items: OrderItem[] = lines.map((l) => ({
-      id: id('oi'),
-      order_id: orderId,
-      product_id: l.productId,
-      variant_id: l.variantId,
-      qty: l.qty,
-      deposit_amount: l.depositEach * l.qty,
-      // snapshot the price/deposit at order time — never re-read the product later
-      unit_price: l.priceEach,
-      unit_deposit: l.depositEach,
-      batch_id: l.batchId,
-    }));
+    const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
+    const items: OrderItem[] = lines.map((l) => {
+      const isStock = db.products.find((p) => p.id === l.productId)?.is_stock;
+      // rank perk: pre-order deposit reduced by rank (snapshot); total unchanged (remaining grows).
+      // in-stock lines pay in full (no deposit concept) — the rank perk there is a price discount.
+      const unitDeposit = isStock ? l.depositEach : depositForRank(db.settings, l.depositEach, rank);
+      return {
+        id: id('oi'),
+        order_id: orderId,
+        product_id: l.productId,
+        variant_id: l.variantId,
+        qty: l.qty,
+        deposit_amount: unitDeposit * l.qty,
+        // snapshot the price/deposit at order time — never re-read the product later
+        unit_price: l.priceEach,
+        unit_deposit: unitDeposit,
+        batch_id: l.batchId,
+      };
+    });
     const order: Order = {
       id: orderId,
       user_id: userId,
@@ -86,13 +93,20 @@ export function approveOrder(orderId: string) {
       };
     });
 
-    return {
+    const updated: Database = {
       ...db,
       orders: db.orders.map((o) =>
         o.id === orderId ? { ...o, status: 'approved', approved_at: new Date().toISOString() } : o,
       ),
       tickets: [...newTickets, ...db.tickets],
     };
+
+    // rank progress counts APPROVED pieces → auto-raise a request when a threshold is crossed
+    const user = db.users.find((u) => u.id === order.user_id);
+    const pieces = rankPiecesOf(updated, order.user_id);
+    const elig = eligibleRank(db.settings, pieces);
+    if (user && rankIndex(elig) > rankIndex(user.rank)) return requestRank(order.user_id, elig, pieces)(updated);
+    return updated;
   };
 }
 
@@ -164,7 +178,7 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
 };
 
 // ── Rank system ────────────────────────────────────────────────────────────
-import { rankIndex } from '../domain/services/ranks';
+import { rankIndex, rankPiecesOf, eligibleRank, depositForRank } from '../domain/services/ranks';
 
 /** Raise a pending rank-change request (skips if one to the same rank is already pending). */
 export const requestRank = (userId: string, toRank: RankName, pieces: number) => (db: Database): Database => {
