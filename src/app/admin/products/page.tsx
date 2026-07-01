@@ -35,10 +35,14 @@ export default function AdminProductsPage() {
   return (
     <div>
       <div className="mb-5 text-2xl font-extrabold">จัดการสินค้า</div>
-      <div className="mb-6 flex flex-wrap gap-2">
-        {([['products', 'สินค้า'], ['status', 'สถานะล็อต'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        {/* กลุ่มจัดการแคตตาล็อก */}
+        {([['products', 'สินค้า'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
+        {/* คั่น — สถานะล็อตแยกกลุ่ม */}
+        <span className="mx-1.5 h-7 w-px bg-subtle" />
+        <button onClick={() => setTab('status')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'status' ? 'border-primary bg-primary text-white' : 'border-[#2563eb]/40 bg-[#2563eb]/[0.1] text-[#60a5fa]')}>สถานะล็อต</button>
       </div>
       {tab === 'products' && <Products />}
       {tab === 'status' && <LotStatus />}
@@ -304,14 +308,17 @@ function LotStatusRow({ product: p }: { product: Product }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  // สเต็ปเปอร์ล็อตหยุดที่ "ถึงไทยแล้ว" — การส่งมอบทำรายตั๋วที่หน้า สลิป/ออเดอร์
   const idx = LOT_STEPS.indexOf(p.status);
-  const next = LOT_STEPS[idx + 1];
+  const arrivedIdx = LOT_STEPS.indexOf('arrived');
+  const next = idx < arrivedIdx ? LOT_STEPS[idx + 1] : null;
   const count = db.tickets.filter((t) => t.product_id === p.id).length;
   const [open, setOpen] = useState(false);
   const [track, setTrack] = useState(p.tracking_no ?? '');
   const [shippedAt, setShippedAt] = useState(p.shipped_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
 
   const go = (extra?: { tracking_no?: string; shipped_at?: string }) => {
+    if (!next) return;
     dispatch(setProductStatus(p.id, next, extra));
     flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว`);
     setOpen(false);
@@ -328,8 +335,8 @@ function LotStatusRow({ product: p }: { product: Product }) {
         <StatusBadge status={p.status as StatusKey} />
         {p.status === 'open' ? (
           <Link href="/admin/production" className="whitespace-nowrap rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">ปิดรอบ →</Link>
-        ) : p.status === 'delivered' ? (
-          <span className="whitespace-nowrap text-[12px] font-bold text-[#4ade80]">เสร็จ ✓</span>
+        ) : !next ? (
+          <Link href="/admin/orders" className="whitespace-nowrap rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-3 py-1.5 text-[12px] font-bold text-primary-soft">จัดส่งรายตั๋ว →</Link>
         ) : (
           <button onClick={onNext} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">→ {STATUS[next as StatusKey].label}</button>
         )}

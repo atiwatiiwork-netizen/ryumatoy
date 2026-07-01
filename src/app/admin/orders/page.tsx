@@ -196,8 +196,8 @@ function Section({ icon, title, count, tone, sub, children }: {
 }) {
   return (
     <div className="mb-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
-      <div className="mb-1 flex items-center gap-2 text-base font-bold">
-        <Icon name={icon} size={18} className={TONE[tone]} /> {title}
+      <div className="mb-1 flex items-center gap-2 text-base font-bold text-ink">
+        <Icon name={icon} size={18} className={TONE[tone]} /> <span>{title}</span>
         <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{count}</span>
       </div>
       {sub && <div className="mb-3 text-[11.5px] text-ink-faint">{sub}</div>}
