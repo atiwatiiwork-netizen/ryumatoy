@@ -146,5 +146,10 @@ export const SEED_DATABASE: Database = {
     bank_account: 'Ryuma Toy Shop',
     promptpay_number: '081-234-5678',
     line_oa_id: '@ryumatoy',
+    yuan_base: 288,
+    baht_base: 1550,
+    baht_per_yuan: 5,
+    deposit_wcf: 300,
+    deposit_mega: 500,
   },
 };

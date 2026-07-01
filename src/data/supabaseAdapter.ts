@@ -99,6 +99,11 @@ export const supabaseAdapter: PersistenceAdapter = {
             bank_account: String(s.bank_account ?? ''),
             promptpay_number: String(s.promptpay_number ?? ''),
             line_oa_id: String(s.line_oa_id ?? ''),
+            yuan_base: Number(s.yuan_base ?? SEED_DATABASE.settings.yuan_base),
+            baht_base: Number(s.baht_base ?? SEED_DATABASE.settings.baht_base),
+            baht_per_yuan: Number(s.baht_per_yuan ?? SEED_DATABASE.settings.baht_per_yuan),
+            deposit_wcf: Number(s.deposit_wcf ?? SEED_DATABASE.settings.deposit_wcf),
+            deposit_mega: Number(s.deposit_mega ?? SEED_DATABASE.settings.deposit_mega),
           }
         : SEED_DATABASE.settings,
     };

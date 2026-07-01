@@ -9,6 +9,8 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, cx } from '@/components/ui';
 import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise } from '@/domain/services/catalog';
+import { priceFromYuan, depositFor } from '@/domain/services/pricing';
+import type { WcfType } from '@/domain/entities';
 import {
   genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
   upsertSeries, removeSeries, upsertProduct, removeProduct,
@@ -285,6 +287,8 @@ interface Draft {
   manufacturer_id: string;
   series_id: string;
   series_name: string;
+  wcf_type: WcfType;
+  cost_yuan: string;
   description: string;
   eta_note: string;
   price_total: string;
@@ -294,18 +298,23 @@ interface Draft {
   status: ProductStatus;
   images: string[];
 }
-const emptyDraft = (fid: string, mid: string): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', description: '', eta_note: '', price_total: '', deposit_amount: '', is_stock: false, stock_qty: '', status: 'open', images: [],
+const emptyDraft = (fid: string, mid: string, deposit: number): Draft => ({
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', images: [],
 });
 
 function Products() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
-  const [draft, setDraft] = useState<Draft>(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
+  const st = db.settings;
+  const fresh = () => emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? '', depositFor(st, 'wcf'));
+  const [draft, setDraft] = useState<Draft>(fresh);
   const [imgBusy, setImgBusy] = useState(false);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
+  // WCF/Mega → auto deposit ; yuan cost → auto selling price
+  const setWcfType = (t: WcfType) => setDraft((d) => ({ ...d, wcf_type: t, deposit_amount: String(depositFor(st, t)) }));
+  const setYuan = (v: string) => setDraft((d) => ({ ...d, cost_yuan: v, price_total: v ? String(priceFromYuan(st, Number(v) || 0)) : d.price_total }));
   const addImage = async (file?: File) => {
     if (!file) return;
     setImgBusy(true);
@@ -313,7 +322,7 @@ function Products() {
     catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
     finally { setImgBusy(false); }
   };
-  const reset = () => setDraft(emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? ''));
+  const reset = () => setDraft(fresh());
 
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
 
@@ -329,6 +338,8 @@ function Products() {
       manufacturer_id: draft.manufacturer_id,
       series_id: draft.series_id || undefined,
       series_name: draft.series_name.trim(),
+      wcf_type: draft.wcf_type,
+      cost_yuan: draft.cost_yuan ? Number(draft.cost_yuan) : undefined,
       type: 'other',
       description: draft.description.trim(),
       images: draft.images,
@@ -347,7 +358,8 @@ function Products() {
 
   const edit = (p: Product) => setDraft({
     id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
-    series_name: p.series_name, description: p.description, eta_note: p.eta_note,
+    series_name: p.series_name, wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
+    description: p.description, eta_note: p.eta_note,
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status, images: p.images ?? [],
   });
@@ -379,6 +391,18 @@ function Products() {
               <span className="mt-1 block text-[11px] text-ink-faint">เฉพาะซีรีย์ที่ค่ายนี้ทำ ({seriesOptions.length})</span>
             </Field>
             <Field label="ชื่อสินค้า"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Luffy — Thriller Park" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="ชนิด (มัดจำ)">
+                <select className={inputCls} value={draft.wcf_type} onChange={(e) => setWcfType(e.target.value as WcfType)}>
+                  <option value="wcf">WCF (มัดจำ {baht(st.deposit_wcf)})</option>
+                  <option value="mega_wcf">Mega WCF (มัดจำ {baht(st.deposit_mega)})</option>
+                </select>
+              </Field>
+              <Field label="ต้นทุน (หยวน) — คิดราคาให้">
+                <input className={inputCls} inputMode="numeric" value={draft.cost_yuan} onChange={(e) => setYuan(e.target.value)} placeholder="เช่น 328" />
+                {draft.cost_yuan && <span className="mt-1 block text-[11px] text-primary-soft">= {baht(priceFromYuan(st, Number(draft.cost_yuan) || 0))}</span>}
+              </Field>
+            </div>
             <div>
               <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">รูปสินค้า</div>
               <div className="flex flex-wrap gap-2">

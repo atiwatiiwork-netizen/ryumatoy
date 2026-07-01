@@ -53,12 +53,17 @@ export interface ProductVariant {
   stock_qty?: number;
 }
 
+/** Deposit tier — Mega WCF carries a higher default deposit than standard WCF. */
+export type WcfType = 'wcf' | 'mega_wcf';
+
 export interface Product {
   id: string;
   franchise_id: string; // เรื่อง
   manufacturer_id: string; // ค่าย
   series_id?: string; // ซีรีย์ (optional)
   series_name: string; // ชื่อสินค้า (display title)
+  wcf_type?: WcfType; // WCF (มัดจำ 300) | Mega WCF (มัดจำ 500)
+  cost_yuan?: number; // ต้นทุนหยวน (used by the price calculator)
   type: ProductType;
   description: string;
   description_en?: string;
@@ -169,6 +174,13 @@ export interface ShopSettings {
   bank_account: string;
   promptpay_number: string;
   line_oa_id: string;
+  // Pricing calculator config (editable — yuan rate fluctuates):
+  // price(฿) = baht_base + (yuan − yuan_base) × baht_per_yuan
+  yuan_base: number; // 288
+  baht_base: number; // 1550
+  baht_per_yuan: number; // 5
+  deposit_wcf: number; // 300
+  deposit_mega: number; // 500
 }
 
 /** The whole app database as one JSON object (single source of truth). */

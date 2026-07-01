@@ -110,6 +110,8 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
 
 // ---- Admin catalog CRUD (PRD §16 จัดการสินค้า) ------------------------------
 
+export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => ({ ...db, settings: { ...db.settings, ...patch } });
+
 export const upsertPaymentAccount = (a: PaymentAccount) => (db: Database): Database => ({ ...db, paymentAccounts: upsertById(db.paymentAccounts, a) });
 export const removePaymentAccount = (aid: string) => (db: Database): Database => ({ ...db, paymentAccounts: db.paymentAccounts.filter((a) => a.id !== aid) });
 
