@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
+import { useAuth, canLogin } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -12,6 +13,10 @@ import { PreviewSwitcher } from './PreviewSwitcher';
 export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const db = useDatabase();
+  const { isAdmin, isLoggedIn, signInFacebook } = useAuth();
+
+  // lock the admin panel to admin Facebook accounts on live (preview/dev stays open)
+  if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
   const awaitingParcel = db.tickets.filter((t) => t.product_status === 'arrived' && t.remaining_paid >= t.remaining_amount && !t.parcel_no).length;
@@ -60,6 +65,32 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
       <main className="min-w-0 flex-1 overflow-x-hidden px-[30px] py-[26px]">{children}</main>
       <PreviewSwitcher />
+    </div>
+  );
+}
+
+/** Shown when a non-admin (or logged-out) visitor hits /admin on the live site. */
+function AdminLock({ isLoggedIn, onLogin }: { isLoggedIn: boolean; onLogin: () => void }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-base px-6 text-center font-sans text-ink">
+      <div className="w-full max-w-[380px] rounded-3xl border border-subtle bg-surface-2 p-8">
+        <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-[#b91c1c]/[0.15]"><Icon name="verified" size={30} className="text-primary-soft" /></div>
+        <div className="text-lg font-extrabold">ส่วนผู้ดูแลระบบ</div>
+        {isLoggedIn ? (
+          <>
+            <div className="mt-1.5 text-[13px] text-ink-muted2">บัญชี Facebook นี้ไม่มีสิทธิ์แอดมิน</div>
+            <Link href="/" className="mt-5 inline-block w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">← กลับหน้าร้าน</Link>
+          </>
+        ) : (
+          <>
+            <div className="mt-1.5 text-[13px] text-ink-muted2">เข้าสู่ระบบด้วยบัญชี Facebook ของแอดมิน</div>
+            <button onClick={onLogin} className="mt-5 flex w-full items-center justify-center gap-2.5 rounded-xl bg-[#1877f2] py-3 text-sm font-bold text-white">
+              <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook
+            </button>
+            <Link href="/" className="mt-2.5 inline-block text-[12.5px] text-ink-faint">กลับหน้าร้าน</Link>
+          </>
+        )}
+      </div>
     </div>
   );
 }

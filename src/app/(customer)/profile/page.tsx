@@ -15,6 +15,7 @@ export default function ProfilePage() {
   const { flash } = useToast();
   const CURRENT_USER_ID = useCurrentUserId();
   const { isLoggedIn, needsApproval, signInFacebook, signOut } = useAuth();
+  if (canLogin && !isLoggedIn) return <ProfileLogin onLogin={signInFacebook} />;
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   if (!me) return <div className="p-10 text-center text-ink-faint">กำลังโหลด…</div>;
   const r = RANK[me.rank];
@@ -106,4 +107,18 @@ export default function ProfilePage() {
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-lg bg-surface-3 px-2.5 py-0.5 text-xs font-bold text-ink-muted2">{children}</span>;
+}
+
+function ProfileLogin({ onLogin }: { onLogin: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-[420px] flex-col items-center px-4 py-16 text-center">
+      <img src="/ryuma-logo.png" alt="Ryuma" width={64} height={64} className="mb-4 rounded-2xl" />
+      <div className="text-xl font-extrabold">เข้าสู่ระบบ Ryuma</div>
+      <div className="mt-1.5 text-[13px] text-ink-faint">เข้าสู่ระบบเพื่อจอง ติดตามใบพรี และสะสมยศสมาชิก</div>
+      <button onClick={onLogin} className="mt-6 flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook
+      </button>
+      <div className="mt-3 text-[11.5px] text-ink-faint">ดูสินค้าได้โดยไม่ต้องเข้าสู่ระบบ · เข้าสู่ระบบเมื่อต้องการสั่งซื้อ</div>
+    </div>
+  );
 }
