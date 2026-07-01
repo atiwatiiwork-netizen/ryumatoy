@@ -132,6 +132,21 @@ export const upsertSeries = (s: Series) => (db: Database): Database => ({ ...db,
 export const removeSeries = (sid: string) => (db: Database): Database => ({ ...db, series: db.series.filter((s) => s.id !== sid) });
 
 export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...db, products: upsertById(db.products, p) });
+
+/**
+ * Close the pre-order round for the given products → status 'production'.
+ * Records the final production qty and the surplus (final − ordered) that becomes
+ * shop stock. Ordered qty is the sum of ticket qty for the product.
+ */
+export const closeProduction = (entries: { productId: string; finalQty: number }[]) => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => {
+    const e = entries.find((x) => x.productId === p.id);
+    if (!e) return p;
+    const ordered = db.tickets.filter((t) => t.product_id === p.id).reduce((s, t) => s + t.qty, 0);
+    return { ...p, status: 'production', production_qty: e.finalQty, surplus_qty: Math.max(0, e.finalQty - ordered) };
+  }),
+});
 export const removeProduct = (pid: string) => (db: Database): Database => ({
   ...db,
   products: db.products.filter((p) => p.id !== pid),

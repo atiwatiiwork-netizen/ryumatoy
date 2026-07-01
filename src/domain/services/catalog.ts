@@ -66,6 +66,8 @@ export interface ProductFilter {
 
 export function filterProducts(db: Database, f: ProductFilter): Product[] {
   return db.products.filter((p) => {
+    // pre-orders leave the shop once the round closes (→ผลิต/เดินทาง/…); wallet still tracks them
+    if (!p.is_stock && p.status !== 'open') return false;
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;
     if (f.categoryId && categoryOf(db, p)?.id !== f.categoryId) return false;
@@ -83,3 +85,8 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
 }
 
 export const remaining = (price: number, deposit: number) => Math.max(0, price - deposit);
+
+/** Total pre-ordered quantity for a product (sum of ticket qty). */
+export function orderedQtyOf(db: Database, productId: string): number {
+  return db.tickets.filter((t) => t.product_id === productId).reduce((s, t) => s + t.qty, 0);
+}

@@ -75,6 +75,9 @@ export interface Product {
   stock_qty?: number;
   has_variants: boolean;
   status: ProductStatus;
+  // Close-order / production round (set when admin closes the pre-order round):
+  production_qty?: number; // จำนวนไฟนอลที่สั่งผลิตจากค่าย
+  surplus_qty?: number; // ส่วนเกินจากยอดจอง → กลายเป็นสต๊อกร้าน (production_qty − ordered)
   created_at: string;
 }
 
