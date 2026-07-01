@@ -98,6 +98,15 @@ export interface ProductBatch {
   created_at: string;
 }
 
+/** Audit log of a manual stock top-up on a product's surplus (with timestamp). */
+export interface StockAddition {
+  id: string;
+  product_id: string;
+  qty: number;
+  note?: string;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   order_id: string;
@@ -218,6 +227,7 @@ export interface Database {
   series: Series[];
   products: Product[];
   batches: ProductBatch[];
+  stockAdditions: StockAddition[];
   variants: ProductVariant[];
   orders: Order[];
   tickets: PreorderTicket[];

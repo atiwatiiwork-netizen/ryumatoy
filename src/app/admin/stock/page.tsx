@@ -6,8 +6,8 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { franchiseOf, stockRemaining, stockSoldQty, stockBuyers } from '@/domain/services/catalog';
-import { reopenBatch } from '@/data/mutations';
+import { franchiseOf, stockRemaining, stockSoldQty, stockBuyers, stockAdditionsOf } from '@/domain/services/catalog';
+import { reopenBatch, addStock } from '@/data/mutations';
 import type { Product } from '@/domain/entities';
 
 export default function StockPage() {
@@ -64,7 +64,12 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
   const surplus = p.surplus_qty ?? 0;
   const [price, setPrice] = useState(String(p.price_total));
   const [qty, setQty] = useState(String(remaining));
+  const [addQty, setAddQty] = useState('');
   const buyers = stockBuyers(db, p.id);
+  const additions = stockAdditionsOf(db, p.id);
+
+  // clamp the reopen qty so you can never list more than the remaining stock
+  const setQtyClamped = (v: string) => setQty(v === '' ? '' : String(Math.max(0, Math.min(Number(v) || 0, remaining))));
 
   const reopen = () => {
     const q = Math.min(Number(qty) || 0, remaining);
@@ -72,6 +77,14 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
     dispatch(reopenBatch(p.id, { price: Number(price) || p.price_total, deposit: p.deposit_amount, qty: q }));
     flash(`เปิดขายสต๊อก ${q} ตัว @ ${baht(Number(price) || p.price_total)}`);
     setQty('');
+  };
+
+  const topUp = () => {
+    const q = Number(addQty) || 0;
+    if (q <= 0) return flash('ใส่จำนวนที่จะเติม');
+    dispatch(addStock(p.id, q));
+    flash(`เติมสต๊อก +${q} ตัว`);
+    setAddQty('');
   };
 
   return (
@@ -87,27 +100,46 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
         {!soldOut && (
           <>
             <label className="text-[12px] text-ink-muted">ราคา <input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm text-ink outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} /></label>
-            <label className="text-[12px] text-ink-muted">จำนวน <input className="ml-1 w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+            <label className="text-[12px] text-ink-muted">จำนวน <input className="ml-1 w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" max={remaining} value={qty} onChange={(e) => setQtyClamped(e.target.value)} /></label>
             <button onClick={reopen} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดขาย</button>
           </>
         )}
+        <label className="text-[12px] text-ink-muted">เติม <input className="ml-1 w-14 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder="+" /></label>
+        <button onClick={topUp} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold text-ink-muted2">เพิ่มสต๊อก</button>
       </div>
 
       {open && (
-        <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
-          <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนซื้อสต๊อกนี้ ({buyers.reduce((s, b) => s + b.qty, 0)} ตัว)</div>
-          {buyers.length === 0 ? (
-            <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {buyers.map((b, i) => (
-                <div key={i} className="flex items-center justify-between text-[13px]">
-                  <span className="flex items-center gap-2"><Icon name="user" size={14} className="text-primary-soft" /> {b.name}</span>
-                  <span className="text-ink-muted">×{b.qty} · <span className="font-mono text-[11px] text-ink-faint">{b.ticket_no}</span></span>
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="mt-2 grid gap-3 rounded-xl border border-subtle bg-surface-3 p-3 lg:grid-cols-2">
+          <div>
+            <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนซื้อสต๊อกนี้ ({buyers.reduce((s, b) => s + b.qty, 0)} ตัว)</div>
+            {buyers.length === 0 ? (
+              <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {buyers.map((b, i) => (
+                  <div key={i} className="flex items-center justify-between text-[13px]">
+                    <span className="flex items-center gap-2"><Icon name="user" size={14} className="text-primary-soft" /> {b.name}</span>
+                    <span className="text-ink-muted">×{b.qty} · <span className="font-mono text-[11px] text-ink-faint">{b.ticket_no}</span></span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <div className="mb-2 text-[12px] font-semibold text-ink-muted">ประวัติเติมสต๊อก</div>
+            {additions.length === 0 ? (
+              <div className="text-[12.5px] text-ink-faint">ยังไม่มีการเติมสต๊อก</div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {additions.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between text-[13px]">
+                    <span className="font-semibold text-[#4ade80]">+{a.qty}</span>
+                    <span className="font-mono text-[11px] text-ink-faint">{new Date(a.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

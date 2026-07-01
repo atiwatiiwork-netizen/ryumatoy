@@ -114,6 +114,11 @@ export function stockRemaining(db: Database, product: Product): number {
   return Math.max(0, (product.surplus_qty ?? 0) - stockSoldQty(db, product.id));
 }
 
+/** Manual stock top-ups for a product (newest first) — for the audit view. */
+export function stockAdditionsOf(db: Database, productId: string) {
+  return db.stockAdditions.filter((a) => a.product_id === productId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+
 /** Who bought this product's surplus stock — buyer name + qty + ticket no. */
 export function stockBuyers(db: Database, productId: string): { name: string; qty: number; ticket_no: string }[] {
   const ids = batchIdsOf(db, productId);

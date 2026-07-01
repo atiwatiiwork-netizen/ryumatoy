@@ -119,6 +119,16 @@ export function reopenBatch(productId: string, opts: { price: number; deposit: n
   });
 }
 
+/** Top up a product's surplus stock and log the addition with a timestamp. */
+export const addStock = (productId: string, qty: number, note?: string) => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => (p.id === productId ? { ...p, surplus_qty: (p.surplus_qty ?? 0) + qty } : p)),
+  stockAdditions: [
+    { id: id('sa'), product_id: productId, qty, note, created_at: new Date().toISOString() },
+    ...db.stockAdditions,
+  ],
+});
+
 export const closeBatch = (batchId: string) => (db: Database): Database => ({
   ...db,
   batches: db.batches.map((b) => (b.id === batchId ? { ...b, status: 'closed' } : b)),
