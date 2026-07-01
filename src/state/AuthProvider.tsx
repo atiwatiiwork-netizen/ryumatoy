@@ -54,8 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const me = db.users.find((u) => u.id === currentUserId);
   const isLoggedIn = authId != null;
   const isApproved = !isLoggedIn || me?.approved !== false; // demo/legacy users are approved
-  const needsApproval = isLoggedIn && me?.approved === false;
-  const needsProfile = isLoggedIn && isApproved && !(me?.phone && me?.shipping_address);
+  const hasProfile = Boolean(me?.phone && me?.shipping_address);
+  // flow: login → fill profile FIRST → then wait for admin approval → use
+  const needsProfile = isLoggedIn && !hasProfile;
+  const needsApproval = isLoggedIn && hasProfile && me?.approved === false;
 
   const signInFacebook = async () => {
     if (!supabase) return;

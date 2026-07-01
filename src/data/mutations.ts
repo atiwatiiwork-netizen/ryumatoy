@@ -248,6 +248,12 @@ export const approveMember = (userId: string) => (db: Database): Database => ({
   users: db.users.map((u) => (u.id === userId ? { ...u, approved: true } : u)),
 });
 
+/** Admin removes a member (does not touch their existing tickets/orders). */
+export const removeUser = (userId: string) => (db: Database): Database => ({
+  ...db,
+  users: db.users.filter((u) => u.id !== userId),
+});
+
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
   return (db: Database): Database => ({

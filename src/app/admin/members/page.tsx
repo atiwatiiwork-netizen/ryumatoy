@@ -1,20 +1,31 @@
 'use client';
 
+import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { RANK } from '@/lib/theme';
 import type { RankKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { approveMember } from '@/data/mutations';
+import { rankPiecesOf } from '@/domain/services/ranks';
+import { approveMember, removeUser } from '@/data/mutations';
+import type { User } from '@/domain/entities';
 
 export default function AdminMembersPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const pending = db.users.filter((u) => u.approved === false);
   const members = db.users.filter((u) => u.id !== 'u-admin' && u.approved !== false);
+
+  const del = (u: User) => {
+    if (!confirm(`ลบสมาชิก "${u.display_name}" ?\n(ใบพรี/ออเดอร์เดิมจะไม่ถูกลบ)`)) return;
+    dispatch(removeUser(u.id));
+    flash('ลบสมาชิกแล้ว');
+    if (openId === u.id) setOpenId(null);
+  };
 
   return (
     <div>
@@ -42,19 +53,45 @@ export default function AdminMembersPage() {
       <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
         <div className="mb-3 text-base font-bold text-ink">สมาชิกทั้งหมด ({members.length})</div>
         <div className="flex flex-col divide-y divide-hair">
-          {members.map((u) => (
-            <div key={u.id} className="flex items-center gap-3 py-3">
-              <Avatar u={u} />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold">{u.display_name}</div>
-                <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ยังไม่มีเบอร์'}{u.shipping_address ? ' · มีที่อยู่' : ''}</div>
+          {members.map((u) => {
+            const open = openId === u.id;
+            const pieces = rankPiecesOf(db, u.id);
+            const tickets = db.tickets.filter((t) => t.owner_id === u.id).length;
+            return (
+              <div key={u.id} className="py-2">
+                <div className="flex items-center gap-3">
+                  <Avatar u={u} />
+                  <button onClick={() => setOpenId(open ? null : u.id)} className="min-w-0 flex-1 text-left">
+                    <div className="flex items-center gap-1.5 text-sm font-semibold">{u.display_name} <span className={cx('text-[10px] text-ink-faint transition-transform', open && 'inline-block rotate-180')}>▾</span></div>
+                    <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ยังไม่มีเบอร์'}{u.shipping_address ? ' · มีที่อยู่' : ''} · {tickets} ใบพรี</div>
+                  </button>
+                  <span className={cx('rounded-full border px-2.5 py-1 text-[11.5px] font-bold', RANK[u.rank as RankKey].cls)}>{RANK[u.rank as RankKey].emoji} {RANK[u.rank as RankKey].label}</span>
+                  <button onClick={() => del(u)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint hover:text-[#f87171]"><Icon name="x" size={15} /></button>
+                </div>
+                {open && (
+                  <div className="ml-[52px] mt-2 grid gap-1.5 rounded-xl border border-subtle bg-surface-3 p-3 text-[12.5px]">
+                    <Row label="เบอร์โทร" value={u.phone} />
+                    <Row label="ที่อยู่จัดส่ง" value={u.shipping_address} />
+                    <Row label="LINE ID" value={u.line_id} />
+                    <Row label="สะสม" value={`${pieces} ชิ้น · ${RANK[u.rank as RankKey].label}`} />
+                    <Row label="Facebook" value={u.facebook_id ? 'เชื่อมต่อแล้ว' : '—'} />
+                  </div>
+                )}
               </div>
-              <span className={cx('rounded-full border px-2.5 py-1 text-[11.5px] font-bold', RANK[u.rank as RankKey].cls)}>{RANK[u.rank as RankKey].emoji} {RANK[u.rank as RankKey].label}</span>
-            </div>
-          ))}
+            );
+          })}
           {members.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีสมาชิก</div>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="flex gap-2">
+      <span className="w-24 shrink-0 text-ink-faint">{label}</span>
+      <span className="text-ink">{value || '—'}</span>
     </div>
   );
 }
