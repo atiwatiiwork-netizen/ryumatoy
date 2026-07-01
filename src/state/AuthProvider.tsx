@@ -59,7 +59,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInFacebook = async () => {
     if (!supabase) return;
-    await supabase.auth.signInWithOAuth({ provider: 'facebook', options: { redirectTo: window.location.origin + '/profile' } });
+    // request public_profile only — the FB app isn't reviewed for `email`, and we don't use it
+    await supabase.auth.signInWithOAuth({ provider: 'facebook', options: { redirectTo: window.location.origin + '/profile', scopes: 'public_profile' } });
   };
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut();
