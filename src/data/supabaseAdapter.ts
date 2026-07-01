@@ -49,7 +49,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings] =
+    const [users, categories, manufacturers, franchises, series, products, batches, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -57,6 +57,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('franchises').select('*'),
         sb.from('series').select('*'),
         sb.from('products').select('*'),
+        sb.from('product_batches').select('*'),
         sb.from('product_variants').select('*'),
         sb.from('orders').select('*'),
         sb.from('order_items').select('*'),
@@ -68,7 +69,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, categories, manufacturers, franchises, series, products, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings];
+    const results = [users, categories, manufacturers, franchises, series, products, batches, variants, orders, orderItems, tickets, transfers, coupons, rankTiers, paymentAccounts, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
@@ -86,6 +87,7 @@ export const supabaseAdapter: PersistenceAdapter = {
       franchises: (franchises.data ?? []) as Database['franchises'],
       series: (series.data ?? []) as Database['series'],
       products: (products.data ?? []) as Database['products'],
+      batches: (batches.data ?? []) as Database['batches'],
       variants: (variants.data ?? []) as Database['variants'],
       orders: ordersWithItems as unknown as Database['orders'],
       tickets: (tickets.data ?? []) as Database['tickets'],
@@ -117,6 +119,7 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]);
     await syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]);
     await syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]);
+    await syncTable(sb, 'product_batches', next.batches as unknown as Row[], base.batches as unknown as Row[]);
     await syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]);
     await syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]);
     await syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]);

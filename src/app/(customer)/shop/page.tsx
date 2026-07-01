@@ -5,7 +5,8 @@ import { useDatabase } from '@/state/DataProvider';
 import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
-import { filterProducts, seriesForFranchise, makersOfCategory, type ProductFilter } from '@/domain/services/catalog';
+import { BatchCard } from '@/components/BatchCard';
+import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, type ProductFilter } from '@/domain/services/catalog';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -29,6 +30,19 @@ export default function ShopPage() {
     () => filterProducts(db, { category, categoryId, franchiseId, manufacturerId, seriesId, status, query }),
     [db, category, categoryId, franchiseId, manufacturerId, seriesId, status, query],
   );
+
+  // reopened stock batches matching the same filters (shown as extra "รอบใหม่" cards)
+  const openBatches = category === 'instock' ? [] : db.batches.filter((b) => {
+    if (b.status !== 'open') return false;
+    const p = db.products.find((x) => x.id === b.product_id);
+    if (!p) return false;
+    if (categoryId && categoryOf(db, p)?.id !== categoryId) return false;
+    if (franchiseId && p.franchise_id !== franchiseId) return false;
+    if (manufacturerId && p.manufacturer_id !== manufacturerId) return false;
+    if (seriesId && p.series_id !== seriesId) return false;
+    if (query && !`${p.series_name}`.toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  });
 
   const preorderCount = db.products.filter((p) => !p.is_stock).length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
@@ -111,12 +125,13 @@ export default function ShopPage() {
         <div>
           <div className="mb-3 text-[12.5px] text-ink-faint lg:mb-4 lg:text-lg lg:font-extrabold lg:text-ink">
             {category === 'instock' ? 'พร้อมส่ง' : category === 'preorder' ? 'พรีออเดอร์' : 'สินค้าทั้งหมด'}
-            <span className="font-normal text-ink-faint lg:text-sm"> · {results.length} รายการ</span>
+            <span className="font-normal text-ink-faint lg:text-sm"> · {results.length + openBatches.length} รายการ</span>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+            {openBatches.map((b) => <BatchCard key={b.id} batch={b} />)}
             {results.map((p) => <ProductCard key={p.id} product={p} />)}
           </div>
-          {results.length === 0 && <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>}
+          {results.length + openBatches.length === 0 && <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>}
         </div>
       </div>
     </div>

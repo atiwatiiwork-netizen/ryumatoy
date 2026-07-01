@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -14,6 +14,7 @@ import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, rema
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const params = useSearchParams();
   const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
@@ -24,13 +25,15 @@ export default function ProductDetailPage() {
 
   if (!product) return <div className="p-10 text-ink-faint">ไม่พบสินค้า</div>;
 
+  // reopened stock batch (from a ?batch= link) overrides the price/deposit
+  const batch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open');
   const variant = variants.find((v) => v.id === variantId);
-  const price = variant?.price_total ?? product.price_total;
-  const deposit = variant?.deposit_amount ?? product.deposit_amount;
+  const price = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
+  const deposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);
   const fr = franchiseOf(db, product);
 
   const addToCart = () => {
-    cart.add({ productId: product.id, variantId, depositEach: deposit, priceEach: price });
+    cart.add({ productId: product.id, variantId: batch ? undefined : variantId, depositEach: deposit, priceEach: price });
     flash('เพิ่มลงตะกร้าแล้ว');
     router.push('/cart');
   };
@@ -57,7 +60,9 @@ export default function ProductDetailPage() {
         </div>
       )}
 
-      <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} />
+      {batch
+        ? <span className="inline-flex items-center rounded-[7px] bg-cta px-2.5 py-1 text-[11px] font-bold text-white">รอบใหม่ · {batch.label} · เหลือ {batch.stock_qty}</span>
+        : <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} />}
       <div className="mb-0.5 mt-2 font-mono text-[11px] text-ink-faint">{manufacturerNameOf(db, product)} · {fr?.name}{categoryOf(db, product) ? ` · ${categoryOf(db, product)!.name}` : ''}{seriesOf(db, product) ? ` · ${seriesOf(db, product)!.name}` : ''}</div>
       <div className="text-[22px] font-extrabold leading-tight">{product.series_name}</div>
       <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>

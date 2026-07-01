@@ -94,6 +94,39 @@ export function approveOrder(orderId: string) {
   };
 }
 
+/**
+ * Reopen leftover/surplus stock as a new batch on the same product (SKU). The
+ * batch carries its own price/deposit/qty; existing buyers keep their snapshot.
+ */
+export function reopenBatch(productId: string, opts: { price: number; deposit: number; qty: number; label?: string }) {
+  return (db: Database): Database => ({
+    ...db,
+    batches: [
+      {
+        id: id('b'),
+        product_id: productId,
+        label: opts.label || 'สต๊อกเหลือ',
+        price_total: opts.price,
+        deposit_amount: opts.deposit,
+        stock_qty: opts.qty,
+        status: 'open',
+        created_at: new Date().toISOString(),
+      },
+      ...db.batches,
+    ],
+  });
+}
+
+export const closeBatch = (batchId: string) => (db: Database): Database => ({
+  ...db,
+  batches: db.batches.map((b) => (b.id === batchId ? { ...b, status: 'closed' } : b)),
+});
+
+export const removeBatch = (batchId: string) => (db: Database): Database => ({
+  ...db,
+  batches: db.batches.filter((b) => b.id !== batchId),
+});
+
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
   return (db: Database): Database => ({

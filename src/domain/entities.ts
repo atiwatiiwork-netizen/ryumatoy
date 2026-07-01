@@ -81,6 +81,23 @@ export interface Product {
   created_at: string;
 }
 
+/**
+ * A re-opened sale of leftover/surplus stock on the SAME base product (SKU) — a
+ * separate lot with its own price/deposit/qty. Existing pre-order buyers are
+ * unaffected (their price is snapshotted). `status` 'open' = offered on the shop.
+ */
+export type BatchStatus = 'open' | 'closed';
+export interface ProductBatch {
+  id: string;
+  product_id: string;
+  label: string; // e.g. "สต๊อกเหลือ", "รอบ 2"
+  price_total: number;
+  deposit_amount: number;
+  stock_qty: number;
+  status: BatchStatus;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   order_id: string;
@@ -198,6 +215,7 @@ export interface Database {
   franchises: Franchise[];
   series: Series[];
   products: Product[];
+  batches: ProductBatch[];
   variants: ProductVariant[];
   orders: Order[];
   tickets: PreorderTicket[];

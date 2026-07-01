@@ -81,6 +81,8 @@ export const SEED_DATABASE: Database = {
     },
   ],
 
+  batches: [],
+
   variants: [
     { id: 'v-1a', product_id: 'p-1', name: 'Random Box (สุ่ม)', price_total: 1290, deposit_amount: 590 },
     { id: 'v-1b', product_id: 'p-1', name: 'Single — Luffy', price_total: 1490, deposit_amount: 690 },
