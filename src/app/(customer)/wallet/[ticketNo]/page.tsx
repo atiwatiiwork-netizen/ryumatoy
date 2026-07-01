@@ -36,7 +36,9 @@ export default function TicketDetailPage() {
   const product = db.products.find((p) => p.id === ticket.product_id)!;
   const pct = paidPercent(ticket.deposit_paid, ticket.remaining_amount, ticket.remaining_paid);
   const due = ticket.remaining_amount - ticket.remaining_paid;
-  const currentIdx = TIMELINE.findIndex((s) => s.key === ticket.product_status);
+  const isShipped = ticket.status === 'shipped';
+  const currentIdx = isShipped ? TIMELINE.length - 1 : TIMELINE.findIndex((s) => s.key === ticket.product_status);
+  const carrierLabel: Record<string, string> = { ems: 'EMS', jt: 'J&T', flash: 'Flash', kerry: 'Kerry' };
   const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
 
   // remaining-balance payment: available once the lot is shipping onward
@@ -90,6 +92,16 @@ export default function TicketDetailPage() {
         <div className="mb-3.5 flex items-center gap-2.5 rounded-card border border-[#2563eb]/30 bg-[#2563eb]/10 px-4 py-3">
           <Icon name="truck" size={18} className="text-[#60a5fa]" />
           <div className="text-[13px] text-[#bcd3f5]">คาดว่าถึงไทย <b>{etaRangeLabel(eta)}</b> {etaDaysLabel(eta)}{product.tracking_no ? <> · <span className="font-mono text-[11px]">Track {product.tracking_no}</span></> : null}</div>
+        </div>
+      )}
+
+      {isShipped && ticket.parcel_no && (
+        <div className="mb-3.5 rounded-card border border-[#16a34a]/35 bg-[#16a34a]/[0.1] px-4 py-3">
+          <div className="mb-1 flex items-center gap-2 text-[13px] font-bold text-[#4ade80]"><Icon name="truck" size={17} /> จัดส่งแล้ว · {carrierLabel[ticket.carrier ?? ''] ?? ticket.carrier}</div>
+          <div className="font-mono text-[13px] text-ink">เลขพัสดุ {ticket.parcel_no}</div>
+          {ticket.parcel_image && /^https?:|^data:/.test(ticket.parcel_image) && (
+            <a href={ticket.parcel_image} target="_blank" rel="noreferrer" className="mt-1.5 inline-block text-[12px] text-[#60a5fa] underline">ดูรูปพัสดุ</a>
+          )}
         </div>
       )}
 

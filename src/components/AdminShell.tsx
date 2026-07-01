@@ -13,11 +13,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const db = useDatabase();
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
-  const firstPending = pending[0]?.id;
+  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
+  const awaitingParcel = db.tickets.filter((t) => t.product_status === 'arrived' && t.remaining_paid >= t.remaining_amount && !t.parcel_no).length;
 
   const nav: { href: string; icon: IconName; label: string; active: boolean; badge?: number }[] = [
     { href: '/admin', icon: 'dashboard', label: 'Dashboard', active: path === '/admin' },
-    { href: firstPending ? `/admin/orders/${firstPending}` : '/admin', icon: 'ticket', label: 'สลิป / ออเดอร์', active: path.startsWith('/admin/orders'), badge: pending.length },
+    { href: '/admin/orders', icon: 'ticket', label: 'สลิป / ออเดอร์', active: path.startsWith('/admin/orders'), badge: pending.length + pendingRP + awaitingParcel },
     { href: '/admin/products', icon: 'box', label: 'จัดการสินค้า', active: path.startsWith('/admin/products') },
     { href: '/admin/production', icon: 'swap', label: 'ปิดรอบสั่งผลิต', active: path.startsWith('/admin/production') },
     { href: '/admin/stock', icon: 'bolt', label: 'ขายสต๊อกส่วนเกิน', active: path.startsWith('/admin/stock') },

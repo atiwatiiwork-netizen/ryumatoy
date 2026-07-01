@@ -6,7 +6,9 @@
 
 export type ProductType = 'wcf' | 'figure' | 'resin' | 'other';
 export type ProductStatus = 'open' | 'production' | 'shipping' | 'arrived' | 'delivered' | 'closed';
-export type TicketStatus = 'pending_approval' | 'active' | 'paid_full' | 'transferred';
+export type TicketStatus = 'pending_approval' | 'active' | 'paid_full' | 'transferred' | 'shipped';
+/** ขนส่งในไทย (พัสดุถึงหน้าบ้านลูกค้า). */
+export type Carrier = 'ems' | 'jt' | 'flash' | 'kerry';
 export type OrderStatus = 'pending_approval' | 'approved' | 'rejected';
 export type TransferStatus = 'listed' | 'pending_admin' | 'approved' | 'cancelled';
 export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond';
@@ -151,6 +153,11 @@ export interface PreorderTicket {
   status: TicketStatus;
   product_status: ProductStatus; // mirrors the lot status for the timeline
   qr_code_url: string;
+  // ในไทย → หน้าบ้านลูกค้า: กรอกเมื่อ ถึงไทย + จ่ายครบ → ตั๋วจบกระบวนการ (status 'shipped')
+  carrier?: Carrier;
+  parcel_no?: string;
+  parcel_image?: string;
+  shipped_out_at?: string; // เวลาที่แอดมินกดจัดส่งพัสดุ
   created_at: string;
   approved_at?: string;
 }

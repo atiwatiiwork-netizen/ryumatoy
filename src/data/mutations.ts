@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf } from '../domain/services/catalog';
@@ -211,6 +211,19 @@ export const setProductStatus = (productId: string, status: ProductStatus, extra
   ...db,
   products: db.products.map((p) => (p.id === productId ? { ...p, status, ...(extra ?? {}) } : p)),
   tickets: db.tickets.map((t) => (t.product_id === productId ? { ...t, product_status: status } : t)),
+});
+
+/**
+ * Record the in-Thailand parcel (carrier + tracking no + optional photo) for a single
+ * ticket. This is the LAST step of the pre-order: the ticket is marked 'shipped' (done).
+ */
+export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, image?: string) => (db: Database): Database => ({
+  ...db,
+  tickets: db.tickets.map((t) =>
+    t.id === ticketId
+      ? { ...t, carrier, parcel_no: parcelNo, parcel_image: image, status: 'shipped' as const, shipped_out_at: new Date().toISOString() }
+      : t,
+  ),
 });
 
 /**
