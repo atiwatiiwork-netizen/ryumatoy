@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useAuth, canLogin } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
@@ -18,6 +18,8 @@ export default function CheckoutPage() {
   const dispatch = useDispatch();
   const cart = useCart();
   const { flash } = useToast();
+  const { currentUserId, isLoggedIn, signInFacebook } = useAuth();
+  const mustLogin = canLogin && !isLoggedIn; // login required to place an order (live only)
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,7 +36,7 @@ export default function CheckoutPage() {
 
   const submit = () => {
     if (!slip) return;
-    dispatch(submitOrder(CURRENT_USER_ID, cart.lines, slip));
+    dispatch(submitOrder(currentUserId, cart.lines, slip));
     cart.clear();
     flash('ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
@@ -111,8 +113,19 @@ export default function CheckoutPage() {
         )}
       </label>
 
-      <Button disabled={!slip || busy} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
-      <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ</div>
+      {mustLogin ? (
+        <>
+          <button onClick={signInFacebook} className="flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook เพื่อสั่งซื้อ
+          </button>
+          <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">ต้องเข้าสู่ระบบก่อนยืนยันการสั่งซื้อ (เพื่อยืนยันตัวตน + ที่อยู่จัดส่ง)</div>
+        </>
+      ) : (
+        <>
+          <Button disabled={!slip || busy} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
+          <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ</div>
+        </>
+      )}
     </div>
   );
 }

@@ -7,12 +7,13 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine } from '@/domain/services/catalog';
 import { instockPriceFor } from '@/domain/services/ranks';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, StatusBadge } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route. */
 export function ProductCard({ product }: { product: Product }) {
   const db = useDatabase();
+  const CURRENT_USER_ID = useCurrentUserId();
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
   const memberPrice = product.is_stock ? instockPriceFor(db.settings, myRank, product.price_total) : product.price_total;
   const saved = memberPrice < product.price_total;

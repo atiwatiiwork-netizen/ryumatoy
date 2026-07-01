@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -23,6 +23,7 @@ function matchTab(tab: Tab, ps: string, status: string): boolean {
 
 export default function WalletPage() {
   const db = useDatabase();
+  const CURRENT_USER_ID = useCurrentUserId();
   const [tab, setTab] = useState<Tab>('all');
   const [newest, setNewest] = useState(true);
 

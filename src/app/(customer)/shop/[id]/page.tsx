@@ -11,7 +11,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
 import { instockPriceFor } from '@/domain/services/ranks';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 
 export default function ProductDetailPage() {
@@ -21,6 +21,7 @@ export default function ProductDetailPage() {
   const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
+  const CURRENT_USER_ID = useCurrentUserId();
 
   const product = db.products.find((p) => p.id === id);
   const variants = product ? variantsOf(db, product.id) : [];

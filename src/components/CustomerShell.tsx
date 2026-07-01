@@ -6,11 +6,12 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase } from '@/state/DataProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
 import { RankCongrats } from './RankModals';
+import { ProfileGate } from './ProfileGate';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -28,6 +29,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   const { count } = useCart();
   const { flash } = useToast();
   const db = useDatabase();
+  const CURRENT_USER_ID = useCurrentUserId();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   const isActive = (href: string) =>
     href === '/' ? path === '/' : path.startsWith(href);
@@ -87,6 +89,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
 
       <PreviewSwitcher />
       <RankCongrats />
+      <ProfileGate />
     </div>
   );
 }

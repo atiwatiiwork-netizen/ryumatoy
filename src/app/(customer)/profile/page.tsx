@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useAuth, useCurrentUserId, canLogin } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge } from '@/components/ui';
@@ -13,7 +13,10 @@ import { RankPerksButton } from '@/components/RankModals';
 export default function ProfilePage() {
   const db = useDatabase();
   const { flash } = useToast();
-  const me = db.users.find((u) => u.id === CURRENT_USER_ID)!;
+  const CURRENT_USER_ID = useCurrentUserId();
+  const { isLoggedIn, signInFacebook, signOut } = useAuth();
+  const me = db.users.find((u) => u.id === CURRENT_USER_ID);
+  if (!me) return <div className="p-10 text-center text-ink-faint">กำลังโหลด…</div>;
   const r = RANK[me.rank];
 
   const pieces = rankPiecesOf(db, me.id);
@@ -40,8 +43,17 @@ export default function ProfilePage() {
           <div className="absolute bottom-0.5 right-0.5 grid h-[26px] w-[26px] place-items-center rounded-full border-2 border-base bg-[#1877f2] text-[13px] font-extrabold text-white">f</div>
         </div>
         <div className="mt-3 text-[19px] font-extrabold">{me.display_name}</div>
-        <div className="mt-0.5 text-xs text-ink-faint">เชื่อมต่อด้วย Facebook</div>
+        <div className="mt-0.5 text-xs text-ink-faint">{isLoggedIn ? 'เชื่อมต่อด้วย Facebook' : 'โหมดเดโม (ยังไม่ได้เข้าสู่ระบบ)'}</div>
       </div>
+
+      {(me.phone || me.shipping_address) && (
+        <div className="mb-[18px] rounded-card border border-subtle bg-surface-2 p-4">
+          <div className="mb-2 text-[12.5px] font-bold text-ink">ข้อมูลจัดส่ง</div>
+          {me.phone && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">เบอร์</span><span className="text-ink">{me.phone}</span></div>}
+          {me.shipping_address && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">ที่อยู่</span><span className="text-ink">{me.shipping_address}</span></div>}
+          {me.line_id && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">LINE</span><span className="text-ink">{me.line_id}</span></div>}
+        </div>
+      )}
 
       <div className="mb-[18px] rounded-2xl border p-[18px]" style={{ background: r.grad, borderColor: 'transparent' }}>
         <div className="mb-3 flex items-center justify-between">
@@ -78,7 +90,15 @@ export default function ProfilePage() {
         )}
       </div>
 
-      <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={() => flash('ระบบ login กำลังจะมา (เฟสถัดไป)')}>ออกจากระบบ</Button>
+      {isLoggedIn ? (
+        <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={signOut}>ออกจากระบบ</Button>
+      ) : canLogin ? (
+        <button onClick={signInFacebook} className="flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
+          <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook
+        </button>
+      ) : (
+        <Button variant="outline" className="border-subtle text-ink-faint" onClick={() => flash('ยังไม่ได้ตั้งค่า Facebook (โหมดพรีวิว)')}>โหมดพรีวิว</Button>
+      )}
     </div>
   );
 }

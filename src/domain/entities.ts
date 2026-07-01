@@ -216,6 +216,10 @@ export interface User {
   avatar_url?: string;
   preferred_lang: 'th' | 'en';
   rank_seen?: RankName; // rank the user was already congratulated for (popup shows once)
+  // captured after first Facebook login (phone + address required, line optional)
+  phone?: string;
+  shipping_address?: string;
+  line_id?: string;
 }
 
 /** A pending/approved request to promote a user's rank (auto-raised at thresholds or admin-forced). */

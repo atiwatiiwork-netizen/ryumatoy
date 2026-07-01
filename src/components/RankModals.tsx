@@ -2,11 +2,11 @@
 
 import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
 import { RANK } from '@/lib/theme';
 import type { RankKey } from '@/lib/theme';
 import { RANK_ORDER } from '@/domain/services/ranks';
 import { markRankSeen } from '@/data/mutations';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import type { RankName, ShopSettings } from '@/domain/entities';
 import { cx } from './ui';
 
@@ -26,6 +26,7 @@ export function perksFor(s: ShopSettings, rank: RankName): string[] {
 export function RankCongrats() {
   const db = useDatabase();
   const dispatch = useDispatch();
+  const CURRENT_USER_ID = useCurrentUserId();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   if (!me || me.rank === 'bronze' || me.rank === me.rank_seen) return null;
   const r = RANK[me.rank as RankKey];
@@ -47,6 +48,7 @@ export function RankCongrats() {
 /** All-ranks perks sheet (opened from the profile). */
 export function RankPerksModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const db = useDatabase();
+  const CURRENT_USER_ID = useCurrentUserId();
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-5" onClick={onClose}>

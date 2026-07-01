@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
@@ -29,6 +29,7 @@ export default function TicketDetailPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const CURRENT_USER_ID = useCurrentUserId();
 
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
   if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;

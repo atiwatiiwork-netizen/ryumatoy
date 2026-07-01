@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
-import { CURRENT_USER_ID } from '@/data/seed';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -13,6 +13,7 @@ import { paidPercent } from '@/domain/services/tickets';
 /** Home — responsive (mobile phone layout ↔ desktop top-nav web, HANDOFF.md). */
 export default function HomePage() {
   const db = useDatabase();
+  const CURRENT_USER_ID = useCurrentUserId();
   const hero = db.products.filter((p) => !p.is_stock)[0];
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
   const newest = [...db.products].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
