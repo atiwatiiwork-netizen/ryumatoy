@@ -5,16 +5,16 @@ import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
-import { baht, STATUS } from '@/lib/theme';
+import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
   genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
-  upsertSeries, removeSeries, upsertProduct, removeProduct, setProductStatus,
+  upsertSeries, removeSeries, upsertProduct, removeProduct, setProductStatus, closeProduction,
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 
@@ -42,7 +42,7 @@ export default function AdminProductsPage() {
         ))}
         {/* คั่น — สถานะล็อตแยกกลุ่ม */}
         <span className="mx-1.5 h-7 w-px bg-subtle" />
-        <button onClick={() => setTab('status')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'status' ? 'border-primary bg-primary text-white' : 'border-[#2563eb]/40 bg-[#2563eb]/[0.1] text-[#60a5fa]')}>สถานะล็อต</button>
+        <button onClick={() => setTab('status')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'status' ? 'border-primary bg-primary text-white' : 'border-[#2563eb]/40 bg-[#2563eb]/[0.1] text-[#60a5fa]')}>Status</button>
       </div>
       {tab === 'products' && <Products />}
       {tab === 'status' && <LotStatus />}
@@ -287,65 +287,106 @@ function SeriesTab() {
   );
 }
 
-// ---- สถานะล็อต — เลื่อนสถานะรวมทั้งล็อต (compact) --------------------------
+// ---- Status — เลือกค่าย → group ตามสถานะ → เลื่อนสถานะรวม (ปิดใบพรี link closeProduction) ----
+const STATUS_GROUPS: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered'];
+
 function LotStatus() {
   const db = useDatabase();
-  const lots = db.products.filter((p) => !p.is_stock && p.status !== 'closed');
+  const [makerId, setMakerId] = useState(db.manufacturers[0]?.id ?? '');
+  const lots = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status !== 'closed');
   return (
-    <div className="max-w-[640px]">
-      <Panel>
-        <div className="font-bold">อัปเดตสถานะล็อต ({lots.length})</div>
-        <div className="mb-3 text-[11.5px] text-ink-faint">เลื่อนทีละขั้น · มีผลกับทุกตั๋วในล็อตพร้อมกัน</div>
-        {lots.length === 0
-          ? <div className="py-8 text-center text-ink-faint">ยังไม่มีล็อตพรี</div>
-          : <div className="flex flex-col divide-y divide-hair">{lots.map((p) => <LotStatusRow key={p.id} product={p} />)}</div>}
-      </Panel>
+    <div className="max-w-[720px]">
+      <div className="mb-4 flex items-center gap-3">
+        <span className="text-[12.5px] font-semibold text-ink-muted">ค่าย</span>
+        <select className="rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none" value={makerId} onChange={(e) => setMakerId(e.target.value)}>
+          {db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+        <span className="text-[12px] text-ink-faint">{lots.length} ล็อต</span>
+      </div>
+      {lots.length === 0 ? (
+        <Panel><div className="py-8 text-center text-ink-faint">ไม่มีล็อตพรีของค่ายนี้</div></Panel>
+      ) : (
+        STATUS_GROUPS.map((st) => {
+          const group = lots.filter((p) => p.status === st);
+          if (group.length === 0) return null;
+          return (
+            <div key={st} className="mb-4">
+              <Panel>
+                <div className="mb-2.5 flex items-center gap-2 text-[13.5px] font-bold text-ink">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_FILL[st as StatusKey] }} />
+                  {STATUS[st as StatusKey].label} <span className="text-ink-faint">({group.length})</span>
+                </div>
+                <div className="flex flex-col divide-y divide-hair">{group.map((p) => <StatusRow key={p.id} product={p} />)}</div>
+              </Panel>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
 
-function LotStatusRow({ product: p }: { product: Product }) {
+function StatusRow({ product: p }: { product: Product }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
-  // สเต็ปเปอร์ล็อตหยุดที่ "ถึงไทยแล้ว" — การส่งมอบทำรายตั๋วที่หน้า สลิป/ออเดอร์
+  const ordered = orderedQtyOf(db, p.id);
+  const count = db.tickets.filter((t) => t.product_id === p.id).length;
+  // สเต็ปเปอร์หยุดที่ "ถึงไทยแล้ว" — ส่งมอบทำรายตั๋วที่หน้า สลิป/ออเดอร์
   const idx = LOT_STEPS.indexOf(p.status);
   const arrivedIdx = LOT_STEPS.indexOf('arrived');
   const next = idx < arrivedIdx ? LOT_STEPS[idx + 1] : null;
-  const count = db.tickets.filter((t) => t.product_id === p.id).length;
   const [open, setOpen] = useState(false);
   const [track, setTrack] = useState(p.tracking_no ?? '');
   const [shippedAt, setShippedAt] = useState(p.shipped_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [finalQty, setFinalQty] = useState(String(ordered));
 
-  const go = (extra?: { tracking_no?: string; shipped_at?: string }) => {
+  const advance = (extra?: { tracking_no?: string; shipped_at?: string }) => {
     if (!next) return;
     dispatch(setProductStatus(p.id, next, extra));
     flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว`);
     setOpen(false);
   };
-  const onNext = () => (next === 'shipping' ? setOpen((o) => !o) : go());
+  // ปิดใบพรี = เปิดจอง → ผลิต ผ่าน closeProduction (โค้ดเดียวกับหน้า ปิดรอบสั่งผลิต)
+  const closePre = () => {
+    const fq = Number(finalQty) || 0;
+    if (fq < ordered) return flash(`สั่งไฟนอลต้อง ≥ ยอดจอง (${ordered})`);
+    dispatch(closeProduction([{ productId: p.id, finalQty: fq }]));
+    const surplus = Math.max(0, fq - ordered);
+    flash(`ปิดใบพรี → ผลิต${surplus > 0 ? ` · เกิน ${surplus} → สต๊อก` : ''}`);
+    setOpen(false);
+  };
 
   return (
     <div className="py-2.5">
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
-          <div className="text-[11px] text-ink-faint">{manufacturerOf(db, p)?.name} · {franchiseOf(db, p)?.name} · {count} ตั๋ว</div>
+          <div className="text-[11px] text-ink-faint">{franchiseOf(db, p)?.name} · จอง {ordered} ตัว{p.production_qty != null ? ` · สั่ง ${p.production_qty}` : ''}</div>
         </div>
-        <StatusBadge status={p.status as StatusKey} />
         {p.status === 'open' ? (
-          <Link href="/admin/production" className="whitespace-nowrap rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">ปิดรอบ →</Link>
+          <button onClick={() => setOpen((o) => !o)} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">ปิดใบพรี →</button>
         ) : !next ? (
           <Link href="/admin/orders" className="whitespace-nowrap rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-3 py-1.5 text-[12px] font-bold text-primary-soft">จัดส่งรายตั๋ว →</Link>
         ) : (
-          <button onClick={onNext} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">→ {STATUS[next as StatusKey].label}</button>
+          <button onClick={() => (next === 'shipping' ? setOpen((o) => !o) : advance())} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">→ {STATUS[next as StatusKey].label}</button>
         )}
       </div>
-      {open && next === 'shipping' && (
+
+      {open && p.status === 'open' && (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-[12px] text-ink-muted">สั่งไฟนอล</span>
+          <input value={finalQty} onChange={(e) => setFinalQty(e.target.value)} inputMode="numeric" className={cx(inputCls, 'w-24 py-2 text-center')} />
+          <span className="text-[11.5px] text-ink-faint">{Number(finalQty) > ordered ? `เกิน ${Number(finalQty) - ordered} → สต๊อก` : 'ไม่มีส่วนเกิน'}</span>
+          <button onClick={closePre} className="ml-auto whitespace-nowrap rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">ยืนยันปิดใบพรี</button>
+        </div>
+      )}
+
+      {open && p.status !== 'open' && next === 'shipping' && (
         <div className="mt-2 flex gap-2">
           <input value={track} onChange={(e) => setTrack(e.target.value)} placeholder="เลข Track จีน→ไทย" className={cx(inputCls, 'py-2')} />
           <input type="date" value={shippedAt} onChange={(e) => setShippedAt(e.target.value)} className={cx(inputCls, 'w-[150px] py-2')} />
-          <button onClick={() => (track.trim() ? go({ tracking_no: track.trim(), shipped_at: shippedAt }) : flash('ใส่เลข Track ก่อน'))} className="whitespace-nowrap rounded-lg bg-cta px-4 text-[12.5px] font-bold text-white">ยืนยัน</button>
+          <button onClick={() => (track.trim() ? advance({ tracking_no: track.trim(), shipped_at: shippedAt }) : flash('ใส่เลข Track ก่อน'))} className="whitespace-nowrap rounded-lg bg-cta px-4 text-[12.5px] font-bold text-white">ยืนยัน</button>
         </div>
       )}
     </div>

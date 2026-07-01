@@ -231,15 +231,20 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
  * Records the final production qty and the surplus (final − ordered) that becomes
  * shop stock. Ordered qty is the sum of ticket qty for the product.
  */
-export const closeProduction = (entries: { productId: string; finalQty: number }[]) => (db: Database): Database => ({
-  ...db,
-  products: db.products.map((p) => {
-    const e = entries.find((x) => x.productId === p.id);
-    if (!e) return p;
-    const ordered = db.tickets.filter((t) => t.product_id === p.id).reduce((s, t) => s + t.qty, 0);
-    return { ...p, status: 'production', production_qty: e.finalQty, surplus_qty: Math.max(0, e.finalQty - ordered) };
-  }),
-});
+export const closeProduction = (entries: { productId: string; finalQty: number }[]) => (db: Database): Database => {
+  const ids = new Set(entries.map((e) => e.productId));
+  return {
+    ...db,
+    products: db.products.map((p) => {
+      const e = entries.find((x) => x.productId === p.id);
+      if (!e) return p;
+      const ordered = db.tickets.filter((t) => t.product_id === p.id).reduce((s, t) => s + t.qty, 0);
+      return { ...p, status: 'production', production_qty: e.finalQty, surplus_qty: Math.max(0, e.finalQty - ordered) };
+    }),
+    // ปิดใบพรี = เปิดจอง → ผลิต : ต้อง cascade สถานะลงทุกตั๋วเหมือน setProductStatus (ให้ 2 ฟีเจอร์ตรงกัน)
+    tickets: db.tickets.map((t) => (ids.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+  };
+};
 export const removeProduct = (pid: string) => (db: Database): Database => ({
   ...db,
   products: db.products.filter((p) => p.id !== pid),
