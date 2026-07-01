@@ -1,12 +1,14 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useToast } from '@/state/ToastProvider';
 import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
+import { approveRemainingPayment } from '@/data/mutations';
 import type { ProductStatus } from '@/domain/entities';
 
 const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'arrived'];
@@ -14,8 +16,13 @@ const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'a
 export default function AdminDashboardPage() {
   const router = useRouter();
   const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
 
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
+  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
+  const ticketOf = (tid: string) => db.tickets.find((t) => t.id === tid);
+  const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const totalPre = db.tickets.length + pending.reduce((s, o) => s + o.items.length, 0);
   const todayIncome = db.orders.filter((o) => o.status === 'approved').reduce((s, o) => s + o.total_deposit, 0) || 24800;
   const lowStock = db.products.filter((p) => p.is_stock && (p.stock_qty ?? 0) <= 5).length;
@@ -59,6 +66,29 @@ export default function AdminDashboardPage() {
                 <span className="text-[#bcd3f5]">{eta && etaRangeLabel(eta)} <span className="text-ink-faint">{eta && etaDaysLabel(eta)}</span></span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {pendingRP.length > 0 && (
+        <div className="mb-[22px] rounded-2xl border border-[#d97706]/40 bg-surface-2 p-5">
+          <div className="mb-3 flex items-center gap-2 text-base font-bold text-[#fbbf24]"><Icon name="payments" size={18} /> ส่วนต่างรอตรวจสอบ ({pendingRP.length})</div>
+          <div className="flex flex-col gap-2.5">
+            {pendingRP.map((r) => {
+              const tk = ticketOf(r.ticket_id);
+              return (
+                <div key={r.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 p-3">
+                  {r.slip_url && /^https?:|^data:/.test(r.slip_url)
+                    ? <a href={r.slip_url} target="_blank" rel="noreferrer"><img src={r.slip_url} alt="สลิป" className="h-12 w-12 rounded-lg object-cover" /></a>
+                    : <div className="grid h-12 w-12 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold">{userName(r.user_id)} · {baht(r.amount)}</div>
+                    <div className="font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</div>
+                  </div>
+                  <button onClick={() => { dispatch(approveRemainingPayment(r.id)); flash('อนุมัติส่วนต่างแล้ว'); }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

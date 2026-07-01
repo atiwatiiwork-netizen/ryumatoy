@@ -139,6 +139,30 @@ export const removeBatch = (batchId: string) => (db: Database): Database => ({
   batches: db.batches.filter((b) => b.id !== batchId),
 });
 
+/** Customer submits a remaining-balance payment (slip) awaiting admin approval. */
+export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string) => (db: Database): Database => ({
+  ...db,
+  remainingPayments: [
+    { id: id('rp'), ticket_id: ticketId, user_id: userId, amount, slip_url: slipUrl, status: 'pending', created_at: new Date().toISOString() },
+    ...db.remainingPayments,
+  ],
+});
+
+/** Admin approves a remaining payment → add to the ticket's remaining_paid; mark paid_full when settled. */
+export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
+  const pay = db.remainingPayments.find((r) => r.id === paymentId);
+  if (!pay || pay.status !== 'pending') return db;
+  return {
+    ...db,
+    remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
+    tickets: db.tickets.map((t) => {
+      if (t.id !== pay.ticket_id) return t;
+      const paid = t.remaining_paid + pay.amount;
+      return { ...t, remaining_paid: paid, status: paid >= t.remaining_amount ? 'paid_full' : t.status };
+    }),
+  };
+};
+
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
   return (db: Database): Database => ({

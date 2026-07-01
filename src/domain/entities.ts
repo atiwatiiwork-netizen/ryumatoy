@@ -155,6 +155,19 @@ export interface PreorderTicket {
   approved_at?: string;
 }
 
+/** A customer's payment of the remaining balance (ส่วนต่าง) on a ticket, awaiting admin approval. */
+export type RemainingPaymentStatus = 'pending' | 'approved';
+export interface RemainingPayment {
+  id: string;
+  ticket_id: string;
+  user_id: string;
+  amount: number;
+  slip_url: string;
+  status: RemainingPaymentStatus;
+  created_at: string;
+  approved_at?: string;
+}
+
 export interface TicketTransfer {
   id: string;
   ticket_id: string;
@@ -236,6 +249,7 @@ export interface Database {
   variants: ProductVariant[];
   orders: Order[];
   tickets: PreorderTicket[];
+  remainingPayments: RemainingPayment[];
   transfers: TicketTransfer[];
   coupons: Coupon[];
   rankTiers: RankTier[];

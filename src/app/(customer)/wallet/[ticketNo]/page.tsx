@@ -1,16 +1,18 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { CURRENT_USER_ID } from '@/data/seed';
 import { baht } from '@/lib/theme';
+import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProgressBar, QrPanel, cx } from '@/components/ui';
 import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { listForResale } from '@/data/mutations';
+import { listForResale, submitRemainingPayment } from '@/data/mutations';
 import type { ProductStatus } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
@@ -36,6 +38,28 @@ export default function TicketDetailPage() {
   const due = ticket.remaining_amount - ticket.remaining_paid;
   const currentIdx = TIMELINE.findIndex((s) => s.key === ticket.product_status);
   const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
+
+  // remaining-balance payment: available once the lot is shipping onward
+  const canPay = due > 0 && ['shipping', 'arrived', 'delivered'].includes(ticket.product_status);
+  const pendingRP = db.remainingPayments.find((r) => r.ticket_id === ticket.id && r.status === 'pending');
+  const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
+  const [paying, setPaying] = useState(false);
+  const [slip, setSlip] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onSlip = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    try { setSlip(await uploadImage(file, 'slip')); flash('แนบสลิปแล้ว'); }
+    catch { flash('อัปโหลดไม่สำเร็จ'); }
+    finally { setBusy(false); }
+  };
+  const payRemaining = () => {
+    if (!slip) return;
+    dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, due, slip));
+    flash('ส่งสลิปส่วนต่างแล้ว · รอ Admin ตรวจสอบ');
+    setPaying(false); setSlip(null);
+  };
 
   const resell = () => {
     dispatch(listForResale(ticket.id, CURRENT_USER_ID, ticket.deposit_paid + ticket.remaining_amount));
@@ -94,10 +118,42 @@ export default function TicketDetailPage() {
         </div>
       </div>
 
+      {/* arrived → notify again to pay the remaining */}
+      {ticket.product_status === 'arrived' && due > 0 && !pendingRP && (
+        <div className="mb-4 flex animate-pulseRed items-center gap-2.5 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3">
+          <Icon name="bell" size={18} className="text-primary-soft" />
+          <div className="text-[13px] text-primary-soft">ถึงไทยแล้ว! ชำระส่วนต่าง {baht(due)} เพื่อรับของ</div>
+        </div>
+      )}
+
+      {/* remaining-payment status / action */}
+      {pendingRP ? (
+        <div className="mb-4 flex items-center gap-2.5 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.14] px-4 py-3 text-[13px] text-[#fbbf24]">
+          <Icon name="check" size={17} /> ส่งสลิปส่วนต่าง {baht(pendingRP.amount)} แล้ว · รอ Admin ตรวจสอบ
+        </div>
+      ) : canPay && paying ? (
+        <div className="mb-4 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">
+          <div className="mb-1 text-sm font-bold">ชำระส่วนต่าง {baht(due)}</div>
+          <div className="mb-3.5 text-[12px] text-ink-faint">สแกน PromptPay → แนบสลิป → รอ Admin อนุมัติ</div>
+          <div className="mb-3.5 flex justify-center">
+            {account?.qr_url ? <img src={account.qr_url} alt="QR" className="h-[160px] w-[160px] rounded-2xl bg-white object-contain p-2" /> : <QrPanel size={160} />}
+          </div>
+          {account && <div className="mb-3.5 text-[13px] text-ink-muted2">{account.name} · <span className="font-mono">{account.number}</span></div>}
+          <label className={cx('mb-3 block cursor-pointer rounded-xl border-[1.5px] border-dashed p-4 text-center', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.06]' : 'border-accent')}>
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => onSlip(e.target.files?.[0])} />
+            {slip ? <img src={slip} alt="สลิป" className="mx-auto max-h-40 rounded-lg object-contain" /> : <div className="text-[13px] font-semibold text-primary-soft">{busy ? 'กำลังอัปโหลด…' : 'แตะแนบรูปสลิป'}</div>}
+          </label>
+          <div className="flex gap-2.5">
+            <Button variant="ghost" onClick={() => { setPaying(false); setSlip(null); }}>ยกเลิก</Button>
+            <Button disabled={!slip || busy} onClick={payRemaining}>ส่งสลิป · รอตรวจสอบ</Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex gap-2.5">
         <Button variant="outline" icon="swap" onClick={resell}>ลงขาย P2P</Button>
-        {due > 0 && (
-          <button onClick={() => flash('ไปหน้าจ่ายส่วนต่าง')} className="grid w-[52px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-primary-soft"><Icon name="payments" size={20} /></button>
+        {canPay && !pendingRP && !paying && (
+          <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
         )}
       </div>
     </div>

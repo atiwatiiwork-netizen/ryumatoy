@@ -125,6 +125,8 @@ export const SEED_DATABASE: Database = {
     },
   ],
 
+  remainingPayments: [],
+
   transfers: [
     { id: 'tr-1', ticket_id: 't-3', from_user_id: ME, asking_price: 1500, status: 'listed', note: 'จ่ายครบแล้ว พร้อมโอน', listed_at: '2026-06-28' },
   ],
