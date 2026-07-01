@@ -9,7 +9,9 @@ import { CURRENT_USER_ID } from '@/data/seed';
 interface AuthState {
   currentUserId: string;
   isLoggedIn: boolean;
-  needsProfile: boolean; // logged in but phone/address not captured yet
+  isApproved: boolean; // admin-approved member (legacy/demo users are approved)
+  needsApproval: boolean; // logged in but not yet approved by admin
+  needsProfile: boolean; // approved but phone/address not captured yet
   signInFacebook: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -17,6 +19,8 @@ interface AuthState {
 const AuthContext = createContext<AuthState>({
   currentUserId: CURRENT_USER_ID,
   isLoggedIn: false,
+  isApproved: true,
+  needsApproval: false,
   needsProfile: false,
   signInFacebook: async () => {},
   signOut: async () => {},
@@ -49,7 +53,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const currentUserId = authId ?? CURRENT_USER_ID;
   const me = db.users.find((u) => u.id === currentUserId);
   const isLoggedIn = authId != null;
-  const needsProfile = isLoggedIn && !(me?.phone && me?.shipping_address);
+  const isApproved = !isLoggedIn || me?.approved !== false; // demo/legacy users are approved
+  const needsApproval = isLoggedIn && me?.approved === false;
+  const needsProfile = isLoggedIn && isApproved && !(me?.phone && me?.shipping_address);
 
   const signInFacebook = async () => {
     if (!supabase) return;
@@ -61,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ currentUserId, isLoggedIn, needsProfile, signInFacebook, signOut }}>
+    <AuthContext.Provider value={{ currentUserId, isLoggedIn, isApproved, needsApproval, needsProfile, signInFacebook, signOut }}>
       {children}
     </AuthContext.Provider>
   );

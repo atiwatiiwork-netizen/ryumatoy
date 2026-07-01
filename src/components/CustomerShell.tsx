@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase } from '@/state/DataProvider';
-import { useCurrentUserId } from '@/state/AuthProvider';
+import { useCurrentUserId, useAuth } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -30,6 +30,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   const { flash } = useToast();
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
+  const { needsApproval } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   const isActive = (href: string) =>
     href === '/' ? path === '/' : path.startsWith(href);
@@ -71,6 +72,11 @@ export function CustomerShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
+      {needsApproval && (
+        <div className="border-b border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-2 text-center text-[12.5px] font-semibold text-[#fbbf24]">
+          บัญชีของคุณรอแอดมินอนุมัติ — ดูสินค้าได้ แต่ยังสั่งซื้อไม่ได้
+        </div>
+      )}
       {/* content: mobile px-4 with bottom padding for tab bar; desktop centered */}
       <main className="mx-auto max-w-[1140px] px-4 pb-28 pt-3.5 lg:px-6 lg:pb-16 lg:pt-7">{children}</main>
 

@@ -22,6 +22,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/products', icon: 'box', label: 'จัดการสินค้า', active: path.startsWith('/admin/products') },
     { href: '/admin/production', icon: 'swap', label: 'ปิดรอบสั่งผลิต', active: path.startsWith('/admin/production') },
     { href: '/admin/stock', icon: 'bolt', label: 'ขายสต๊อกส่วนเกิน', active: path.startsWith('/admin/stock') },
+    { href: '/admin/members', icon: 'user', label: 'สมาชิก', active: path.startsWith('/admin/members'), badge: db.users.filter((u) => u.approved === false).length },
     { href: '/admin/ranks', icon: 'verified', label: 'Ranks', active: path.startsWith('/admin/ranks'), badge: db.rankRequests.filter((r) => r.status === 'pending').length },
     { href: '/admin/payment', icon: 'payments', label: 'ตั้งค่าการเงิน', active: path.startsWith('/admin/payment') },
   ];

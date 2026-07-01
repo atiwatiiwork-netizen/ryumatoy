@@ -216,7 +216,10 @@ export interface User {
   avatar_url?: string;
   preferred_lang: 'th' | 'en';
   rank_seen?: RankName; // rank the user was already congratulated for (popup shows once)
-  // captured after first Facebook login (phone + address required, line optional)
+  // new Facebook signups start unapproved; admin approves before they can order.
+  // undefined = legacy/seed user (treated as approved).
+  approved?: boolean;
+  // captured after admin approval (phone + address required, line optional)
   phone?: string;
   shipping_address?: string;
   line_id?: string;

@@ -18,7 +18,7 @@ export default function CheckoutPage() {
   const dispatch = useDispatch();
   const cart = useCart();
   const { flash } = useToast();
-  const { currentUserId, isLoggedIn, signInFacebook } = useAuth();
+  const { currentUserId, isLoggedIn, needsApproval, signInFacebook } = useAuth();
   const mustLogin = canLogin && !isLoggedIn; // login required to place an order (live only)
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -120,6 +120,12 @@ export default function CheckoutPage() {
           </button>
           <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">ต้องเข้าสู่ระบบก่อนยืนยันการสั่งซื้อ (เพื่อยืนยันตัวตน + ที่อยู่จัดส่ง)</div>
         </>
+      ) : needsApproval ? (
+        <div className="rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-4 text-center">
+          <Icon name="bell" size={22} className="mx-auto mb-1.5 text-[#fbbf24]" />
+          <div className="text-sm font-bold text-[#fbbf24]">บัญชีรอแอดมินอนุมัติ</div>
+          <div className="mt-1 text-[12px] text-ink-muted2">ดูสินค้าได้ก่อน — สั่งซื้อได้เมื่อแอดมินอนุมัติสมาชิกแล้ว</div>
+        </div>
       ) : (
         <>
           <Button disabled={!slip || busy} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>

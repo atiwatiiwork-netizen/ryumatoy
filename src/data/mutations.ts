@@ -229,17 +229,24 @@ export const updateUser = (userId: string, patch: Partial<Database['users'][numb
   users: db.users.map((u) => (u.id === userId ? { ...u, ...patch } : u)),
 });
 
-/** Ensure a users row exists for a freshly-logged-in Facebook account (never clobbers existing profile). */
+/** Ensure a users row exists for a freshly-logged-in Facebook account (never clobbers existing profile).
+ *  New signups start `approved: false` — admin must approve before they can order. */
 export const ensureAuthUser = (u: { id: string; display_name: string; facebook_id?: string; avatar_url?: string }) => (db: Database): Database => {
   if (db.users.some((x) => x.id === u.id)) return db;
   return {
     ...db,
     users: [
       ...db.users,
-      { id: u.id, display_name: u.display_name, facebook_id: u.facebook_id, avatar_url: u.avatar_url, rank: 'bronze', rank_seen: 'bronze', total_spent: 0, preferred_lang: 'th' },
+      { id: u.id, display_name: u.display_name, facebook_id: u.facebook_id, avatar_url: u.avatar_url, rank: 'bronze', rank_seen: 'bronze', total_spent: 0, preferred_lang: 'th', approved: false },
     ],
   };
 };
+
+/** Admin approves a pending member → they can now complete their profile + order. */
+export const approveMember = (userId: string) => (db: Database): Database => ({
+  ...db,
+  users: db.users.map((u) => (u.id === userId ? { ...u, approved: true } : u)),
+});
 
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {

@@ -14,7 +14,7 @@ export default function ProfilePage() {
   const db = useDatabase();
   const { flash } = useToast();
   const CURRENT_USER_ID = useCurrentUserId();
-  const { isLoggedIn, signInFacebook, signOut } = useAuth();
+  const { isLoggedIn, needsApproval, signInFacebook, signOut } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   if (!me) return <div className="p-10 text-center text-ink-faint">กำลังโหลด…</div>;
   const r = RANK[me.rank];
@@ -44,6 +44,7 @@ export default function ProfilePage() {
         </div>
         <div className="mt-3 text-[19px] font-extrabold">{me.display_name}</div>
         <div className="mt-0.5 text-xs text-ink-faint">{isLoggedIn ? 'เชื่อมต่อด้วย Facebook' : 'โหมดเดโม (ยังไม่ได้เข้าสู่ระบบ)'}</div>
+        {needsApproval && <div className="mt-1.5 rounded-full border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-1 text-[11.5px] font-bold text-[#fbbf24]">⏳ รอแอดมินอนุมัติสมาชิก</div>}
       </div>
 
       {(me.phone || me.shipping_address) && (
