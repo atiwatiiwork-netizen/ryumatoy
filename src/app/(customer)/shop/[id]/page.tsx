@@ -10,6 +10,9 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
+import { instockPriceFor } from '@/domain/services/ranks';
+import { CURRENT_USER_ID } from '@/data/seed';
+import { RANK } from '@/lib/theme';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,8 +31,13 @@ export default function ProductDetailPage() {
   // reopened stock batch (from a ?batch= link) overrides the price/deposit
   const batch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open');
   const variant = variants.find((v) => v.id === variantId);
-  const price = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
-  const deposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);
+  const rawPrice = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
+  const rawDeposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);
+  // in-stock rank discount (Gold+): reduce the buy-now price for the current member
+  const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
+  const price = product.is_stock ? instockPriceFor(db.settings, myRank, rawPrice) : rawPrice;
+  const deposit = product.is_stock ? price : rawDeposit;
+  const memberSaved = product.is_stock && price < rawPrice;
   const fr = franchiseOf(db, product);
 
   const addToCart = () => {
@@ -94,6 +102,13 @@ export default function ProductDetailPage() {
         </>
       )}
 
+      {memberSaved && (
+        <div className="mb-2 flex items-center gap-2 text-[13px]">
+          <span className="rounded-md bg-[#d4af37]/15 px-2 py-0.5 text-[12px] font-bold text-[#f1d27a]">ราคาสมาชิก {RANK[myRank].label}</span>
+          <span className="font-extrabold text-ink">{baht(price)}</span>
+          <span className="text-ink-faint line-through">{baht(rawPrice)}</span>
+        </div>
+      )}
       <div className="flex gap-2.5">
         <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
         <Button onClick={addToCart} icon="cart">เพิ่มลงตะกร้า · {baht(product.is_stock ? price : deposit)}</Button>

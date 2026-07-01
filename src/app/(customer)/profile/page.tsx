@@ -4,21 +4,22 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { CURRENT_USER_ID } from '@/data/seed';
-import { baht, RANK } from '@/lib/theme';
+import { RANK } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge } from '@/components/ui';
-import { nextTier, tierOf } from '@/domain/services/ranks';
+import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
+import { RankPerksButton } from '@/components/RankModals';
 
 export default function ProfilePage() {
   const db = useDatabase();
   const { flash } = useToast();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID)!;
-  const tier = tierOf(db, me.rank);
-  const next = nextTier(db, me.rank);
   const r = RANK[me.rank];
 
+  const pieces = rankPiecesOf(db, me.id);
+  const next = nextRankInfo(db.settings, me.rank, pieces);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).length;
-  const progress = next ? Math.min(100, (me.total_spent / next.tier.min_spend) * 100) : 100;
+  const progress = next ? Math.min(100, (pieces / next.target) * 100) : 100;
 
   // Only ใบพรีของฉัน is live this phase; the rest are coming soon.
   const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode }[] = [
@@ -45,15 +46,16 @@ export default function ProfilePage() {
       <div className="mb-[18px] rounded-2xl border p-[18px]" style={{ background: r.grad, borderColor: 'transparent' }}>
         <div className="mb-3 flex items-center justify-between">
           <RankBadge rank={me.rank} large />
-          <span className="text-xs text-ink-muted2">ส่วนลด {tier?.discount_percent}%</span>
+          <RankPerksButton className="text-xs font-semibold text-ink-muted2 underline" />
         </div>
         {next ? (
           <>
-            <div className="mb-[7px] flex justify-between text-xs text-ink-muted2"><span>ยอดสะสม {baht(me.total_spent)}</span><span>{RANK[next.tier.name].label} {baht(next.tier.min_spend)}</span></div>
-            <ProgressBar pct={progress} fill={r.cls.includes('f1d27a') ? '#f1d27a' : '#9fe9f5'} />
+            <div className="mb-[7px] flex justify-between text-xs text-ink-muted2"><span>สะสม {pieces} ชิ้น</span><span>{RANK[next.next].label} · {next.target} ชิ้น</span></div>
+            <ProgressBar pct={progress} fill={r.cls.includes('f1d27a') ? '#f1d27a' : '#d7dde6'} />
+            <div className="mt-1.5 text-[11.5px] text-ink-faint">อีก {next.need} ชิ้น จะได้เลื่อนเป็น {RANK[next.next].label}</div>
           </>
         ) : (
-          <div className="text-[12.5px] text-ink-muted2">คุณอยู่ระดับสูงสุดแล้ว 💎</div>
+          <div className="text-[12.5px] text-ink-muted2">🥇 คุณคือสมาชิก Gold — ขอบคุณที่อุดหนุน!</div>
         )}
       </div>
 

@@ -10,6 +10,7 @@ import { CURRENT_USER_ID } from '@/data/seed';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
+import { RankCongrats } from './RankModals';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -85,6 +86,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
       </nav>
 
       <PreviewSwitcher />
+      <RankCongrats />
     </div>
   );
 }
