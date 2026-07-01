@@ -10,6 +10,7 @@ export const STATUS = {
   production: { cls: 'text-[#fbbf24] bg-[#d97706]/[0.14] border-[#d97706]/40', label: 'กำลังผลิต' },
   shipping: { cls: 'text-[#60a5fa] bg-[#2563eb]/[0.14] border-[#2563eb]/40', label: 'กำลังเดินทาง' },
   arrived: { cls: 'text-[#f87171] bg-[#b91c1c]/[0.16] border-[#b91c1c]/[0.45]', label: 'ถึงไทยแล้ว' },
+  delivered: { cls: 'text-[#22c55e] bg-[#16a34a]/[0.16] border-[#16a34a]/40', label: 'ส่งมอบแล้ว' },
   paid_full: { cls: 'text-[#22c55e] bg-[#16a34a]/[0.16] border-[#16a34a]/40', label: 'จ่ายครบ ✓' },
   closed: { cls: 'text-ink-muted bg-white/[0.06] border-white/10', label: 'ปิดแล้ว' },
 } as const;
@@ -21,6 +22,7 @@ export const STATUS_FILL: Record<StatusKey, string> = {
   production: '#fbbf24',
   shipping: '#60a5fa',
   arrived: '#f87171',
+  delivered: '#22c55e',
   paid_full: '#22c55e',
   closed: '#9a9290',
 };

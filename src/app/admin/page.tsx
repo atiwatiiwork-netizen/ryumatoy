@@ -6,6 +6,7 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
+import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import type { ProductStatus } from '@/domain/entities';
 
 const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'arrived'];
@@ -21,6 +22,12 @@ export default function AdminDashboardPage() {
 
   const statusCounts = PROGRESS_STATUSES.map((st) => ({ st, count: db.products.filter((p) => !p.is_stock && p.status === st).length }));
   const maxCount = Math.max(1, ...statusCounts.map((s) => s.count));
+
+  // shipping lots arriving soon (ETA within ~2 days)
+  const arrivingSoon = db.products
+    .filter((p) => p.status === 'shipping')
+    .map((p) => ({ p, eta: computeEta(db.settings, p.shipped_at) }))
+    .filter((x) => x.eta?.arrivingSoon);
 
   return (
     <div>
@@ -41,6 +48,20 @@ export default function AdminDashboardPage() {
         <Stat label="ยอดเงินวันนี้" value={baht(todayIncome)} icon="payments" green />
         <Stat label="Stock ใกล้หมด" value={String(lowStock)} icon="bolt" />
       </div>
+
+      {arrivingSoon.length > 0 && (
+        <div className="mb-[22px] animate-pulseRed rounded-2xl border border-[#2563eb]/40 bg-[#2563eb]/[0.1] p-5">
+          <div className="mb-3 flex items-center gap-2 font-bold text-[#bcd3f5]"><Icon name="truck" size={18} /> ใกล้ถึงไทย ({arrivingSoon.length})</div>
+          <div className="flex flex-col gap-2">
+            {arrivingSoon.map(({ p, eta }) => (
+              <div key={p.id} className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
+                <span className="font-semibold">{p.series_name}</span>
+                <span className="text-[#bcd3f5]">{eta && etaRangeLabel(eta)} <span className="text-ink-faint">{eta && etaDaysLabel(eta)}</span></span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-[18px] lg:grid-cols-[1.5fr_1fr]">
         <div className="rounded-2xl border border-subtle bg-surface-2 p-5">

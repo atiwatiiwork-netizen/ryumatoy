@@ -13,13 +13,13 @@ import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
   genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
-  upsertSeries, removeSeries, upsertProduct, removeProduct,
+  upsertSeries, removeSeries, upsertProduct, removeProduct, setProductStatus,
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 
 type Tab = 'products' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
-  { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'closed', label: 'ปิด' },
+  { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'delivered', label: 'ส่งมอบแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -296,10 +296,12 @@ interface Draft {
   is_stock: boolean;
   stock_qty: string;
   status: ProductStatus;
+  tracking_no: string;
+  shipped_at: string;
   images: string[];
 }
 const emptyDraft = (fid: string, mid: string, deposit: number): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', images: [],
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [],
 });
 
 function Products() {
@@ -350,9 +352,13 @@ function Products() {
       stock_qty: draft.is_stock ? Number(draft.stock_qty) || 0 : undefined,
       has_variants: false,
       status: draft.status,
+      tracking_no: draft.tracking_no.trim() || undefined,
+      shipped_at: draft.shipped_at || undefined,
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
     dispatch(upsertProduct(product));
+    // cascade the lifecycle status to this product's tickets (customer wallet tracking)
+    dispatch(setProductStatus(product.id, product.status));
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
   };
 
@@ -361,7 +367,8 @@ function Products() {
     series_name: p.series_name, wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
     description: p.description, eta_note: p.eta_note,
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
-    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status, images: p.images ?? [],
+    is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
+    tracking_no: p.tracking_no ?? '', shipped_at: p.shipped_at ? p.shipped_at.slice(0, 10) : '', images: p.images ?? [],
   });
 
   const del = (p: Product) => {
@@ -419,6 +426,12 @@ function Products() {
               </div>
             </div>
             <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
+            {draft.status === 'shipping' && (
+              <div className="grid grid-cols-2 gap-3 rounded-xl border border-[#2563eb]/30 bg-[#2563eb]/[0.06] p-3">
+                <Field label="เลข Tracking"><input className={inputCls} value={draft.tracking_no} onChange={(e) => set('tracking_no', e.target.value)} placeholder="เช่น SF123..." /></Field>
+                <Field label="วันที่ออกจากจีน (คิด ETA)"><input type="date" className={inputCls} value={draft.shipped_at} onChange={(e) => set('shipped_at', e.target.value)} /></Field>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ราคาเต็ม (฿)"><input className={inputCls} inputMode="numeric" value={draft.price_total} onChange={(e) => set('price_total', e.target.value)} placeholder="1290" /></Field>

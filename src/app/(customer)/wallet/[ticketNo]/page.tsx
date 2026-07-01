@@ -9,6 +9,7 @@ import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProgressBar, QrPanel, cx } from '@/components/ui';
 import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
+import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { listForResale } from '@/data/mutations';
 import type { ProductStatus } from '@/domain/entities';
 
@@ -17,6 +18,7 @@ const TIMELINE: { key: ProductStatus; label: string }[] = [
   { key: 'production', label: 'ผลิต' },
   { key: 'shipping', label: 'เดินทาง' },
   { key: 'arrived', label: 'ถึงไทย' },
+  { key: 'delivered', label: 'ส่งมอบ' },
 ];
 
 export default function TicketDetailPage() {
@@ -33,6 +35,7 @@ export default function TicketDetailPage() {
   const pct = paidPercent(ticket.deposit_paid, ticket.remaining_amount, ticket.remaining_paid);
   const due = ticket.remaining_amount - ticket.remaining_paid;
   const currentIdx = TIMELINE.findIndex((s) => s.key === ticket.product_status);
+  const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
 
   const resell = () => {
     dispatch(listForResale(ticket.id, CURRENT_USER_ID, ticket.deposit_paid + ticket.remaining_amount));
@@ -58,6 +61,13 @@ export default function TicketDetailPage() {
           <div className="text-[11.5px] text-ink-faint">{manufacturerNameOf(db, product)} · {franchiseOf(db, product)?.name}</div>
         </div>
       </div>
+
+      {eta && (
+        <div className="mb-3.5 flex items-center gap-2.5 rounded-card border border-[#2563eb]/30 bg-[#2563eb]/10 px-4 py-3">
+          <Icon name="truck" size={18} className="text-[#60a5fa]" />
+          <div className="text-[13px] text-[#bcd3f5]">คาดว่าถึงไทย <b>{etaRangeLabel(eta)}</b> {etaDaysLabel(eta)}{product.tracking_no ? <> · <span className="font-mono text-[11px]">Track {product.tracking_no}</span></> : null}</div>
+        </div>
+      )}
 
       <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-4">
         <div className="mb-2 flex justify-between text-[13px]"><span className="text-[#4ade80]">มัดจำที่จ่ายแล้ว ✓</span><span className="font-bold">{baht(ticket.deposit_paid)}</span></div>

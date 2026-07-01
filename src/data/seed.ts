@@ -155,5 +155,7 @@ export const SEED_DATABASE: Database = {
     baht_per_yuan: 5,
     deposit_wcf: 300,
     deposit_mega: 500,
+    eta_min_days: 7,
+    eta_max_days: 10,
   },
 };

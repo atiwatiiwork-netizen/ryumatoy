@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf } from '../domain/services/catalog';
@@ -177,6 +177,17 @@ export const upsertSeries = (s: Series) => (db: Database): Database => ({ ...db,
 export const removeSeries = (sid: string) => (db: Database): Database => ({ ...db, series: db.series.filter((s) => s.id !== sid) });
 
 export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...db, products: upsertById(db.products, p) });
+
+/**
+ * Move a lot to a new status (shipping/arrived/delivered) and cascade the status
+ * to every ticket of that product, so customers' wallets track the lifecycle.
+ * `extra` carries tracking_no/shipped_at when the lot starts shipping.
+ */
+export const setProductStatus = (productId: string, status: ProductStatus, extra?: { tracking_no?: string; shipped_at?: string }) => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => (p.id === productId ? { ...p, status, ...(extra ?? {}) } : p)),
+  tickets: db.tickets.map((t) => (t.product_id === productId ? { ...t, product_status: status } : t)),
+});
 
 /**
  * Close the pre-order round for the given products → status 'production'.

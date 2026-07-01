@@ -108,6 +108,8 @@ export const supabaseAdapter: PersistenceAdapter = {
             baht_per_yuan: Number(s.baht_per_yuan ?? SEED_DATABASE.settings.baht_per_yuan),
             deposit_wcf: Number(s.deposit_wcf ?? SEED_DATABASE.settings.deposit_wcf),
             deposit_mega: Number(s.deposit_mega ?? SEED_DATABASE.settings.deposit_mega),
+            eta_min_days: Number(s.eta_min_days ?? SEED_DATABASE.settings.eta_min_days),
+            eta_max_days: Number(s.eta_max_days ?? SEED_DATABASE.settings.eta_max_days),
           }
         : SEED_DATABASE.settings,
     };

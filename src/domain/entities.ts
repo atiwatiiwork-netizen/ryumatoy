@@ -5,7 +5,7 @@
  */
 
 export type ProductType = 'wcf' | 'figure' | 'resin' | 'other';
-export type ProductStatus = 'open' | 'production' | 'shipping' | 'arrived' | 'closed';
+export type ProductStatus = 'open' | 'production' | 'shipping' | 'arrived' | 'delivered' | 'closed';
 export type TicketStatus = 'pending_approval' | 'active' | 'paid_full' | 'transferred';
 export type OrderStatus = 'pending_approval' | 'approved' | 'rejected';
 export type TransferStatus = 'listed' | 'pending_admin' | 'approved' | 'cancelled';
@@ -75,6 +75,9 @@ export interface Product {
   stock_qty?: number;
   has_variants: boolean;
   status: ProductStatus;
+  // Shipping (set when the lot leaves China → status 'shipping'):
+  tracking_no?: string;
+  shipped_at?: string; // date the lot left the China warehouse (ETA counts from here)
   // Close-order / production round (set when admin closes the pre-order round):
   production_qty?: number; // จำนวนไฟนอลที่สั่งผลิตจากค่าย
   surplus_qty?: number; // ส่วนเกินจากยอดจอง → กลายเป็นสต๊อกร้าน (production_qty − ordered)
@@ -216,6 +219,8 @@ export interface ShopSettings {
   baht_per_yuan: number; // 5
   deposit_wcf: number; // 300
   deposit_mega: number; // 500
+  eta_min_days: number; // 7  — ETA window after leaving China
+  eta_max_days: number; // 10
 }
 
 /** The whole app database as one JSON object (single source of truth). */
