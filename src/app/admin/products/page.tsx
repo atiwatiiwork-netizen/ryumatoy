@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
-import { baht } from '@/lib/theme';
+import { baht, STATUS } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, cx } from '@/components/ui';
@@ -17,10 +18,11 @@ import {
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 
-type Tab = 'products' | 'categories' | 'manufacturers' | 'franchises' | 'series';
+type Tab = 'products' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
   { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'delivered', label: 'ส่งมอบแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
+const LOT_STEPS: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered'];
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -34,11 +36,12 @@ export default function AdminProductsPage() {
     <div>
       <div className="mb-5 text-2xl font-extrabold">จัดการสินค้า</div>
       <div className="mb-6 flex flex-wrap gap-2">
-        {([['products', 'สินค้า'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
+        {([['products', 'สินค้า'], ['status', 'สถานะล็อต'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
       </div>
       {tab === 'products' && <Products />}
+      {tab === 'status' && <LotStatus />}
       {tab === 'categories' && <Categories />}
       {tab === 'franchises' && <Franchises />}
       {tab === 'manufacturers' && <Manufacturers />}
@@ -276,6 +279,68 @@ function SeriesTab() {
           {db.series.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีซีรีย์</div>}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+// ---- สถานะล็อต — เลื่อนสถานะรวมทั้งล็อต (compact) --------------------------
+function LotStatus() {
+  const db = useDatabase();
+  const lots = db.products.filter((p) => !p.is_stock && p.status !== 'closed');
+  return (
+    <div className="max-w-[640px]">
+      <Panel>
+        <div className="font-bold">อัปเดตสถานะล็อต ({lots.length})</div>
+        <div className="mb-3 text-[11.5px] text-ink-faint">เลื่อนทีละขั้น · มีผลกับทุกตั๋วในล็อตพร้อมกัน</div>
+        {lots.length === 0
+          ? <div className="py-8 text-center text-ink-faint">ยังไม่มีล็อตพรี</div>
+          : <div className="flex flex-col divide-y divide-hair">{lots.map((p) => <LotStatusRow key={p.id} product={p} />)}</div>}
+      </Panel>
+    </div>
+  );
+}
+
+function LotStatusRow({ product: p }: { product: Product }) {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const idx = LOT_STEPS.indexOf(p.status);
+  const next = LOT_STEPS[idx + 1];
+  const count = db.tickets.filter((t) => t.product_id === p.id).length;
+  const [open, setOpen] = useState(false);
+  const [track, setTrack] = useState(p.tracking_no ?? '');
+  const [shippedAt, setShippedAt] = useState(p.shipped_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+
+  const go = (extra?: { tracking_no?: string; shipped_at?: string }) => {
+    dispatch(setProductStatus(p.id, next, extra));
+    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว`);
+    setOpen(false);
+  };
+  const onNext = () => (next === 'shipping' ? setOpen((o) => !o) : go());
+
+  return (
+    <div className="py-2.5">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
+          <div className="text-[11px] text-ink-faint">{manufacturerOf(db, p)?.name} · {franchiseOf(db, p)?.name} · {count} ตั๋ว</div>
+        </div>
+        <StatusBadge status={p.status as StatusKey} />
+        {p.status === 'open' ? (
+          <Link href="/admin/production" className="whitespace-nowrap rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">ปิดรอบ →</Link>
+        ) : p.status === 'delivered' ? (
+          <span className="whitespace-nowrap text-[12px] font-bold text-[#4ade80]">เสร็จ ✓</span>
+        ) : (
+          <button onClick={onNext} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">→ {STATUS[next as StatusKey].label}</button>
+        )}
+      </div>
+      {open && next === 'shipping' && (
+        <div className="mt-2 flex gap-2">
+          <input value={track} onChange={(e) => setTrack(e.target.value)} placeholder="เลข Track จีน→ไทย" className={cx(inputCls, 'py-2')} />
+          <input type="date" value={shippedAt} onChange={(e) => setShippedAt(e.target.value)} className={cx(inputCls, 'w-[150px] py-2')} />
+          <button onClick={() => (track.trim() ? go({ tracking_no: track.trim(), shipped_at: shippedAt }) : flash('ใส่เลข Track ก่อน'))} className="whitespace-nowrap rounded-lg bg-cta px-4 text-[12.5px] font-bold text-white">ยืนยัน</button>
+        </div>
+      )}
     </div>
   );
 }

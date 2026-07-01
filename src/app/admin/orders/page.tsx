@@ -4,17 +4,14 @@ import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
-import { baht, STATUS } from '@/lib/theme';
-import type { StatusKey } from '@/lib/theme';
+import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { uploadImage } from '@/lib/upload';
-import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { approveRemainingPayment, setProductStatus, setParcel } from '@/data/mutations';
-import type { Carrier, Product, PreorderTicket, ProductStatus } from '@/domain/entities';
+import { approveRemainingPayment, setParcel } from '@/data/mutations';
+import type { Carrier, PreorderTicket } from '@/domain/entities';
 
-const LOT_STEPS: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered'];
 const CARRIERS: { key: Carrier; label: string }[] = [
   { key: 'ems', label: 'EMS' },
   { key: 'jt', label: 'J&T' },
@@ -37,8 +34,6 @@ export default function OrdersHubPage() {
   const pendingOrders = db.orders.filter((o) => o.status === 'pending_approval');
   // §2 pending remaining-balance slips
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
-  // §3 lots (pre-order products) for the centralized status stepper
-  const lots = db.products.filter((p) => !p.is_stock && p.status !== 'closed');
   // §4 paid, still travelling — info only
   const waitingArrival = db.tickets.filter((t) => t.product_status === 'shipping' && paidFull(t));
   // §5 arrived + paid + no parcel yet → enter tracking
@@ -94,15 +89,6 @@ export default function OrdersHubPage() {
         )}
       </Section>
 
-      {/* §3 centralized lot status stepper */}
-      <Section icon="swap" title="อัปเดตสถานะล็อต" count={lots.length} tone="blue" sub="เปลี่ยนทีเดียว มีผลกับทุกตั๋วในล็อต">
-        {lots.length === 0 ? <Empty text="ยังไม่มีล็อตพรีในระบบ" /> : (
-          <div className="flex flex-col gap-2.5">
-            {lots.map((p) => <LotStatusRow key={p.id} product={p} db={db} dispatch={dispatch} flash={flash} onGoProduction={() => router.push('/admin/production')} />)}
-          </div>
-        )}
-      </Section>
-
       {/* §4 paid, travelling — info only */}
       <Section icon="truck" title="จ่ายแล้ว · รอถึงไทย" count={waitingArrival.length} tone="blue" sub="ไม่ต้องทำอะไร รอเลื่อนสถานะเป็นถึงไทย">
         {waitingArrival.length === 0 ? <Empty text="—" /> : (
@@ -147,68 +133,6 @@ export default function OrdersHubPage() {
             ))}
           </div>
         </Section>
-      )}
-    </div>
-  );
-}
-
-/* ── lot status stepper row ─────────────────────────────────────────────── */
-function LotStatusRow({ product: p, db, dispatch, flash, onGoProduction }: {
-  product: Product; db: ReturnType<typeof useDatabase>; dispatch: ReturnType<typeof useDispatch>; flash: (m: string) => void; onGoProduction: () => void;
-}) {
-  const idx = LOT_STEPS.indexOf(p.status);
-  const next = LOT_STEPS[idx + 1];
-  const ticketCount = db.tickets.filter((t) => t.product_id === p.id).length;
-  const [track, setTrack] = useState(p.tracking_no ?? '');
-  const [shippedAt, setShippedAt] = useState(p.shipped_at ?? new Date().toISOString().slice(0, 10));
-
-  const advance = () => {
-    if (next === 'shipping') {
-      if (!track.trim()) return flash('ใส่เลข Track (จีน→ไทย) ก่อน');
-      dispatch(setProductStatus(p.id, 'shipping', { tracking_no: track.trim(), shipped_at: shippedAt }));
-    } else {
-      dispatch(setProductStatus(p.id, next));
-    }
-    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${ticketCount} ตั๋วอัปเดต`);
-  };
-
-  return (
-    <div className="rounded-xl border border-subtle bg-surface-3 p-3.5">
-      <div className="mb-2.5 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">{p.series_name}</div>
-          <div className="text-[11.5px] text-ink-faint">{manufacturerNameOf(db, p)} · {franchiseOf(db, p)?.name} · {ticketCount} ตั๋ว</div>
-        </div>
-      </div>
-
-      {/* step chain */}
-      <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        {LOT_STEPS.map((st, i) => (
-          <span key={st} className="flex items-center gap-1.5">
-            <span className={cx('rounded-full px-2.5 py-1 text-[11px] font-bold',
-              i < idx ? 'bg-[#16a34a]/15 text-[#4ade80]' : i === idx ? 'bg-primary text-white' : 'bg-white/[0.05] text-ink-faint')}>
-              {i < idx && '✓ '}{STATUS[st as StatusKey].label}
-            </span>
-            {i < LOT_STEPS.length - 1 && <span className="text-ink-faint">›</span>}
-          </span>
-        ))}
-      </div>
-
-      {/* action */}
-      {p.status === 'open' ? (
-        <button onClick={onGoProduction} className="w-full rounded-[9px] border border-subtle bg-surface-2 py-2 text-[13px] font-bold text-ink-muted2">ปิดรอบที่หน้า “ปิดรอบสั่งผลิต” →</button>
-      ) : p.status === 'delivered' ? (
-        <div className="rounded-[9px] border border-[#16a34a]/40 bg-[#16a34a]/[0.1] py-2 text-center text-[13px] font-bold text-[#4ade80]">ส่งมอบครบแล้ว ✓</div>
-      ) : (
-        <>
-          {next === 'shipping' && (
-            <div className="mb-2.5 grid grid-cols-[1fr_140px] gap-2">
-              <input value={track} onChange={(e) => setTrack(e.target.value)} placeholder="เลข Track จีน→ไทย" className="rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-ink placeholder:text-ink-faint" />
-              <input type="date" value={shippedAt} onChange={(e) => setShippedAt(e.target.value)} className="rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-ink" />
-            </div>
-          )}
-          <button onClick={advance} className="w-full rounded-[9px] bg-cta py-2 text-[13px] font-bold text-white">เลื่อนสถานะ → {STATUS[next as StatusKey].label}</button>
-        </>
       )}
     </div>
   );
