@@ -216,10 +216,13 @@ export interface User {
   avatar_url?: string;
   preferred_lang: 'th' | 'en';
   rank_seen?: RankName; // rank the user was already congratulated for (popup shows once)
-  // new Facebook signups start unapproved; admin approves before they can order.
+  // new signups start unapproved; admin approves before they can order.
   // undefined = legacy/seed user (treated as approved).
   approved?: boolean;
-  // captured after admin approval (phone + address required, line optional)
+  member_code?: string; // RYU-000x, assigned by admin on approval (reference only, not a login secret)
+  fb_link?: string; // Facebook profile link/name given at signup (admin cross-checks)
+  pin_reset?: boolean; // admin allowed this user to set a new PIN (forgot-PIN flow)
+  // captured after admin approval (phone required = login id, address required, line optional)
   phone?: string;
   shipping_address?: string;
   line_id?: string;

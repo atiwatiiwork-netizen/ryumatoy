@@ -229,6 +229,12 @@ export const updateUser = (userId: string, patch: Partial<Database['users'][numb
   users: db.users.map((u) => (u.id === userId ? { ...u, ...patch } : u)),
 });
 
+/** Insert or merge a full user row fetched from the server (phone+PIN login). */
+export const upsertUserRow = (row: Database['users'][number]) => (db: Database): Database => ({
+  ...db,
+  users: db.users.some((u) => u.id === row.id) ? db.users.map((u) => (u.id === row.id ? { ...u, ...row } : u)) : [...db.users, row],
+});
+
 /** Ensure a users row exists for a freshly-logged-in Facebook account (never clobbers existing profile).
  *  New signups start `approved: false` — admin must approve before they can order. */
 export const ensureAuthUser = (u: { id: string; display_name: string; facebook_id?: string; avatar_url?: string }) => (db: Database): Database => {

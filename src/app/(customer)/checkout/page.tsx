@@ -18,7 +18,7 @@ export default function CheckoutPage() {
   const dispatch = useDispatch();
   const cart = useCart();
   const { flash } = useToast();
-  const { currentUserId, isLoggedIn, needsApproval, signInFacebook } = useAuth();
+  const { currentUserId, isLoggedIn, needsApproval } = useAuth();
   const mustLogin = canLogin && !isLoggedIn; // login required to place an order (live only)
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -115,9 +115,7 @@ export default function CheckoutPage() {
 
       {mustLogin ? (
         <>
-          <button onClick={signInFacebook} className="flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
-            <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook เพื่อสั่งซื้อ
-          </button>
+          <button onClick={() => router.push('/profile')} className="w-full rounded-btn bg-cta py-3.5 text-sm font-bold text-white">เข้าสู่ระบบ / สมัครสมาชิก เพื่อสั่งซื้อ</button>
           <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">ต้องเข้าสู่ระบบก่อนยืนยันการสั่งซื้อ (เพื่อยืนยันตัวตน + ที่อยู่จัดส่ง)</div>
         </>
       ) : needsApproval ? (

@@ -9,13 +9,14 @@ import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge } from '@/components/ui';
 import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
 import { RankPerksButton } from '@/components/RankModals';
+import { AuthScreen } from '@/components/AuthScreen';
 
 export default function ProfilePage() {
   const db = useDatabase();
   const { flash } = useToast();
   const CURRENT_USER_ID = useCurrentUserId();
-  const { isLoggedIn, needsApproval, signInFacebook, signOut } = useAuth();
-  if (canLogin && !isLoggedIn) return <ProfileLogin onLogin={signInFacebook} />;
+  const { isLoggedIn, needsApproval, signOut } = useAuth();
+  if (canLogin && !isLoggedIn) return <AuthScreen />;
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   if (!me) return <div className="p-10 text-center text-ink-faint">กำลังโหลด…</div>;
   const r = RANK[me.rank];
@@ -44,7 +45,7 @@ export default function ProfilePage() {
           <div className="absolute bottom-0.5 right-0.5 grid h-[26px] w-[26px] place-items-center rounded-full border-2 border-base bg-[#1877f2] text-[13px] font-extrabold text-white">f</div>
         </div>
         <div className="mt-3 text-[19px] font-extrabold">{me.display_name}</div>
-        <div className="mt-0.5 text-xs text-ink-faint">{isLoggedIn ? 'เชื่อมต่อด้วย Facebook' : 'โหมดเดโม (ยังไม่ได้เข้าสู่ระบบ)'}</div>
+        <div className="mt-0.5 font-mono text-xs text-ink-faint">{me.member_code ? `รหัสสมาชิก ${me.member_code}` : isLoggedIn ? 'สมาชิก Ryuma' : 'โหมดเดโม'}</div>
         {needsApproval && <div className="mt-1.5 rounded-full border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-1 text-[11.5px] font-bold text-[#fbbf24]">⏳ รอแอดมินอนุมัติสมาชิก</div>}
       </div>
 
@@ -94,12 +95,8 @@ export default function ProfilePage() {
 
       {isLoggedIn ? (
         <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={signOut}>ออกจากระบบ</Button>
-      ) : canLogin ? (
-        <button onClick={signInFacebook} className="flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
-          <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook
-        </button>
       ) : (
-        <Button variant="outline" className="border-subtle text-ink-faint" onClick={() => flash('ยังไม่ได้ตั้งค่า Facebook (โหมดพรีวิว)')}>โหมดพรีวิว</Button>
+        <Button variant="outline" className="border-subtle text-ink-faint" onClick={() => flash('โหมดพรีวิว')}>โหมดพรีวิว</Button>
       )}
     </div>
   );
@@ -107,18 +104,4 @@ export default function ProfilePage() {
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-lg bg-surface-3 px-2.5 py-0.5 text-xs font-bold text-ink-muted2">{children}</span>;
-}
-
-function ProfileLogin({ onLogin }: { onLogin: () => void }) {
-  return (
-    <div className="mx-auto flex max-w-[420px] flex-col items-center px-4 py-16 text-center">
-      <img src="/ryuma-logo.png" alt="Ryuma" width={64} height={64} className="mb-4 rounded-2xl" />
-      <div className="text-xl font-extrabold">เข้าสู่ระบบ Ryuma</div>
-      <div className="mt-1.5 text-[13px] text-ink-faint">เข้าสู่ระบบเพื่อจอง ติดตามใบพรี และสะสมยศสมาชิก</div>
-      <button onClick={onLogin} className="mt-6 flex w-full items-center justify-center gap-2.5 rounded-btn bg-[#1877f2] py-3.5 text-sm font-bold text-white">
-        <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-[#1877f2]">f</span> เข้าสู่ระบบด้วย Facebook
-      </button>
-      <div className="mt-3 text-[11.5px] text-ink-faint">ดูสินค้าได้โดยไม่ต้องเข้าสู่ระบบ · เข้าสู่ระบบเมื่อต้องการสั่งซื้อ</div>
-    </div>
-  );
 }

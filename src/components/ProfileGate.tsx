@@ -1,16 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useAuth } from '@/state/AuthProvider';
 import { updateUser } from '@/data/mutations';
 import { Icon } from './Icon';
 import { cx } from './ui';
 
-/** Blocking overlay: after login → fill profile, then a "waiting for approval" screen. */
+/** Blocking overlay: login → (not approved) wait screen → (approved) fill shipping address. */
 export function ProfileGate() {
   const { currentUserId, needsProfile, needsApproval } = useAuth();
+  const db = useDatabase();
+  const me = db.users.find((u) => u.id === currentUserId);
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [phone, setPhone] = useState('');
@@ -34,10 +36,11 @@ export function ProfileGate() {
 
   if (!needsProfile) return null;
 
+  const needPhone = !me?.phone; // phone-signup users already have it; FB users may not
   const save = () => {
-    if (!phone.trim()) return flash('กรอกเบอร์โทรศัพท์');
+    if (needPhone && !phone.trim()) return flash('กรอกเบอร์โทรศัพท์');
     if (!address.trim()) return flash('กรอกที่อยู่จัดส่ง');
-    dispatch(updateUser(currentUserId, { phone: phone.trim(), shipping_address: address.trim(), line_id: line.trim() || undefined }));
+    dispatch(updateUser(currentUserId, { ...(needPhone ? { phone: phone.trim() } : {}), shipping_address: address.trim(), line_id: line.trim() || undefined }));
     flash('บันทึกข้อมูลแล้ว ยินดีต้อนรับ! 🎉');
   };
 
@@ -46,13 +49,15 @@ export function ProfileGate() {
   return (
     <div className="fixed inset-0 z-[110] grid place-items-center bg-black/75 p-5">
       <div className="w-full max-w-[420px] rounded-3xl border border-subtle bg-surface-2 p-6">
-        <div className="mb-1 flex items-center gap-2 text-lg font-extrabold text-ink"><Icon name="user" size={20} className="text-primary-soft" /> กรอกข้อมูลก่อนเริ่มใช้งาน</div>
-        <div className="mb-4 text-[12.5px] text-ink-faint">ใช้สำหรับจัดส่งพัสดุ — จำเป็นต้องกรอกให้ครบก่อนสั่งซื้อ</div>
+        <div className="mb-1 flex items-center gap-2 text-lg font-extrabold text-ink"><Icon name="user" size={20} className="text-primary-soft" /> กรอกที่อยู่จัดส่ง</div>
+        <div className="mb-4 text-[12.5px] text-ink-faint">อนุมัติแล้ว 🎉 กรอกที่อยู่ให้ครบก่อนเริ่มสั่งซื้อ</div>
         <div className="flex flex-col gap-3">
-          <label className="block">
-            <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">เบอร์โทรศัพท์ <span className="text-primary-soft">*</span></span>
-            <input className={inputCls} inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />
-          </label>
+          {needPhone && (
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">เบอร์โทรศัพท์ <span className="text-primary-soft">*</span></span>
+              <input className={inputCls} inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />
+            </label>
+          )}
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">ที่อยู่จัดส่ง <span className="text-primary-soft">*</span></span>
             <textarea className={cx(inputCls, 'h-24 resize-none')} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="บ้านเลขที่ / หมู่ / ถนน / ตำบล / อำเภอ / จังหวัด / รหัสไปรษณีย์" />
