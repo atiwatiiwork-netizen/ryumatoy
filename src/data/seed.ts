@@ -81,6 +81,8 @@ export const SEED_DATABASE: Database = {
     },
   ],
 
+  boards: [],
+
   batches: [],
 
   stockAdditions: [],

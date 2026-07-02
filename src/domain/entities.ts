@@ -83,7 +83,27 @@ export interface Product {
   // Close-order / production round (set when admin closes the pre-order round):
   production_qty?: number; // จำนวนไฟนอลที่สั่งผลิตจากค่าย
   surplus_qty?: number; // ส่วนเกินจากยอดจอง → กลายเป็นสต๊อกร้าน (production_qty − ordered)
+  board_id?: string; // the closing-preorder board this product belongs to (1 product = 1 board)
+  maker_code?: string; // optional maker item code shown on the poster (e.g. EL.085)
   created_at: string;
+}
+
+/**
+ * A "closing pre-order board" (กระดานปิดพรี): a single maker's batch of items the
+ * maker is about to stop taking orders for. One board = ONE maker (never mixed).
+ * The poster is just a display image (any layout); the bookable items are the
+ * products whose board_id points here. Closing the board → all its products → production.
+ */
+export type BoardStatus = 'open' | 'closed';
+export interface PreorderBoard {
+  id: string;
+  maker_id: string; // ค่าย — always exactly one
+  title: string;
+  poster_url?: string; // the maker's grid/list poster (display only)
+  note?: string;
+  status: BoardStatus; // open = accepting bookings / "กำลังปิดพรี"; closed = archived (products → production)
+  created_at: string;
+  closed_at?: string;
 }
 
 /**
@@ -311,6 +331,7 @@ export interface Database {
   franchises: Franchise[];
   series: Series[];
   products: Product[];
+  boards: PreorderBoard[];
   batches: ProductBatch[];
   stockAdditions: StockAddition[];
   variants: ProductVariant[];

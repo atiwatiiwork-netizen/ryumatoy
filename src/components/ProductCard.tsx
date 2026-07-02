@@ -17,10 +17,12 @@ export function ProductCard({ product }: { product: Product }) {
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
   const memberPrice = product.is_stock ? instockPriceFor(db.settings, myRank, product.price_total) : product.price_total;
   const saved = memberPrice < product.price_total;
+  const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
   return (
     <Link href={`/shop/${product.id}`} className="block overflow-hidden rounded-card border border-subtle bg-surface-2">
       <div className="relative">
         <ProductThumb isStock={product.is_stock} radius="rounded-none" src={product.images[0]} />
+        {inClosingBoard && <span className="absolute left-2 top-2 rounded-md bg-[#16a34a] px-1.5 py-0.5 text-[9px] font-extrabold text-white">ใกล้ปิดพรี</span>}
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>
       <div className="px-[11px] pb-3 pt-2.5">

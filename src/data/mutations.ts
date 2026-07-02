@@ -354,3 +354,53 @@ export const removeProduct = (pid: string) => (db: Database): Database => ({
   products: db.products.filter((p) => p.id !== pid),
   variants: db.variants.filter((v) => v.product_id !== pid),
 });
+
+// ── Closing pre-order boards (กระดานปิดพรี) — one board = one maker ──────────
+export const createBoard = (makerId: string, title: string) => (db: Database): Database => ({
+  ...db,
+  boards: [
+    { id: id('board'), maker_id: makerId, title, status: 'open', created_at: new Date().toISOString() },
+    ...db.boards,
+  ],
+});
+
+export const updateBoard = (boardId: string, patch: Partial<Database['boards'][number]>) => (db: Database): Database => ({
+  ...db,
+  boards: db.boards.map((b) => (b.id === boardId ? { ...b, ...patch } : b)),
+});
+
+/** Set exactly which products belong to a board: assign board_id to the chosen ones,
+ *  and clear it from any product that was in this board but is no longer selected. */
+export const setBoardProducts = (boardId: string, productIds: string[]) => (db: Database): Database => {
+  const chosen = new Set(productIds);
+  return {
+    ...db,
+    products: db.products.map((p) => {
+      if (chosen.has(p.id)) return p.board_id === boardId ? p : { ...p, board_id: boardId };
+      if (p.board_id === boardId) return { ...p, board_id: undefined }; // deselected → leave the board
+      return p;
+    }),
+  };
+};
+
+/** Delete a board and release its products (does not touch their status/orders). */
+export const removeBoard = (boardId: string) => (db: Database): Database => ({
+  ...db,
+  boards: db.boards.filter((b) => b.id !== boardId),
+  products: db.products.map((p) => (p.board_id === boardId ? { ...p, board_id: undefined } : p)),
+});
+
+/** Close a board: archive it + send every product in it to production (final qty =
+ *  the booked amount), cascading ticket product_status like closeProduction. */
+export const closeBoard = (boardId: string) => (db: Database): Database => {
+  const pids = new Set(db.products.filter((p) => p.board_id === boardId).map((p) => p.id));
+  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
+  return {
+    ...db,
+    boards: db.boards.map((b) => (b.id === boardId ? { ...b, status: 'closed', closed_at: new Date().toISOString() } : b)),
+    products: db.products.map((p) =>
+      pids.has(p.id) ? { ...p, status: 'production', production_qty: p.production_qty ?? orderedOf(p.id), surplus_qty: p.surplus_qty ?? 0 } : p,
+    ),
+    tickets: db.tickets.map((t) => (pids.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+  };
+};

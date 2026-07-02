@@ -22,6 +22,7 @@ export default function HomePage() {
   const hero = featured ?? db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
   const heroImg = db.settings.hero_image_url;
   const promos = db.settings.announcements ?? [];
+  const closingBoards = db.boards.filter((b) => b.status === 'open' && b.poster_url);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
   const newest = [...db.products].filter(sellable).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
 
@@ -44,6 +45,9 @@ export default function HomePage() {
 
       {/* promo / announcement carousel (admin-managed, top of home) */}
       {promos.length > 0 && <PromoCarousel promos={promos} />}
+
+      {/* closing pre-order boards (banner #2) */}
+      {closingBoards.length > 0 && <BoardBanner boards={closingBoards} />}
 
       {/* hero */}
       {hero && (
@@ -141,6 +145,43 @@ function PromoCarousel({ promos }: { promos: NonNullable<ReturnType<typeof useDa
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function BoardBanner({ boards }: { boards: ReturnType<typeof useDatabase>['boards'] }) {
+  const [i, setI] = useState(0);
+  const n = boards.length;
+  useEffect(() => {
+    if (n <= 1) return;
+    const t = setInterval(() => setI((x) => (x + 1) % n), 5000);
+    return () => clearInterval(t);
+  }, [n]);
+  const cur = i % n;
+
+  return (
+    <div className="mb-4 lg:mb-7">
+      <div className="relative overflow-hidden rounded-2xl border border-[#16a34a]/40">
+        <div className="flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${cur * 100}%)` }}>
+          {boards.map((b) => (
+            <Link key={b.id} href={`/board/${b.id}`} className="relative w-full shrink-0">
+              <img src={b.poster_url} alt={b.title} className="block h-auto w-full" />
+              {/* blinking "closing pre-order" strip */}
+              <div className="pointer-events-none absolute left-0 top-0 flex items-center gap-1.5 rounded-br-xl bg-[#16a34a] px-3 py-1.5 text-[11px] font-extrabold tracking-wide text-white [animation:ryuBlink_1.4s_ease-in-out_infinite]">
+                <Icon name="bolt" size={13} /> กำลังปิดพรี · กดดูรายการ
+              </div>
+            </Link>
+          ))}
+        </div>
+        {n > 1 && (
+          <div className="absolute inset-x-0 bottom-2.5 flex justify-center gap-1.5">
+            {boards.map((_, k) => (
+              <button key={k} onClick={() => setI(k)} aria-label={`board ${k + 1}`} className={cx('h-1.5 rounded-full transition-all', k === cur ? 'w-5 bg-white' : 'w-1.5 bg-white/50')} />
+            ))}
+          </div>
+        )}
+      </div>
+      <style>{`@keyframes ryuBlink{0%,100%{opacity:1}50%{opacity:.28}}`}</style>
     </div>
   );
 }
