@@ -23,6 +23,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
   const nav: { href: string; icon: IconName; label: string; active: boolean; badge?: number }[] = [
     { href: '/admin', icon: 'dashboard', label: 'Dashboard', active: path === '/admin' },
+    { href: '/admin/home', icon: 'home', label: 'หน้าแรก / โปรโมชั่น', active: path.startsWith('/admin/home') },
     { href: '/admin/orders', icon: 'ticket', label: 'สลิป / ออเดอร์', active: path.startsWith('/admin/orders'), badge: pending.length + pendingRP + awaitingParcel },
     { href: '/admin/products', icon: 'box', label: 'จัดการสินค้า', active: path.startsWith('/admin/products') },
     { href: '/admin/production', icon: 'swap', label: 'ปิดรอบสั่งผลิต', active: path.startsWith('/admin/production') },

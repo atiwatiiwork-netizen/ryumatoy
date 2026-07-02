@@ -291,6 +291,16 @@ export interface ShopSettings {
   // homepage hero banner (admin-controlled)
   hero_product_id?: string; // featured product; empty = auto-pick first open pre-order
   hero_image_url?: string; // custom banner image; empty = product image / placeholder
+  // homepage promo/announcement carousel (admin-controlled slides, shown above the hero)
+  announcements?: PromoBanner[];
+}
+
+/** A promo/announcement slide on the customer home carousel. */
+export interface PromoBanner {
+  id: string;
+  image_url: string;
+  link?: string; // optional: internal path (/shop/xxx) or external URL; empty = not clickable
+  caption?: string; // optional alt/label text
 }
 
 /** The whole app database as one JSON object (single source of truth). */

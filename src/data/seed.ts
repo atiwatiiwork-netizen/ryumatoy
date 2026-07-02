@@ -168,5 +168,6 @@ export const SEED_DATABASE: Database = {
     rank_gold_deposit_pct: 50,
     instock_disc_gold_type: 'percent',
     instock_disc_gold_value: 0,
+    announcements: [],
   },
 };

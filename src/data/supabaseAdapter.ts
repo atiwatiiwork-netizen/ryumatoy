@@ -123,6 +123,7 @@ export const supabaseAdapter: PersistenceAdapter = {
             instock_disc_gold_value: Number(s.instock_disc_gold_value ?? SEED_DATABASE.settings.instock_disc_gold_value),
             hero_product_id: (s.hero_product_id ?? undefined) as string | undefined,
             hero_image_url: (s.hero_image_url ?? undefined) as string | undefined,
+            announcements: (Array.isArray(s.announcements) ? s.announcements : []) as Database['settings']['announcements'],
           }
         : SEED_DATABASE.settings,
     };

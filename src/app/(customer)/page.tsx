@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
@@ -20,6 +21,7 @@ export default function HomePage() {
   const featured = db.settings.hero_product_id ? db.products.find((p) => p.id === db.settings.hero_product_id) : undefined;
   const hero = featured ?? db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
   const heroImg = db.settings.hero_image_url;
+  const promos = db.settings.announcements ?? [];
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
   const newest = [...db.products].filter(sellable).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
 
@@ -39,6 +41,9 @@ export default function HomePage() {
           <span className="absolute right-2.5 top-2.5 h-[7px] w-[7px] rounded-full bg-primary-bright" />
         </button>
       </div>
+
+      {/* promo / announcement carousel (admin-managed, top of home) */}
+      {promos.length > 0 && <PromoCarousel promos={promos} />}
 
       {/* hero */}
       {hero && (
@@ -99,6 +104,41 @@ export default function HomePage() {
       <SectionHeader title="มาใหม่ล่าสุด" href="/shop" link="ดูทั้งหมด →" />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 lg:gap-4">
         {newest.map((p) => <ProductCard key={p.id} product={p} />)}
+      </div>
+    </div>
+  );
+}
+
+function PromoCarousel({ promos }: { promos: NonNullable<ReturnType<typeof useDatabase>['settings']['announcements']> }) {
+  const [i, setI] = useState(0);
+  const n = promos.length;
+  useEffect(() => {
+    if (n <= 1) return;
+    const t = setInterval(() => setI((x) => (x + 1) % n), 4500);
+    return () => clearInterval(t);
+  }, [n]);
+  const cur = i % n;
+
+  return (
+    <div className="mb-4 lg:mb-7">
+      <div className="relative overflow-hidden rounded-2xl border border-subtle">
+        <div className="flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${cur * 100}%)` }}>
+          {promos.map((b) => {
+            const img = <img src={b.image_url} alt={b.caption ?? ''} className="h-[150px] w-full shrink-0 object-cover lg:h-[300px]" />;
+            if (!b.link) return <div key={b.id} className="w-full shrink-0">{img}</div>;
+            const external = /^https?:\/\//.test(b.link);
+            return external
+              ? <a key={b.id} href={b.link} target="_blank" rel="noopener noreferrer" className="w-full shrink-0">{img}</a>
+              : <Link key={b.id} href={b.link} className="w-full shrink-0">{img}</Link>;
+          })}
+        </div>
+        {n > 1 && (
+          <div className="absolute inset-x-0 bottom-2.5 flex justify-center gap-1.5">
+            {promos.map((_, k) => (
+              <button key={k} onClick={() => setI(k)} aria-label={`slide ${k + 1}`} className={cx('h-1.5 rounded-full transition-all', k === cur ? 'w-5 bg-white' : 'w-1.5 bg-white/50')} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
