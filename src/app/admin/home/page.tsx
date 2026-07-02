@@ -16,8 +16,6 @@ export default function AdminHomePage() {
       <div className="mb-1 text-2xl font-extrabold">หน้าแรก / โปรโมชั่น</div>
       <div className="mb-5 text-[13px] text-ink-faint">จัดการรูปสไลด์ประกาศ/โปรโมชั่นบนสุดของหน้าลูกค้า + แบนเนอร์สินค้าเด่น</div>
       <PromoManager />
-      <div className="h-4" />
-      <HeroConfig />
     </div>
   );
 }
@@ -86,47 +84,6 @@ function PromoManager() {
         {busy ? 'กำลังอัปโหลด…' : '+ เพิ่มรูปโปรโมชั่น'}
         <input type="file" accept="image/*" className="hidden" onChange={(e) => add(e.target.files?.[0])} disabled={busy} />
       </label>
-    </div>
-  );
-}
-
-// ── featured product hero (same as before, now here on the home settings page) ──
-function HeroConfig() {
-  const db = useDatabase();
-  const dispatch = useDispatch();
-  const { flash } = useToast();
-  const s = db.settings;
-  const [busy, setBusy] = useState(false);
-  const sellable = db.products.filter((p) => p.is_stock || p.status === 'open');
-
-  const onImg = async (file?: File) => {
-    if (!file) return;
-    setBusy(true);
-    try { const url = await uploadImage(file, 'banner'); dispatch(updateSettings({ hero_image_url: url })); flash('อัปโหลดรูป Banner แล้ว'); }
-    catch { flash('อัปโหลดไม่สำเร็จ'); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
-      <div className="mb-1 font-bold">แบนเนอร์สินค้าเด่น (Hero)</div>
-      <div className="mb-4 text-[12.5px] text-ink-faint">โชว์ใต้สไลด์โปรโมชั่น · เลือกสินค้าเด่น + ใส่รูปเองได้ (ถ้าไม่เลือก ระบบหยิบสินค้าเปิดจองล่าสุดให้)</div>
-      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-        <label className="block">
-          <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">สินค้าเด่น</span>
-          <select className={inputCls} value={s.hero_product_id ?? ''} onChange={(e) => dispatch(updateSettings({ hero_product_id: e.target.value || undefined }))}>
-            <option value="">— อัตโนมัติ —</option>
-            {sellable.map((p) => <option key={p.id} value={p.id}>{p.series_name}</option>)}
-          </select>
-        </label>
-        <div className="flex items-center gap-2">
-          <label className="grid h-16 w-28 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-accent bg-surface-3 text-ink-faint">
-            {busy ? <Icon name="box" size={20} className="animate-pulse" /> : s.hero_image_url ? <img src={s.hero_image_url} alt="" className="h-full w-full object-cover" /> : <Icon name="camera" size={20} />}
-            <input type="file" accept="image/*" className="hidden" onChange={(e) => onImg(e.target.files?.[0])} />
-          </label>
-          {s.hero_image_url && <button onClick={() => dispatch(updateSettings({ hero_image_url: undefined }))} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12px] text-ink-muted2">ลบรูป</button>}
-        </div>
-      </div>
     </div>
   );
 }

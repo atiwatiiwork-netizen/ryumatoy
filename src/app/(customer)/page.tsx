@@ -7,7 +7,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
-import { Button, StatusBadge, ProgressBar, cx } from '@/components/ui';
+import { StatusBadge, ProgressBar, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { paidPercent } from '@/domain/services/tickets';
 
@@ -17,10 +17,6 @@ export default function HomePage() {
   const CURRENT_USER_ID = useCurrentUserId();
   // only sellable items appear on home: in-stock, or pre-orders still open for booking
   const sellable = (p: (typeof db.products)[number]) => p.is_stock || p.status === 'open';
-  // admin-featured product wins; else auto-pick first open pre-order / in-stock
-  const featured = db.settings.hero_product_id ? db.products.find((p) => p.id === db.settings.hero_product_id) : undefined;
-  const hero = featured ?? db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
-  const heroImg = db.settings.hero_image_url;
   const promos = db.settings.announcements ?? [];
   const closingBoards = db.boards.filter((b) => b.status === 'open' && b.poster_url);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
@@ -48,36 +44,6 @@ export default function HomePage() {
 
       {/* closing pre-order boards (banner #2) */}
       {closingBoards.length > 0 && <BoardBanner boards={closingBoards} />}
-
-      {/* hero */}
-      {hero && (
-        <Link
-          href={`/shop/${hero.id}`}
-          className="relative mb-2 block overflow-hidden rounded-2xl border border-accent-soft lg:mb-7 lg:h-[300px]"
-          style={{ background: 'linear-gradient(115deg, rgba(185,28,28,.42), #160d0d 60%, #0d0809 100%)' }}
-        >
-          {heroImg && <img src={heroImg} alt="" className="absolute inset-0 h-full w-full object-cover" />}
-          {heroImg && <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(13,8,9,.92), rgba(13,8,9,.4))' }} />}
-          <div className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(255,255,255,.03)_0_12px,transparent_12px_24px)]" />
-          <div className={cx('absolute -left-9 top-5 -rotate-45 px-12 py-1 text-[10px] font-extrabold tracking-widest text-white', hero.is_stock ? 'bg-success' : 'bg-cta')}>{hero.is_stock ? 'STOCK' : 'PRE-ORDER'}</div>
-          <Icon name="box" size={300} strokeWidth={1} className="absolute -right-2 top-4 hidden text-primary/[0.13] lg:block" />
-          <div className="relative flex h-[200px] flex-col justify-end p-4 lg:h-full lg:max-w-[520px] lg:justify-center lg:pl-11">
-            <div><StatusBadge status={hero.status as StatusKey} /></div>
-            <div className="mt-2 text-[19px] font-extrabold leading-tight lg:mt-3.5 lg:text-[40px]">{hero.series_name}</div>
-            <div className="mt-0.5 text-xs text-ink-muted2 lg:mb-5 lg:mt-2.5 lg:text-sm">ETA {hero.eta_note} · จองด้วยมัดจำเพียง {baht(hero.deposit_amount)}</div>
-            <div className="mt-1 text-xl font-extrabold text-primary-soft lg:hidden">{baht(hero.price_total)}</div>
-            <div className="hidden items-center gap-5 lg:flex">
-              <Button icon="arrowRight" className="w-auto px-7 py-3">จองเลย</Button>
-              <span className="text-[28px] font-extrabold text-primary-soft">{baht(hero.price_total)}</span>
-            </div>
-          </div>
-        </Link>
-      )}
-      <div className="mb-6 flex justify-center gap-1.5 lg:hidden">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className={i === 0 ? 'h-1 w-[18px] rounded-full bg-primary-bright' : 'h-1 w-1.5 rounded-full bg-white/20'} />
-        ))}
-      </div>
 
       {/* my pre-order updates */}
       {myTickets.length > 0 && (

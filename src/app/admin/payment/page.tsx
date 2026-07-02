@@ -50,7 +50,6 @@ export default function AdminPaymentPage() {
       <div className="mb-6 text-[13px] text-ink-faint">บัญชี/QR ที่ “เปิด” จะถูกใช้แสดงให้ลูกค้าตอนชำระเงิน (ใช้ตัวแรกที่เปิดอยู่)</div>
 
       <PricingConfig />
-      <div className="mt-4"><BannerConfig /></div>
 
       <div className="mb-3 mt-6 text-lg font-extrabold">บัญชีรับเงิน / QR</div>
       <div className="grid gap-5 lg:grid-cols-[360px_1fr] lg:items-start">
@@ -87,45 +86,6 @@ export default function AdminPaymentPage() {
             ))}
             {db.paymentAccounts.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีบัญชี</div>}
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BannerConfig() {
-  const db = useDatabase();
-  const dispatch = useDispatch();
-  const { flash } = useToast();
-  const s = db.settings;
-  const [busy, setBusy] = useState(false);
-  const sellable = db.products.filter((p) => p.is_stock || p.status === 'open');
-
-  const onImg = async (file?: File) => {
-    if (!file) return;
-    setBusy(true);
-    try { const url = await uploadImage(file, 'banner'); dispatch(updateSettings({ hero_image_url: url })); flash('อัปโหลดรูป Banner แล้ว'); }
-    catch { flash('อัปโหลดไม่สำเร็จ'); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
-      <div className="mb-1 font-bold">แบนเนอร์หน้าแรก (Hero)</div>
-      <div className="mb-4 text-[12.5px] text-ink-faint">เลือกสินค้าเด่นที่จะโชว์ + ใส่รูปแบนเนอร์เองได้ (ถ้าไม่เลือก ระบบจะหยิบสินค้าเปิดจองล่าสุดให้)</div>
-      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-        <Field label="สินค้าเด่น">
-          <select className={inputCls} value={s.hero_product_id ?? ''} onChange={(e) => dispatch(updateSettings({ hero_product_id: e.target.value || undefined }))}>
-            <option value="">— อัตโนมัติ —</option>
-            {sellable.map((p) => <option key={p.id} value={p.id}>{p.series_name}</option>)}
-          </select>
-        </Field>
-        <div className="flex items-center gap-2">
-          <label className="grid h-16 w-28 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-accent bg-surface-3 text-ink-faint">
-            {busy ? <Icon name="box" size={20} className="animate-pulse" /> : s.hero_image_url ? <img src={s.hero_image_url} alt="" className="h-full w-full object-cover" /> : <Icon name="camera" size={20} />}
-            <input type="file" accept="image/*" className="hidden" onChange={(e) => onImg(e.target.files?.[0])} />
-          </label>
-          {s.hero_image_url && <button onClick={() => dispatch(updateSettings({ hero_image_url: undefined }))} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12px] text-ink-muted2">ลบรูป</button>}
         </div>
       </div>
     </div>
