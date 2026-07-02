@@ -9,6 +9,7 @@ const ERR: Record<string, string> = {
   phone_taken: 'เบอร์นี้สมัครไว้แล้ว', fb_taken: 'ลิงก์ Facebook นี้ถูกใช้แล้ว', bad_pin: 'PIN ต้องมี 6 หลัก',
   not_found: 'ไม่พบเบอร์นี้ หรือ PIN ไม่ถูกต้อง', wrong_pin: 'PIN ไม่ถูกต้อง', locked: 'ใส่ PIN ผิดหลายครั้ง — ล็อก 15 นาที',
   not_allowed: 'ยังไม่ได้ขอรีเซ็ต PIN — ติดต่อแอดมินก่อน', no_server: 'ระบบยังไม่พร้อม',
+  confirm_email_on: 'ระบบยืนยันอีเมลยังเปิดอยู่ — แอดมินต้องปิด "Confirm email" ใน Supabase',
 };
 const digits = (s: string) => s.replace(/\D/g, '');
 

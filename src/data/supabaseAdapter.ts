@@ -156,8 +156,12 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]);
     await syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name');
 
-    const { error } = await sb.from('shop_settings').upsert({ id: 'default', ...next.settings });
-    if (error) throw error;
+    // Only write settings when they actually changed — otherwise every customer
+    // save would try to upsert shop_settings, which RLS blocks for non-admins.
+    if (JSON.stringify(next.settings) !== JSON.stringify(base.settings)) {
+      const { error } = await sb.from('shop_settings').upsert({ id: 'default', ...next.settings });
+      if (error) throw error;
+    }
   },
 
   async reset(): Promise<Database> {

@@ -22,6 +22,7 @@ export class Store {
   private ready = false;
   private timer?: ReturnType<typeof setTimeout>;
   private saving: Promise<void> = Promise.resolve();
+  private reloadSeq = 0;
 
   constructor(private adapter: PersistenceAdapter) {}
 
@@ -67,6 +68,27 @@ export class Store {
   reset = async (): Promise<void> => {
     this.db = await this.adapter.reset();
     this.lastSynced = this.db;
+    this.emit();
+  };
+
+  // Re-fetch from the backend with whatever auth session is now active. Called on
+  // login/logout so RLS-filtered rows (own orders/tickets) appear or disappear.
+  // Sequence-guarded: concurrent reloads can race (e.g. the auth-change listener vs
+  // an explicit reload right after signup). Only the most-recently-STARTED reload is
+  // applied, so a stale in-flight fetch can never clobber fresher data.
+  reload = async (): Promise<void> => {
+    const seq = ++this.reloadSeq;
+    let data: Database;
+    try {
+      data = await this.adapter.load();
+    } catch (err) {
+      console.error('[store] reload failed', err);
+      return;
+    }
+    if (seq !== this.reloadSeq) return; // superseded by a newer reload
+    this.db = data;
+    this.lastSynced = this.db;
+    this.ready = true;
     this.emit();
   };
 

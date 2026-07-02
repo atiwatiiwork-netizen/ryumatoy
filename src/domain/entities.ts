@@ -237,6 +237,8 @@ export interface User {
   member_code?: string; // RYU-000x, assigned by admin on approval (reference only, not a login secret)
   fb_link?: string; // Facebook profile link/name given at signup (admin cross-checks)
   pin_reset?: boolean; // admin allowed this user to set a new PIN (forgot-PIN flow)
+  auth_id?: string; // Supabase Auth uid (uuid) this app-user is linked to; RLS keys on it
+  is_admin?: boolean; // server-side admin flag (used by RLS is_app_admin())
   // captured after admin approval (phone required = login id, address required, line optional)
   phone?: string;
   shipping_address?: string;
