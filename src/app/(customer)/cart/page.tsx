@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
+import { depositForRank } from '@/domain/services/ranks';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProductThumb, cx } from '@/components/ui';
@@ -15,14 +17,24 @@ export default function CartPage() {
   const cart = useCart();
   const { flash } = useToast();
   const [code, setCode] = useState('');
+  const CURRENT_USER_ID = useCurrentUserId();
+  const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
 
-  const depositSum = cart.depositTotal();
+  // effective per-unit deposit shown to the member — pre-orders get the rank perk
+  // (e.g. Gold pays 50%), matching exactly what submitOrder writes to the order.
+  const unitDeposit = (l: (typeof cart.lines)[number]) => {
+    const p = db.products.find((pp) => pp.id === l.productId);
+    return p && !p.is_stock ? depositForRank(db.settings, l.depositEach, myRank) : l.depositEach;
+  };
+  const depositSum = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
   const payNow = depositSum;
+  // back to wherever the customer came from (board / shop / etc.), not always the menu
+  const goBack = () => { if (typeof window !== 'undefined' && window.history.length > 1) router.back(); else router.push('/shop'); };
 
   if (cart.lines.length === 0) {
     return (
       <div className="mx-auto max-w-[640px]">
-        <BackBar title="ตะกร้า" onBack={() => router.push('/shop')} />
+        <BackBar title="ตะกร้า" onBack={goBack} />
         <div className="py-16 text-center text-ink-faint">
           <Icon name="cart" size={44} className="mx-auto mb-3.5 text-ink-faint" />
           <div className="text-[15px]">ตะกร้าว่างเปล่า</div>
@@ -34,7 +46,7 @@ export default function CartPage() {
 
   return (
     <div className="mx-auto max-w-[640px]">
-      <BackBar title="ตะกร้า" onBack={() => router.push('/shop')} />
+      <BackBar title="ตะกร้า" onBack={goBack} />
 
       <div className="mb-[18px] flex flex-col gap-2.5">
         {cart.lines.map((l) => {
@@ -54,7 +66,7 @@ export default function CartPage() {
                 </span>
                 <div className="mt-2 flex items-center justify-between">
                   <Stepper qty={l.qty} onChange={(q) => cart.setQty(l.productId, l.variantId, q)} />
-                  <span className="text-sm font-bold text-primary-soft">{baht(l.depositEach * l.qty)}</span>
+                  <span className="text-sm font-bold text-primary-soft">{baht(unitDeposit(l) * l.qty)}</span>
                 </div>
               </div>
             </div>

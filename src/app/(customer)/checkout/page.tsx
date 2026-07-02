@@ -12,6 +12,7 @@ import { reserveStock, payReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
+import { depositForRank } from '@/domain/services/ranks';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -24,7 +25,13 @@ export default function CheckoutPage() {
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const payNow = cart.depositTotal();
+  const myRank = db.users.find((u) => u.id === currentUserId)?.rank ?? 'bronze';
+  // pre-orders get the member's rank deposit perk (Gold 50%) — same as submitOrder writes
+  const unitDeposit = (l: (typeof cart.lines)[number]) => {
+    const p = db.products.find((pp) => pp.id === l.productId);
+    return p && !p.is_stock ? depositForRank(db.settings, l.depositEach, myRank) : l.depositEach;
+  };
+  const payNow = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
@@ -102,7 +109,7 @@ export default function CheckoutPage() {
           return (
             <div key={l.productId + (l.variantId ?? '')} className="flex justify-between gap-2.5 py-1 text-[13px]">
               <span className="text-ink-muted2">{product.series_name}{variant ? ` · ${variant.name}` : ''} ×{l.qty}</span>
-              <span className="font-semibold">{baht(l.depositEach * l.qty)}</span>
+              <span className="font-semibold">{baht(unitDeposit(l) * l.qty)}</span>
             </div>
           );
         })}
