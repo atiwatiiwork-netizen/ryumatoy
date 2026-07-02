@@ -13,6 +13,33 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+/** Download the (already-watermarked) image with the status ribbon baked in — so
+ *  the saved file carries BOTH the RyumaToy watermark and the PRE-ORDER/STOCK ribbon. */
+export async function downloadBranded(src: string, isStock: boolean, name: string): Promise<void> {
+  try {
+    const img = await loadImage(src);
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d'); if (!ctx) return;
+    ctx.drawImage(img, 0, 0, w, h);
+    const s = Math.max(w, h); const fs = Math.max(12, Math.round(s * 0.024));
+    ctx.save();
+    ctx.translate(s * 0.135, s * 0.135); ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = isStock ? '#16a34a' : '#dc2626';
+    ctx.fillRect(-s * 0.3, -fs, s * 0.6, fs * 2);
+    ctx.fillStyle = '#fff'; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(isStock ? 'STOCK' : 'PRE-ORDER', 0, 1);
+    ctx.restore();
+    const blob: Blob | null = await new Promise((r) => c.toBlob((b) => r(b), 'image/png', 0.95));
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (name || 'ryuma').replace(/\s+/g, '_') + '.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { /* ignore */ }
+}
+
 export async function applyWatermark(file: File): Promise<File> {
   const url = URL.createObjectURL(file);
   try {

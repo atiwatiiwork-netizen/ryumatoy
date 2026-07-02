@@ -12,6 +12,7 @@ import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui'
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
 import { instockPriceFor } from '@/domain/services/ranks';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
+import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 
@@ -66,7 +67,12 @@ export default function ProductDetailPage() {
         }
       />
 
-      <div className="mb-3.5"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} big /></div>
+      <div className="mb-2"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} big /></div>
+      {product.images[0] && (
+        <button onClick={() => downloadBranded(product.images[0], product.is_stock, product.series_name)} className="mb-3.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-muted2">
+          <Icon name="share" size={15} /> เซฟรูป (ติดแบรนด์ + ป้าย)
+        </button>
+      )}
       {product.images.length > 1 && (
         <div className="mb-3.5 flex gap-2 overflow-x-auto no-scrollbar">
           {product.images.map((img, i) => (
