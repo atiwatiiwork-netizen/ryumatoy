@@ -39,10 +39,15 @@ export default function AdminMembersPage() {
     flash('อนุญาตตั้ง PIN ใหม่แล้ว · แจ้งลูกค้าให้กด "ลืม PIN" ตั้งใหม่ได้');
   };
 
-  const del = (u: User) => {
-    if (!confirm(`ลบสมาชิก "${u.display_name}" ?\n(ใบพรี/ออเดอร์เดิมจะไม่ถูกลบ)`)) return;
+  const del = async (u: User) => {
+    if (!confirm(`ลบสมาชิก "${u.display_name}" ออกถาวร?\n\nจะลบ: โปรไฟล์ + บัญชีเข้าสู่ระบบ (เบอร์+PIN) + ออเดอร์/ใบพรี/รายการทั้งหมด\nกู้คืนไม่ได้ — ลูกค้าต้องสมัครใหม่ทั้งหมด`)) return;
+    if (supabase) {
+      const { data, error } = await supabase.rpc('ryuma_admin_purge_user', { p_user_id: u.id });
+      const res = (data ?? {}) as { ok?: boolean; error?: string };
+      if (error || !res.ok) return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : `ลบไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
+    }
     dispatch(removeUser(u.id));
-    flash('ลบสมาชิกแล้ว');
+    flash(`ลบ "${u.display_name}" ออกเกลี้ยงแล้ว — ต้องสมัครใหม่`);
     if (openId === u.id) setOpenId(null);
   };
 
