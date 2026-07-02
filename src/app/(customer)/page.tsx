@@ -14,9 +14,11 @@ import { paidPercent } from '@/domain/services/tickets';
 export default function HomePage() {
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
-  const hero = db.products.filter((p) => !p.is_stock)[0];
+  // only sellable items appear on home: in-stock, or pre-orders still open for booking
+  const sellable = (p: (typeof db.products)[number]) => p.is_stock || p.status === 'open';
+  const hero = db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
-  const newest = [...db.products].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
+  const newest = [...db.products].filter(sellable).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
 
   return (
     <div>

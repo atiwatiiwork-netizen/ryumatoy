@@ -45,7 +45,8 @@ export default function ShopPage() {
     return true;
   });
 
-  const preorderCount = db.products.filter((p) => !p.is_stock).length;
+  // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
+  const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
   // ประเภท offered on the storefront = active categories only
   const activeCategories = db.categories.filter((c) => c.active);
