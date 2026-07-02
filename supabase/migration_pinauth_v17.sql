@@ -24,7 +24,7 @@ create sequence if not exists member_seq start 1;
 
 -- ── signup: create a PENDING user + hashed PIN. Rejects duplicate phone/FB. ──
 create or replace function ryuma_signup(p_name text, p_phone text, p_fb text, p_pin text)
-returns json language plpgsql security definer set search_path = public as $$
+returns json language plpgsql security definer set search_path = public, extensions as $$
 declare v_id text;
 begin
   if length(coalesce(p_pin,'')) <> 6 then return json_build_object('error','bad_pin'); end if;
@@ -39,7 +39,7 @@ end $$;
 
 -- ── login: verify PIN with lockout ──
 create or replace function ryuma_login(p_phone text, p_pin text)
-returns json language plpgsql security definer set search_path = public as $$
+returns json language plpgsql security definer set search_path = public, extensions as $$
 declare v_user users; v_sec user_secrets;
 begin
   select * into v_user from users where phone = p_phone;
@@ -63,7 +63,7 @@ end $$;
 
 -- ── admin approve → mark approved + assign RYU-000x (sequential) ──
 create or replace function ryuma_approve(p_user_id text)
-returns json language plpgsql security definer set search_path = public as $$
+returns json language plpgsql security definer set search_path = public, extensions as $$
 declare v_code text;
 begin
   select member_code into v_code from users where id = p_user_id;
@@ -74,7 +74,7 @@ end $$;
 
 -- ── forgot PIN: user sets a new PIN, allowed only after admin set users.pin_reset ──
 create or replace function ryuma_set_new_pin(p_phone text, p_new_pin text)
-returns json language plpgsql security definer set search_path = public as $$
+returns json language plpgsql security definer set search_path = public, extensions as $$
 declare v_user users;
 begin
   if length(coalesce(p_new_pin,'')) <> 6 then return json_build_object('error','bad_pin'); end if;

@@ -30,7 +30,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   const { flash } = useToast();
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
-  const { needsApproval } = useAuth();
+  const { needsApproval, isLoggedIn } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   const isActive = (href: string) =>
     href === '/' ? path === '/' : path.startsWith(href);
@@ -66,8 +66,8 @@ export function CustomerShell({ children }: { children: ReactNode }) {
             {count > 0 && <span className="absolute -right-1.5 -top-1.5 rounded-full bg-primary-bright px-1.5 text-[10px] font-bold text-white">{count}</span>}
           </Link>
           <Link href="/profile" className="flex items-center gap-2.5 rounded-full border border-subtle bg-surface-3 py-[5px] pl-[5px] pr-3.5 text-ink">
-            <span className="grid h-8 w-8 place-items-center rounded-full bg-primary text-sm font-bold">{me?.display_name.charAt(0) ?? 'R'}</span>
-            <span className="text-[13.5px] font-semibold">ลงขาย</span>
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-primary text-sm font-bold">{isLoggedIn ? (me?.display_name.charAt(0) ?? '?') : <Icon name="user" size={16} />}</span>
+            <span className="text-[13.5px] font-semibold">{isLoggedIn ? (me?.member_code ?? me?.display_name ?? 'โปรไฟล์') : 'เข้าสู่ระบบ'}</span>
           </Link>
         </div>
       </header>
