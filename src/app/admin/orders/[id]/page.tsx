@@ -101,9 +101,9 @@ export default function SlipApprovalPage() {
           </div>
 
           {!approved && (
-            <div className="mb-4 flex items-center gap-2 rounded-[10px] border border-dashed border-[#16a34a]/50 px-3 py-2.5 text-[12.5px] text-[#4ade80]">
-              <Icon name="verified" size={17} className="text-[#4ade80]" />
-              <span>ตรงกับยอดสลิป ✓ · จะออก Ticket: <b className="font-mono">{nextTk}</b></span>
+            <div className="mb-4 flex items-center gap-2 rounded-[10px] border border-dashed border-[#f59e0b]/50 px-3 py-2.5 text-[12.5px] text-[#fbbf24]">
+              <Icon name="bell" size={17} className="text-[#fbbf24]" />
+              <span>โปรดตรวจสลิปกับยอด {baht(order.total_deposit)} ก่อนกดอนุมัติ · จะออก Ticket: <b className="font-mono">{nextTk}</b></span>
             </div>
           )}
 
