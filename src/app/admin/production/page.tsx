@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
@@ -18,6 +18,8 @@ export default function ProductionPage() {
   const [makerId, setMakerId] = useState(db.manufacturers[0]?.id ?? '');
   const [sel, setSel] = useState<Record<string, boolean>>({});
   const [qty, setQty] = useState<Record<string, string>>({});
+  // after the real data loads, the seeded default id may not exist → snap to a valid maker
+  useEffect(() => { if (db.manufacturers.length && !db.manufacturers.some((m) => m.id === makerId)) setMakerId(db.manufacturers[0].id); }, [db.manufacturers, makerId]);
 
   // open pre-orders (still accepting orders) for the chosen ค่าย
   const items = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status === 'open');

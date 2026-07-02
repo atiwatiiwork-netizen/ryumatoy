@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { RANK } from '@/lib/theme';
@@ -26,6 +26,8 @@ export default function AdminRanksPage() {
   // grant form
   const [grantUser, setGrantUser] = useState(db.users[0]?.id ?? '');
   const [grantTo, setGrantTo] = useState<RankName>('gold');
+  // the seeded default user id won't exist after the real data loads → snap to a valid one
+  useEffect(() => { if (db.users.length && !db.users.some((u) => u.id === grantUser)) setGrantUser(db.users[0].id); }, [db.users, grantUser]);
 
   return (
     <div>

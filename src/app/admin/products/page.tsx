@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -117,6 +117,7 @@ function Manufacturers() {
   const [categoryId, setCategoryId] = useState(db.categories[0]?.id ?? '');
   const [logo, setLogo] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!id && db.categories.length && !db.categories.some((c) => c.id === categoryId)) setCategoryId(db.categories[0].id); }, [db.categories, categoryId, id]);
 
   const reset = () => { setId(null); setName(''); setCategoryId(db.categories[0]?.id ?? ''); setLogo(undefined); };
   const save = () => {
@@ -235,6 +236,7 @@ function SeriesTab() {
   const [name, setName] = useState('');
   const [franchiseId, setFranchiseId] = useState(db.franchises[0]?.id ?? '');
   const [makers, setMakers] = useState<string[]>([]);
+  useEffect(() => { if (!id && db.franchises.length && !db.franchises.some((f) => f.id === franchiseId)) setFranchiseId(db.franchises[0].id); }, [db.franchises, franchiseId, id]);
 
   const reset = () => { setId(null); setName(''); setFranchiseId(db.franchises[0]?.id ?? ''); setMakers([]); };
   const toggleMaker = (mid: string) => setMakers((arr) => (arr.includes(mid) ? arr.filter((x) => x !== mid) : [...arr, mid]));
@@ -294,6 +296,7 @@ const STATUS_GROUPS: ProductStatus[] = ['open', 'production', 'shipping', 'arriv
 function LotStatus() {
   const db = useDatabase();
   const [makerId, setMakerId] = useState(db.manufacturers[0]?.id ?? '');
+  useEffect(() => { if (db.manufacturers.length && !db.manufacturers.some((m) => m.id === makerId)) setMakerId(db.manufacturers[0].id); }, [db.manufacturers, makerId]);
   const lots = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status !== 'closed');
   return (
     <div className="max-w-[720px]">
@@ -457,6 +460,15 @@ function Products() {
   const [imgBusy, setImgBusy] = useState(false);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
+  // when adding, snap the default เรื่อง/ค่าย to valid ids once real data loads (avoid orphan on save)
+  useEffect(() => {
+    if (editing) return;
+    setDraft((d) => {
+      const f = db.franchises.some((x) => x.id === d.franchise_id) ? d.franchise_id : (db.franchises[0]?.id ?? '');
+      const m = db.manufacturers.some((x) => x.id === d.manufacturer_id) ? d.manufacturer_id : (db.manufacturers[0]?.id ?? '');
+      return f === d.franchise_id && m === d.manufacturer_id ? d : { ...d, franchise_id: f, manufacturer_id: m };
+    });
+  }, [db.franchises, db.manufacturers, editing]);
   // WCF/Mega → auto deposit ; yuan cost → auto selling price
   const setWcfType = (t: WcfType) => setDraft((d) => ({ ...d, wcf_type: t, deposit_amount: String(depositFor(st, t)) }));
   const setYuan = (v: string) => setDraft((d) => ({ ...d, cost_yuan: v, price_total: v ? String(priceFromYuan(st, Number(v) || 0)) : d.price_total }));
