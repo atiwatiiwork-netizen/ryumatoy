@@ -35,12 +35,20 @@ export class Store {
   };
 
   init = async (): Promise<void> => {
+    // Seq-guarded like reload(): if a session-aware reload (from AuthProvider) starts
+    // while this initial anon load is still in flight, don't let this stale anon result
+    // clobber it. Under RLS the anon load returns no private rows, so clobbering would
+    // leave the logged-in user's own row missing (me = undefined → stuck loading).
+    const seq = ++this.reloadSeq;
     try {
-      this.db = await this.adapter.load();
+      const data = await this.adapter.load();
+      if (seq === this.reloadSeq) {
+        this.db = data;
+        this.lastSynced = data;
+      }
     } catch (err) {
       console.error('[store] load failed — using in-memory seed', err);
     }
-    this.lastSynced = this.db;
     this.ready = true;
     this.emit();
   };

@@ -88,9 +88,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isLoggedIn = authUser != null;
   const isAdmin = isLoggedIn && (ADMIN_IDS.includes(currentUserId) || me?.is_admin === true);
   const isApproved = !isLoggedIn || isAdmin || me?.approved !== false;
-  // flow: login → (if not approved) wait → (approved) fill address → in
-  const needsApproval = isLoggedIn && !isAdmin && me?.approved === false;
-  const needsProfile = isLoggedIn && !isAdmin && me?.approved !== false && !me?.shipping_address;
+  // flow: login → (if not approved) wait → (approved) fill address → in.
+  // Gate on `me != null`: while the logged-in user's own row is still loading, don't
+  // flash the wrong gate (needsProfile would otherwise default true when me is undefined).
+  const needsApproval = isLoggedIn && !isAdmin && me != null && me.approved === false;
+  const needsProfile = isLoggedIn && !isAdmin && me != null && me.approved !== false && !me.shipping_address;
 
   const loginPhone = useCallback(async (phone: string, pin: string): Promise<RpcResult> => {
     if (!supabase) return { error: 'no_server' };
