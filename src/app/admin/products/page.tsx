@@ -437,6 +437,8 @@ interface Draft {
   cost_yuan: string;
   description: string;
   eta_note: string;
+  eta_q: string;   // '', 'Q1'..'Q4'
+  eta_year: string; // '', '2026'..
   price_total: string;
   deposit_amount: string;
   is_stock: boolean;
@@ -451,7 +453,7 @@ interface Draft {
   variants: { id?: string; name: string; price: string }[]; // price blank = same as product
 }
 const emptyDraft = (fid: string, mid: string, deposit: number): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [], height_cm: '', width_cm: '', depth_cm: '', variants: [],
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', eta_q: '', eta_year: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [], height_cm: '', width_cm: '', depth_cm: '', variants: [],
 });
 
 function Products() {
@@ -489,22 +491,28 @@ function Products() {
 
   const save = () => {
     if (!draft.franchise_id || !draft.manufacturer_id) return flash('เลือกเรื่อง + ค่าย');
-    if (!draft.series_name.trim()) return flash('กรอกชื่อสินค้า');
+    if (!draft.series_name.trim()) return flash('กรอกชื่อตัวละคร');
     const price = Number(draft.price_total) || 0;
     if (price <= 0) return flash('กรอกราคาเต็ม');
     const existing = draft.id ? db.products.find((p) => p.id === draft.id) : undefined;
+    // final title = "ชื่อตัวละคร - ซีรีย์" (ซีรีย์เป็น platform grouping); ETA = "Q3 2026"
+    const character = draft.series_name.trim();
+    const seriesName = seriesOptions.find((s) => s.id === draft.series_id)?.name;
+    const finalName = seriesName ? `${character} - ${seriesName}` : character;
+    const etaNote = draft.eta_q && draft.eta_year ? `${draft.eta_q} ${draft.eta_year}` : (draft.is_stock ? 'พร้อมส่ง' : 'TBA');
     const product: Product = {
       id: draft.id ?? genId('p'),
       franchise_id: draft.franchise_id,
       manufacturer_id: draft.manufacturer_id,
       series_id: draft.series_id || undefined,
-      series_name: draft.series_name.trim(),
+      series_name: finalName,
+      character_name: character || undefined,
       wcf_type: draft.wcf_type,
       cost_yuan: draft.cost_yuan ? Number(draft.cost_yuan) : undefined,
       type: 'other',
       description: draft.description.trim(),
       images: draft.images,
-      eta_note: draft.eta_note.trim() || (draft.is_stock ? 'พร้อมส่ง' : 'TBA'),
+      eta_note: etaNote,
       price_total: price,
       deposit_amount: draft.is_stock ? price : (Number(draft.deposit_amount) || 0),
       is_stock: draft.is_stock,
@@ -526,16 +534,19 @@ function Products() {
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
   };
 
-  const edit = (p: Product) => setDraft({
+  const edit = (p: Product) => {
+    const m = /^(Q[1-4])\s+(\d{4})$/.exec(p.eta_note ?? '');
+    setDraft({
     id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
-    series_name: p.series_name, wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
-    description: p.description, eta_note: p.eta_note,
+    series_name: p.character_name ?? p.series_name, wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
+    description: p.description, eta_note: p.eta_note, eta_q: m?.[1] ?? '', eta_year: m?.[2] ?? '',
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
     tracking_no: p.tracking_no ?? '', shipped_at: p.shipped_at ? p.shipped_at.slice(0, 10) : '', images: p.images ?? [],
     height_cm: p.height_cm != null ? String(p.height_cm) : '', width_cm: p.width_cm != null ? String(p.width_cm) : '', depth_cm: p.depth_cm != null ? String(p.depth_cm) : '',
     variants: variantsOf(db, p.id).map((v) => ({ id: v.id, name: v.name ?? '', price: v.price_total != null ? String(v.price_total) : '' })),
-  });
+    });
+  };
 
   const del = (p: Product) => {
     if (db.tickets.some((t) => t.product_id === p.id) || db.orders.some((o) => o.items.some((i) => i.product_id === p.id))) return flash('ลบไม่ได้ — มีใบพรี/ออเดอร์อ้างอิง');
@@ -563,7 +574,14 @@ function Products() {
               </select>
               <span className="mt-1 block text-[11px] text-ink-faint">เฉพาะซีรีย์ที่ค่ายนี้ทำ ({seriesOptions.length})</span>
             </Field>
-            <Field label="ชื่อสินค้า"><input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Luffy — Thriller Park" /></Field>
+            <Field label="ชื่อตัวละคร">
+              <input className={inputCls} value={draft.series_name} onChange={(e) => set('series_name', e.target.value)} placeholder="เช่น Nico Robin" />
+              {draft.series_name.trim() && (() => {
+                const sn = seriesOptions.find((s) => s.id === draft.series_id)?.name;
+                const full = sn ? `${draft.series_name.trim()} - ${sn}` : draft.series_name.trim();
+                return <span className="mt-1 block text-[11px] text-primary-soft">ชื่อสินค้า: {full}</span>;
+              })()}
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ชนิด (มัดจำ)">
                 <select className={inputCls} value={draft.wcf_type} onChange={(e) => setWcfType(e.target.value as WcfType)}>
@@ -605,7 +623,19 @@ function Products() {
                 ? <Field label="จำนวนสต็อก"><input className={inputCls} inputMode="numeric" value={draft.stock_qty} onChange={(e) => set('stock_qty', e.target.value)} placeholder="5" /></Field>
                 : <Field label="มัดจำ (฿)"><input className={inputCls} inputMode="numeric" value={draft.deposit_amount} onChange={(e) => set('deposit_amount', e.target.value)} placeholder="590" /></Field>}
             </div>
-            <Field label="กำหนดการ (ETA)"><input className={inputCls} value={draft.eta_note} onChange={(e) => set('eta_note', e.target.value)} placeholder="เช่น Q3 2026" /></Field>
+            <Field label="กำหนดการ (ETA)">
+              <div className="grid grid-cols-2 gap-2">
+                <select className={inputCls} value={draft.eta_q} onChange={(e) => set('eta_q', e.target.value)}>
+                  <option value="">ไตรมาส —</option>
+                  {['Q1', 'Q2', 'Q3', 'Q4'].map((q) => <option key={q} value={q}>{q}</option>)}
+                </select>
+                <select className={inputCls} value={draft.eta_year} onChange={(e) => set('eta_year', e.target.value)}>
+                  <option value="">ปี —</option>
+                  {Array.from({ length: 5 }, (_, i) => String(new Date().getFullYear() + i)).map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <span className="mt-1 block text-[11px] text-ink-faint">ไม่เลือก = {draft.is_stock ? 'พร้อมส่ง' : 'TBA'}</span>
+            </Field>
 
             {/* size (cm): height = primary; width/depth optional (hidden on card when empty) */}
             <div>

@@ -62,8 +62,9 @@ export interface Product {
   id: string;
   franchise_id: string; // เรื่อง
   manufacturer_id: string; // ค่าย
-  series_id?: string; // ซีรีย์ (optional)
-  series_name: string; // ชื่อสินค้า (display title)
+  series_id?: string; // ซีรีย์ / arc (optional) — acts as a "platform" grouping
+  series_name: string; // final display title = "ชื่อตัวละคร - ซีรีย์" (composed at save)
+  character_name?: string; // the raw character name typed by admin (kept for editing round-trip)
   wcf_type?: WcfType; // WCF (มัดจำ 300) | Mega WCF (มัดจำ 500)
   cost_yuan?: number; // ต้นทุนหยวน (used by the price calculator)
   type: ProductType;
