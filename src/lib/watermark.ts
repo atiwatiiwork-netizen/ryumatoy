@@ -35,33 +35,49 @@ export async function applyWatermark(file: File): Promise<File> {
       avg = sum / (d.length / 4);
     } catch { /* tainted canvas → keep default */ }
     const dark = avg < 128;
-    const ink = dark ? 'rgba(255,255,255,0.9)' : 'rgba(18,18,18,0.82)';
-
+    const ink = dark ? 'rgba(255,255,255,0.95)' : 'rgba(18,18,18,0.9)';
     const s = Math.max(w, h);
-    const fs = Math.max(11, Math.round(s * 0.026));
+    const fs = Math.max(12, Math.round(s * 0.03));
     const pad = Math.round(s * 0.022);
-    const r = fs * 0.72;
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = dark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.55)';
-    ctx.shadowBlur = fs * 0.35;
 
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    // load the real Ryuma logo and KEY OUT its black background (alpha = brightness)
+    let logoCanvas: HTMLCanvasElement | null = null;
+    try {
+      const logo = await loadImage('/ryuma-logo.png');
+      const lw = logo.naturalWidth || logo.width, lh = logo.naturalHeight || logo.height;
+      const lc = document.createElement('canvas'); lc.width = lw; lc.height = lh;
+      const lx = lc.getContext('2d');
+      if (lx) {
+        lx.drawImage(logo, 0, 0);
+        const ld = lx.getImageData(0, 0, lw, lh); const d = ld.data;
+        for (let i = 0; i < d.length; i += 4) d[i + 3] = Math.max(d[i], d[i + 1], d[i + 2]); // black→transparent, red stays
+        lx.putImageData(ld, 0, 0);
+        logoCanvas = lc;
+      }
+    } catch { /* logo missing → text only */ }
+
     const text = 'RyumaToy';
+    ctx.font = `600 ${fs}px system-ui, sans-serif`;
     const textW = ctx.measureText(text).width;
-    const cy = h - pad - r;
-    const startX = w - pad - textW - r * 2 - fs * 0.35;
-
-    // circle "R" badge
-    ctx.strokeStyle = ink; ctx.lineWidth = Math.max(1.2, fs * 0.1);
-    ctx.beginPath(); ctx.arc(startX + r, cy, r, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = ink; ctx.textAlign = 'center';
-    ctx.font = `600 ${Math.round(fs * 0.86)}px system-ui, sans-serif`;
-    ctx.fillText('R', startX + r, cy + fs * 0.02);
+    const rightX = w - pad;
+    const textY = h - pad;                       // text baseline (bottom)
+    const centerX = rightX - textW / 2;          // stack centred over the word
 
     // wordmark
-    ctx.textAlign = 'left';
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
-    ctx.fillText(text, startX + r * 2 + fs * 0.35, cy);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'right';
+    ctx.shadowColor = dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
+    ctx.shadowBlur = fs * 0.4;
+    ctx.fillStyle = ink;
+    ctx.fillText(text, rightX, textY);
+
+    // logo above the word (keyed, brand red, soft shadow for contrast)
+    if (logoCanvas) {
+      const logoSize = Math.round(fs * 2.9);
+      const gap = Math.round(fs * 0.2);
+      ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = fs * 0.5;
+      ctx.drawImage(logoCanvas, centerX - logoSize / 2, textY - fs - gap - logoSize, logoSize, logoSize);
+    }
 
     const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), 'image/png', 0.92));
     if (!blob) return file;
