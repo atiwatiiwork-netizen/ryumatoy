@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
+import { ProductCard } from '@/components/ProductCard';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
@@ -48,6 +50,12 @@ export default function ProductDetailPage() {
   const shownDeposit = product.is_stock ? price : depositForRank(db.settings, rawDeposit, myRank);
   const memberSaved = product.is_stock && price < rawPrice;
   const fr = franchiseOf(db, product);
+  // "อื่นๆ ในซีรีย์นี้" — other bookable/in-stock products sharing this series (arc)
+  const series = seriesOf(db, product);
+  const seriesLink = product.series_id ? `/shop?franchise=${product.franchise_id}&series=${product.series_id}` : null;
+  const seriesMates = product.series_id
+    ? db.products.filter((p) => p.series_id === product.series_id && p.id !== product.id && (p.is_stock || p.status === 'open')).slice(0, 10)
+    : [];
   // live availability for limited-qty items (in-stock / batch) — reservation-aware
   const limited = batch ? true : product.is_stock;
   const avail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
@@ -92,6 +100,11 @@ export default function ProductDetailPage() {
         : <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} />}
       <div className="mb-0.5 mt-2 font-mono text-[11px] text-ink-faint">{manufacturerNameOf(db, product)} · {fr?.name}{categoryOf(db, product) ? ` · ${categoryOf(db, product)!.name}` : ''}{seriesOf(db, product) ? ` · ${seriesOf(db, product)!.name}` : ''}</div>
       <div className="text-[22px] font-extrabold leading-tight">{product.series_name}</div>
+      {series && seriesLink && (
+        <Link href={seriesLink} className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-subtle bg-surface-3 px-3 py-1 text-[12px] font-semibold text-ink-muted2">
+          <Icon name="tag" size={13} className="text-primary-soft" /> ซีรีย์ {series.name} · ดูตัวอื่น →
+        </Link>
+      )}
       <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>
       {dimensionLabel(product) && <div className="mb-1.5 text-[13.5px] font-semibold text-ink-muted">{dimensionLabel(product)}</div>}
       {product.description && <div className="mb-4 text-[13.5px] leading-relaxed text-ink-muted2">{product.description}</div>}
@@ -138,6 +151,21 @@ export default function ProductDetailPage() {
         <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
         <Button onClick={addToCart} icon="cart" disabled={soldOut}>{soldOut ? 'สินค้าหมด' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}</Button>
       </div>
+
+      {/* others in the same series (arc) — collect the set */}
+      {seriesMates.length > 0 && (
+        <div className="mt-9">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-[17px] font-extrabold">👥 อื่นๆ ในซีรีย์ {series?.name}</div>
+            {seriesLink && <Link href={seriesLink} className="text-[13px] font-semibold text-primary-soft">ดูทั้งหมด →</Link>}
+          </div>
+          <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 no-scrollbar">
+            {seriesMates.map((p) => (
+              <div key={p.id} className="w-[150px] shrink-0"><ProductCard product={p} /></div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

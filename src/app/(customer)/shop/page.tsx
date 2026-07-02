@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
@@ -17,12 +18,18 @@ const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
 ];
 
 export default function ShopPage() {
+  return <Suspense fallback={null}><ShopInner /></Suspense>;
+}
+
+function ShopInner() {
   const db = useDatabase();
+  const params = useSearchParams();
   const [category, setCategory] = useState<ProductFilter['category']>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null); // ประเภท/Type
-  const [franchiseId, setFranchiseId] = useState<string | null>(null);
+  // deep-linkable from a product's series chip: /shop?franchise=..&series=..
+  const [franchiseId, setFranchiseId] = useState<string | null>(() => params.get('franchise'));
   const [manufacturerId, setManufacturerId] = useState<string | null>(null);
-  const [seriesId, setSeriesId] = useState<string | null>(null);
+  const [seriesId, setSeriesId] = useState<string | null>(() => params.get('series'));
   const [status, setStatus] = useState<ProductStatus | null>(null);
   const [query, setQuery] = useState('');
 
