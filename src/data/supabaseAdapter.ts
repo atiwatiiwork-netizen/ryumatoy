@@ -90,7 +90,10 @@ export const supabaseAdapter: PersistenceAdapter = {
       categories: (categories.data ?? []) as Database['categories'],
       manufacturers: (manufacturers.data ?? []) as Database['manufacturers'],
       franchises: (franchises.data ?? []) as Database['franchises'],
-      series: (series.data ?? []) as Database['series'],
+      series: ((series.data ?? []) as Array<Row & { franchise_id?: string; franchise_ids?: string[] }>).map((s) => ({
+        ...s,
+        franchise_ids: s.franchise_ids?.length ? s.franchise_ids : (s.franchise_id ? [s.franchise_id] : []),
+      })) as unknown as Database['series'],
       products: (products.data ?? []) as Database['products'],
       boards: (boards.data ?? []) as Database['boards'],
       batches: (batches.data ?? []) as Database['batches'],

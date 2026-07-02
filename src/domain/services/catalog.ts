@@ -45,7 +45,7 @@ export function variantsOf(db: Database, productId: string): ProductVariant[] {
 
 /** Series under a franchise (optionally further limited to those a maker carries). */
 export function seriesForFranchise(db: Database, franchiseId: string, makerId?: string): Series[] {
-  return db.series.filter((s) => s.franchise_id === franchiseId && (!makerId || s.maker_ids.includes(makerId)));
+  return db.series.filter((s) => s.franchise_ids.includes(franchiseId) && (!makerId || s.maker_ids.includes(makerId)));
 }
 
 const TYPE_LABEL: Record<Product['type'], string> = {

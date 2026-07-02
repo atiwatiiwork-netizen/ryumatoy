@@ -195,7 +195,7 @@ function Franchises() {
     flash(id ? 'บันทึกแล้ว' : 'เพิ่มเรื่องแล้ว'); reset();
   };
   const del = (fid: string) => {
-    if (db.series.some((s) => s.franchise_id === fid)) return flash('ลบไม่ได้ — มีซีรีย์ใต้เรื่องนี้');
+    if (db.series.some((s) => s.franchise_ids.includes(fid))) return flash('ลบไม่ได้ — มีซีรีย์ใต้เรื่องนี้');
     if (db.products.some((p) => p.franchise_id === fid)) return flash('ลบไม่ได้ — มีสินค้าใต้เรื่องนี้');
     dispatch(removeFranchise(fid)); flash('ลบเรื่องแล้ว'); if (id === fid) reset();
   };
@@ -215,7 +215,7 @@ function Franchises() {
         <div className="flex flex-col divide-y divide-hair">
           {db.franchises.map((f) => (
             <div key={f.id} className="flex items-center gap-3 py-3">
-              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{f.name}</div><div className="font-mono text-[11.5px] text-ink-faint">{f.abbr.toUpperCase()} · {db.series.filter((s) => s.franchise_id === f.id).length} ซีรีย์ · {db.products.filter((p) => p.franchise_id === f.id).length} สินค้า</div></div>
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{f.name}</div><div className="font-mono text-[11.5px] text-ink-faint">{f.abbr.toUpperCase()} · {db.series.filter((s) => s.franchise_ids.includes(f.id)).length} ซีรีย์ · {db.products.filter((p) => p.franchise_id === f.id).length} สินค้า</div></div>
               <button onClick={() => { setId(f.id); setName(f.name); setAbbr(f.abbr); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
               <button onClick={() => del(f.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
             </div>
@@ -234,15 +234,15 @@ function SeriesTab() {
   const { flash } = useToast();
   const [id, setId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [franchiseId, setFranchiseId] = useState(db.franchises[0]?.id ?? '');
+  const [franchises, setFranchises] = useState<string[]>([]); // a series can span many เรื่อง
   const [makers, setMakers] = useState<string[]>([]);
-  useEffect(() => { if (!id && db.franchises.length && !db.franchises.some((f) => f.id === franchiseId)) setFranchiseId(db.franchises[0].id); }, [db.franchises, franchiseId, id]);
 
-  const reset = () => { setId(null); setName(''); setFranchiseId(db.franchises[0]?.id ?? ''); setMakers([]); };
+  const reset = () => { setId(null); setName(''); setFranchises([]); setMakers([]); };
+  const toggleFranchise = (fid: string) => setFranchises((arr) => (arr.includes(fid) ? arr.filter((x) => x !== fid) : [...arr, fid]));
   const toggleMaker = (mid: string) => setMakers((arr) => (arr.includes(mid) ? arr.filter((x) => x !== mid) : [...arr, mid]));
   const save = () => {
-    if (!name.trim() || !franchiseId) return flash('กรอกชื่อซีรีย์ + เลือกเรื่อง');
-    dispatch(upsertSeries({ id: id ?? genId('s'), name: name.trim(), franchise_id: franchiseId, maker_ids: makers }));
+    if (!name.trim() || franchises.length === 0) return flash('กรอกชื่อซีรีย์ + เลือกเรื่องอย่างน้อย 1');
+    dispatch(upsertSeries({ id: id ?? genId('s'), name: name.trim(), franchise_ids: franchises, maker_ids: makers }));
     flash(id ? 'บันทึกแล้ว' : 'เพิ่มซีรีย์แล้ว'); reset();
   };
   const del = (sid: string) => {
@@ -250,6 +250,7 @@ function SeriesTab() {
     dispatch(removeSeries(sid)); flash('ลบซีรีย์แล้ว'); if (id === sid) reset();
   };
   const makerNames = (ids: string[]) => ids.map((i) => db.manufacturers.find((m) => m.id === i)?.name).filter(Boolean).join(', ') || '—';
+  const franchiseNames = (ids: string[]) => ids.map((i) => db.franchises.find((f) => f.id === i)?.name).filter(Boolean).join(', ') || '—';
 
   if (db.franchises.length === 0) return <Panel><div className="text-[13px] text-ink-faint">ยังไม่มีเรื่อง — ไปเพิ่ม “เรื่อง” ก่อน แล้วค่อยสร้างซีรีย์</div></Panel>;
 
@@ -259,7 +260,15 @@ function SeriesTab() {
         <div className="mb-3 flex items-center justify-between"><span className="font-bold">{id ? 'แก้ไขซีรีย์' : 'เพิ่มซีรีย์ใหม่'}</span>{id && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}</div>
         <div className="flex flex-col gap-3">
           <Field label="ชื่อซีรีย์"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น Thriller Park" /></Field>
-          <Field label="เรื่อง"><select className={inputCls} value={franchiseId} onChange={(e) => setFranchiseId(e.target.value)}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
+          <div>
+            <div className="mb-2 text-[12.5px] font-semibold text-ink-muted">เรื่อง (ติ๊กได้หลายเรื่อง)</div>
+            <div className="flex flex-wrap gap-2">
+              {db.franchises.map((f) => {
+                const on = franchises.includes(f.id);
+                return <button key={f.id} type="button" onClick={() => toggleFranchise(f.id)} className={cx('rounded-full border px-3 py-1.5 text-[12.5px] font-semibold', on ? 'border-accent bg-[#b91c1c]/[0.16] text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>{on && '✓ '}{f.name}</button>;
+              })}
+            </div>
+          </div>
           <div>
             <div className="mb-2 text-[12.5px] font-semibold text-ink-muted">ค่ายที่ทำซีรีย์นี้ (ติ๊กได้หลายค่าย)</div>
             <div className="flex flex-wrap gap-2">
@@ -278,8 +287,8 @@ function SeriesTab() {
         <div className="flex flex-col divide-y divide-hair">
           {db.series.map((s) => (
             <div key={s.id} className="flex items-center gap-3 py-3">
-              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{s.name}</div><div className="text-[11.5px] text-ink-faint">{db.franchises.find((f) => f.id === s.franchise_id)?.name} · ค่าย: {makerNames(s.maker_ids)}</div></div>
-              <button onClick={() => { setId(s.id); setName(s.name); setFranchiseId(s.franchise_id); setMakers(s.maker_ids); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{s.name}</div><div className="text-[11.5px] text-ink-faint">{franchiseNames(s.franchise_ids)} · ค่าย: {makerNames(s.maker_ids)}</div></div>
+              <button onClick={() => { setId(s.id); setName(s.name); setFranchises(s.franchise_ids); setMakers(s.maker_ids); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
               <button onClick={() => del(s.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
             </div>
           ))}

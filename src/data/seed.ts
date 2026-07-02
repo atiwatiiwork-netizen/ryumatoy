@@ -38,8 +38,8 @@ export const SEED_DATABASE: Database = {
   ],
 
   series: [
-    { id: 's-op-wcf', name: 'WCF Vol.38', franchise_id: 'f-op', maker_ids: ['m-bandai', 'm-megahouse'] },
-    { id: 's-nr-gem', name: 'GEM Series', franchise_id: 'f-nr', maker_ids: ['m-megahouse'] },
+    { id: 's-op-wcf', name: 'WCF Vol.38', franchise_ids: ['f-op'], maker_ids: ['m-bandai', 'm-megahouse'] },
+    { id: 's-nr-gem', name: 'GEM Series', franchise_ids: ['f-nr'], maker_ids: ['m-megahouse'] },
   ],
 
   products: [

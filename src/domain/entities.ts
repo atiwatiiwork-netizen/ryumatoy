@@ -42,7 +42,7 @@ export interface Franchise {
 export interface Series {
   id: string;
   name: string;
-  franchise_id: string;
+  franchise_ids: string[]; // a series can span MULTIPLE เรื่อง (e.g. an "All Star" crossover line)
   maker_ids: string[];
 }
 
