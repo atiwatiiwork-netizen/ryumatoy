@@ -124,7 +124,8 @@ function PromoCarousel({ promos }: { promos: NonNullable<ReturnType<typeof useDa
       <div className="relative overflow-hidden rounded-2xl border border-subtle">
         <div className="flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${cur * 100}%)` }}>
           {promos.map((b) => {
-            const img = <img src={b.image_url} alt={b.caption ?? ''} className="h-[150px] w-full shrink-0 object-cover lg:h-[300px]" />;
+            // show the whole banner at its natural aspect ratio (no crop) — full width, auto height
+            const img = <img src={b.image_url} alt={b.caption ?? ''} className="block h-auto w-full" />;
             if (!b.link) return <div key={b.id} className="w-full shrink-0">{img}</div>;
             const external = /^https?:\/\//.test(b.link);
             return external

@@ -56,7 +56,7 @@ function PromoManager() {
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 font-bold">รูปสไลด์โปรโมชั่น (บนสุดของหน้าแรก)</div>
-      <div className="mb-4 text-[12.5px] text-ink-faint">อัปโหลดรูปแนวนอน (เช่น 1200×480) · ใส่ลิงก์เมื่อกดรูป (สินค้า /shop/xxx หรือ URL ภายนอก) · ลากลำดับด้วยปุ่มลูกศร</div>
+      <div className="mb-4 text-[12.5px] text-ink-faint">รูปจะแสดงเต็มตามสัดส่วนจริง (ไม่ครอป) · แนะนำรูปแนวนอนสัดส่วน <b className="text-ink-muted2">เท่ากันทุกรูป</b> เช่น 1200×480 หรือ 1600×500 เพื่อให้สไลด์สูงเท่ากัน · ใส่ลิงก์เมื่อกดรูป (สินค้า /shop/xxx หรือ URL ภายนอก) · จัดลำดับด้วยลูกศร</div>
 
       {list.length === 0 ? (
         <div className="mb-4 rounded-xl border border-dashed border-subtle py-8 text-center text-[13px] text-ink-faint">ยังไม่มีรูปโปรโมชั่น — เพิ่มรูปแรกด้านล่าง</div>
