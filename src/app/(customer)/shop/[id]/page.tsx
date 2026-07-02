@@ -9,7 +9,7 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
-import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
+import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining, dimensionLabel } from '@/domain/services/catalog';
 import { instockPriceFor, depositForRank } from '@/domain/services/ranks';
 import { useSmartBack } from '@/lib/nav';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
@@ -93,7 +93,8 @@ export default function ProductDetailPage() {
       <div className="mb-0.5 mt-2 font-mono text-[11px] text-ink-faint">{manufacturerNameOf(db, product)} · {fr?.name}{categoryOf(db, product) ? ` · ${categoryOf(db, product)!.name}` : ''}{seriesOf(db, product) ? ` · ${seriesOf(db, product)!.name}` : ''}</div>
       <div className="text-[22px] font-extrabold leading-tight">{product.series_name}</div>
       <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>
-      <div className="mb-4 text-[13.5px] leading-relaxed text-ink-muted2">{product.description}</div>
+      {dimensionLabel(product) && <div className="mb-1.5 text-[13.5px] font-semibold text-ink-muted">{dimensionLabel(product)}</div>}
+      {product.description && <div className="mb-4 text-[13.5px] leading-relaxed text-ink-muted2">{product.description}</div>}
 
       {!product.is_stock && (
         <div className="mb-3.5 grid grid-cols-2 gap-2.5">

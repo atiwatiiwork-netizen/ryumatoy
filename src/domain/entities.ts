@@ -75,6 +75,11 @@ export interface Product {
   deposit_amount: number;
   is_stock: boolean; // true = พร้อมส่ง, false = พรีออเดอร์
   stock_qty?: number;
+  // physical size (cm). height is the primary spec; width/depth are optional and only
+  // shown when set. Kept as structured fields (not free text in the description).
+  height_cm?: number;
+  width_cm?: number;
+  depth_cm?: number;
   has_variants: boolean;
   status: ProductStatus;
   // Shipping (set when the lot leaves China → status 'shipping'):

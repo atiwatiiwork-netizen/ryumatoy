@@ -10,12 +10,12 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
   genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
-  upsertSeries, removeSeries, upsertProduct, removeProduct, setProductStatus, closeProduction,
+  upsertSeries, removeSeries, upsertProduct, removeProduct, setProductStatus, closeProduction, setProductVariants,
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 
@@ -445,9 +445,13 @@ interface Draft {
   tracking_no: string;
   shipped_at: string;
   images: string[];
+  height_cm: string;
+  width_cm: string;
+  depth_cm: string;
+  variants: { id?: string; name: string; price: string }[]; // price blank = same as product
 }
 const emptyDraft = (fid: string, mid: string, deposit: number): Draft => ({
-  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [],
+  franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [], height_cm: '', width_cm: '', depth_cm: '', variants: [],
 });
 
 function Products() {
@@ -505,13 +509,18 @@ function Products() {
       deposit_amount: draft.is_stock ? price : (Number(draft.deposit_amount) || 0),
       is_stock: draft.is_stock,
       stock_qty: draft.is_stock ? Number(draft.stock_qty) || 0 : undefined,
-      has_variants: false,
+      height_cm: draft.height_cm ? Number(draft.height_cm) : undefined,
+      width_cm: draft.width_cm ? Number(draft.width_cm) : undefined,
+      depth_cm: draft.depth_cm ? Number(draft.depth_cm) : undefined,
+      has_variants: draft.variants.some((v) => v.name.trim()),
       status: draft.status,
       tracking_no: draft.tracking_no.trim() || undefined,
       shipped_at: draft.shipped_at || undefined,
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
     dispatch(upsertProduct(product));
+    // variants: blank price = inherit the product price
+    dispatch(setProductVariants(product.id, draft.variants.filter((v) => v.name.trim()).map((v) => ({ id: v.id, name: v.name, price_total: v.price ? Number(v.price) : undefined }))));
     // cascade the lifecycle status to this product's tickets (customer wallet tracking)
     dispatch(setProductStatus(product.id, product.status));
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
@@ -524,6 +533,8 @@ function Products() {
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
     tracking_no: p.tracking_no ?? '', shipped_at: p.shipped_at ? p.shipped_at.slice(0, 10) : '', images: p.images ?? [],
+    height_cm: p.height_cm != null ? String(p.height_cm) : '', width_cm: p.width_cm != null ? String(p.width_cm) : '', depth_cm: p.depth_cm != null ? String(p.depth_cm) : '',
+    variants: variantsOf(db, p.id).map((v) => ({ id: v.id, name: v.name ?? '', price: v.price_total != null ? String(v.price_total) : '' })),
   });
 
   const del = (p: Product) => {
@@ -595,7 +606,41 @@ function Products() {
                 : <Field label="มัดจำ (฿)"><input className={inputCls} inputMode="numeric" value={draft.deposit_amount} onChange={(e) => set('deposit_amount', e.target.value)} placeholder="590" /></Field>}
             </div>
             <Field label="กำหนดการ (ETA)"><input className={inputCls} value={draft.eta_note} onChange={(e) => set('eta_note', e.target.value)} placeholder="เช่น Q3 2026" /></Field>
-            <Field label="รายละเอียด"><textarea className={cx(inputCls, 'h-20 resize-none')} value={draft.description} onChange={(e) => set('description', e.target.value)} /></Field>
+
+            {/* size (cm): height = primary; width/depth optional (hidden on card when empty) */}
+            <div>
+              <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">ขนาด (ซม.)</div>
+              <div className="grid grid-cols-3 gap-2">
+                <input className={inputCls} inputMode="decimal" value={draft.height_cm} onChange={(e) => set('height_cm', e.target.value.replace(/[^\d.]/g, ''))} placeholder="สูง *" />
+                <input className={inputCls} inputMode="decimal" value={draft.width_cm} onChange={(e) => set('width_cm', e.target.value.replace(/[^\d.]/g, ''))} placeholder="กว้าง" />
+                <input className={inputCls} inputMode="decimal" value={draft.depth_cm} onChange={(e) => set('depth_cm', e.target.value.replace(/[^\d.]/g, ''))} placeholder="ลึก" />
+              </div>
+              <span className="mt-1 block text-[11px] text-ink-faint">กว้าง/ลึก ไม่บังคับ — ถ้าไม่ใส่ จะไม่โชว์บนการ์ด</span>
+            </div>
+
+            {/* variants (แบบ/สี) — e.g. สีแดง / สีฟ้า. blank price = same as product */}
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[12.5px] font-semibold text-ink-muted">แบบ / สี (variants)</span>
+                <button type="button" onClick={() => setDraft((d) => ({ ...d, variants: [...d.variants, { name: '', price: '' }] }))} className="text-[12px] font-bold text-primary-soft">+ เพิ่มแบบ</button>
+              </div>
+              {draft.variants.length === 0 ? (
+                <span className="block text-[11px] text-ink-faint">ไม่มีก็ได้ — ถ้ามีหลายแบบ (เช่น สีแดง/สีฟ้า) ลูกค้าจะเลือกในหน้าสินค้า</span>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {draft.variants.map((v, i) => (
+                    <div key={i} className="flex gap-2">
+                      <input className={cx(inputCls, 'flex-1')} value={v.name} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) }))} placeholder="ชื่อแบบ เช่น สีแดง" />
+                      <input className={cx(inputCls, 'w-24')} inputMode="numeric" value={v.price} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, price: e.target.value.replace(/[^\d]/g, '') } : x)) }))} placeholder="ราคา*" />
+                      <button type="button" onClick={() => setDraft((d) => ({ ...d, variants: d.variants.filter((_, j) => j !== i) }))} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-[#f87171]/40 text-[#f87171]"><Icon name="x" size={14} /></button>
+                    </div>
+                  ))}
+                  <span className="text-[11px] text-ink-faint">*ราคาเว้นว่าง = ใช้ราคาเต็มของสินค้า</span>
+                </div>
+              )}
+            </div>
+
+            <Field label="รายละเอียด"><textarea className={cx(inputCls, 'h-20 resize-none')} value={draft.description} onChange={(e) => set('description', e.target.value)} placeholder="รายละเอียดเพิ่มเติม (ไม่ต้องใส่ขนาดแล้ว มีช่องแยกด้านบน)" /></Field>
             <Button onClick={save} icon={editing ? 'check' : 'plus'}>{editing ? 'บันทึก' : 'เพิ่มสินค้า'}</Button>
           </div>
         )}

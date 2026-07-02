@@ -355,6 +355,21 @@ export const removeProduct = (pid: string) => (db: Database): Database => ({
   variants: db.variants.filter((v) => v.product_id !== pid),
 });
 
+/** Replace a product's variants with the given list. A blank variant price inherits the
+ *  product's price; variants always share the product's deposit. */
+export const setProductVariants = (productId: string, list: { id?: string; name: string; price_total?: number }[]) => (db: Database): Database => {
+  const p = db.products.find((pp) => pp.id === productId);
+  const basePrice = p?.price_total ?? 0;
+  const baseDeposit = p?.deposit_amount ?? 0;
+  return {
+    ...db,
+    variants: [
+      ...db.variants.filter((v) => v.product_id !== productId),
+      ...list.filter((v) => v.name.trim()).map((v) => ({ id: v.id ?? id('v'), product_id: productId, name: v.name.trim(), price_total: v.price_total ?? basePrice, deposit_amount: baseDeposit })),
+    ],
+  };
+};
+
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
  *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */

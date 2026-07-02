@@ -2,6 +2,16 @@ import type { Database, Product, Franchise, Manufacturer, Category, Series, Prod
 
 /** Catalog read helpers — derive views over the products graph. No mutation. */
 
+/** Human size line from the structured fields — "สูง 8.8 · กว้าง 5 · ลึก 3 ซม.".
+ *  Height leads; width/depth appear only when set. Empty string when no size given. */
+export function dimensionLabel(p: Product): string {
+  const parts: string[] = [];
+  if (p.height_cm != null) parts.push(`สูง ${p.height_cm}`);
+  if (p.width_cm != null) parts.push(`กว้าง ${p.width_cm}`);
+  if (p.depth_cm != null) parts.push(`ลึก ${p.depth_cm}`);
+  return parts.length ? `${parts.join(' · ')} ซม.` : '';
+}
+
 export function franchiseOf(db: Database, product: Product): Franchise | undefined {
   return db.franchises.find((f) => f.id === product.franchise_id);
 }

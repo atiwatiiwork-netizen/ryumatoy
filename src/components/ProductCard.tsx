@@ -7,7 +7,7 @@ import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
-import { metaLine } from '@/domain/services/catalog';
+import { metaLine, variantsOf } from '@/domain/services/catalog';
 import { instockPriceFor } from '@/domain/services/ranks';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, StatusBadge } from './ui';
@@ -24,6 +24,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const memberPrice = product.is_stock ? instockPriceFor(db.settings, myRank, product.price_total) : product.price_total;
   const saved = memberPrice < product.price_total;
   const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
+  const nVariants = product.has_variants ? variantsOf(db, product.id).length : 0;
   // pre-order simple products can be added straight to the cart; variant ones need a pick
   const canQuickAdd = quickAdd && !product.is_stock && !product.has_variants;
 
@@ -43,6 +44,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
       <div className="px-[11px] pb-3 pt-2.5">
         <div className="mb-[3px] font-mono text-[10px] text-ink-faint">{metaLine(db, product)}</div>
         <div className="line-clamp-2 min-h-[34px] text-[13px] font-semibold leading-tight">{product.series_name}</div>
+        {nVariants > 0 && <div className="mt-1 inline-flex items-center rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-semibold text-ink-muted2">🎨 {nVariants} แบบ</div>}
         <div className="mt-1.5 flex items-baseline gap-1.5">
           <span className="text-[15px] font-extrabold text-primary-soft">{baht(memberPrice)}</span>
           {saved && <span className="text-[11px] text-ink-faint line-through">{baht(product.price_total)}</span>}
