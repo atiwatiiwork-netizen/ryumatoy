@@ -68,7 +68,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       // Don't clobber a known id with null: right after signUp the session exists
       // but the linked users row may be written a beat later (signup_v2/link_auth).
-      const r1 = await resolveAppUser(u);
+      let r1 = await resolveAppUser(u);
+      // self-heal: a valid session that resolves to nothing means users.auth_id was
+      // never linked (e.g. logged in during the v21-before-v23 window) → the app would
+      // hang forever. Link it by the phone in the synthetic email, then re-resolve.
+      if (u && !isFacebook(u) && !r1) {
+        try { await supabase?.rpc('ryuma_link_self'); } catch { /* RPC may not exist yet */ }
+        r1 = await resolveAppUser(u);
+      }
       if (r1 || !u) setAppUserId(r1);
       // reload the store only when the identity actually changes (not on token refresh)
       const uid = u?.id ?? null;

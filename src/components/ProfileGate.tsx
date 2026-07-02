@@ -10,7 +10,7 @@ import { cx } from './ui';
 
 /** Blocking overlay: login → (not approved) wait screen → (approved) fill shipping address. */
 export function ProfileGate() {
-  const { currentUserId, needsProfile, needsApproval, isLoggedIn } = useAuth();
+  const { currentUserId, needsProfile, needsApproval, isLoggedIn, signOut } = useAuth();
   const db = useDatabase();
   const me = db.users.find((u) => u.id === currentUserId);
   const dispatch = useDispatch();
@@ -29,6 +29,7 @@ export function ProfileGate() {
         <div className="flex flex-col items-center gap-3 text-ink-muted2">
           <Icon name="box" size={30} className="animate-pulse text-primary-soft" />
           <div className="text-[13px]">กำลังโหลดบัญชี…</div>
+          <button onClick={() => signOut()} className="mt-1 text-[12px] text-ink-faint underline">ค้างนานเกินไป? ออกจากระบบ</button>
         </div>
       </div>
     );
