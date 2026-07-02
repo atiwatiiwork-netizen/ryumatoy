@@ -114,7 +114,7 @@ export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon 
       style={size ? { width: size, height: size } : undefined}
     >
       {src
-        ? <img src={src} alt="" className="h-full w-full object-cover" />
+        ? <img src={src} alt="" className="h-full w-full object-contain" />
         : <Icon name="box" size={size ? Math.min(46, size * 0.42) : 44} strokeWidth={1.4} className="text-primary-soft/25" />}
       {showRibbon && (
         <div className={cx('absolute -left-[34px] top-3 -rotate-45 px-10 py-[3px] text-[9px] font-extrabold tracking-wide text-white', isStock ? 'bg-success' : 'bg-cta')}>
