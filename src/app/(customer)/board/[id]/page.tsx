@@ -3,6 +3,7 @@
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
+import { useCart } from '@/state/CartProvider';
 import { Icon } from '@/components/Icon';
 import { ProductCard } from '@/components/ProductCard';
 import { cx } from '@/components/ui';
@@ -13,6 +14,7 @@ import { franchiseOf } from '@/domain/services/catalog';
 export default function BoardPage() {
   const { id } = useParams<{ id: string }>();
   const db = useDatabase();
+  const cart = useCart();
   const board = db.boards.find((b) => b.id === id);
 
   if (!board) return <div className="py-24 text-center text-ink-faint">ไม่พบกระดานนี้ <Link href="/" className="text-primary-soft">← กลับหน้าแรก</Link></div>;
@@ -55,10 +57,20 @@ export default function BoardPage() {
           <div key={fname} className="mb-7">
             <div className="mb-3 text-[17px] font-extrabold lg:text-xl">{fname}</div>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 lg:gap-4">
-              {list.map((p) => <ProductCard key={p.id} product={p} />)}
+              {list.map((p) => <ProductCard key={p.id} product={p} quickAdd />)}
             </div>
           </div>
         ))
+      )}
+
+      {/* sticky "go to cart" bar — lets the customer add many, then check out in one go */}
+      {cart.count > 0 && (
+        <div className="fixed inset-x-0 bottom-[68px] z-40 px-4 lg:bottom-6">
+          <Link href="/cart" className="mx-auto flex max-w-[1140px] items-center justify-between rounded-xl bg-cta px-4 py-3 text-sm font-bold text-white shadow-lg">
+            <span>ในตะกร้า {cart.count} รายการ</span>
+            <span className="flex items-center gap-1">ดูตะกร้า · เช็คเอาต์ <Icon name="arrowRight" size={16} /></span>
+          </Link>
+        </div>
       )}
     </div>
   );

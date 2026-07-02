@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import type { Product } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
+import { useCart } from '@/state/CartProvider';
+import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine } from '@/domain/services/catalog';
@@ -10,14 +12,27 @@ import { instockPriceFor } from '@/domain/services/ranks';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, StatusBadge } from './ui';
 
-/** Product card used on Home grid + Shop grid. Links to the product route. */
-export function ProductCard({ product }: { product: Product }) {
+/** Product card used on Home grid + Shop grid. Links to the product route.
+ *  `quickAdd` shows an add-to-cart button (used on board pages so customers can add
+ *  many items without leaving the page). Variant products still open the detail page. */
+export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?: boolean }) {
   const db = useDatabase();
+  const cart = useCart();
+  const { flash } = useToast();
   const CURRENT_USER_ID = useCurrentUserId();
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
   const memberPrice = product.is_stock ? instockPriceFor(db.settings, myRank, product.price_total) : product.price_total;
   const saved = memberPrice < product.price_total;
   const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
+  // pre-order simple products can be added straight to the cart; variant ones need a pick
+  const canQuickAdd = quickAdd && !product.is_stock && !product.has_variants;
+
+  const doAdd = (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    cart.add({ productId: product.id, depositEach: product.deposit_amount, priceEach: product.price_total });
+    flash('เพิ่มลงตะกร้าแล้ว ✓');
+  };
+
   return (
     <Link href={`/shop/${product.id}`} className="block overflow-hidden rounded-card border border-subtle bg-surface-2">
       <div className="relative">
@@ -33,6 +48,11 @@ export function ProductCard({ product }: { product: Product }) {
           {saved && <span className="text-[11px] text-ink-faint line-through">{baht(product.price_total)}</span>}
         </div>
         {saved && <div className="text-[10px] font-bold text-[#f1d27a]">ราคาสมาชิก ✦</div>}
+        {quickAdd && (
+          canQuickAdd
+            ? <button onClick={doAdd} className="mt-2 w-full rounded-lg bg-cta py-2 text-[12.5px] font-bold text-white">+ ใส่ตะกร้า</button>
+            : <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-muted2">เลือกแบบในหน้าสินค้า →</div>
+        )}
       </div>
     </Link>
   );
