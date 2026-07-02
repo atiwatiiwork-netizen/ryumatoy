@@ -32,7 +32,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/stock', 'bolt', 'ขายสต๊อกส่วนเกิน'),
     ] },
     { title: 'สมาชิก', items: [
-      it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false).length),
+      it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false && !u.is_admin).length),
       it('/admin/ranks', 'verified', 'Ranks', db.rankRequests.filter((r) => r.status === 'pending').length),
     ] },
     { title: 'ออเดอร์', items: [

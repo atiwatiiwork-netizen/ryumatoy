@@ -18,8 +18,16 @@ export default function AdminDashboardPage() {
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
   const totalPre = db.tickets.length + pending.reduce((s, o) => s + o.items.length, 0);
-  const todayIncome = db.orders.filter((o) => o.status === 'approved').reduce((s, o) => s + o.total_deposit, 0) || 24800;
+  // real revenue from approved orders (by approval date) — no demo fallback
+  const now = new Date();
+  const sameDay = (d?: string) => d != null && new Date(d).toDateString() === now.toDateString();
+  const sameMonth = (d?: string) => d != null && new Date(d).getFullYear() === now.getFullYear() && new Date(d).getMonth() === now.getMonth();
+  const approved = db.orders.filter((o) => o.status === 'approved');
+  const todayIncome = approved.filter((o) => sameDay(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0);
+  const monthIncome = approved.filter((o) => sameMonth(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0);
   const lowStock = db.products.filter((p) => p.is_stock && (p.stock_qty ?? 0) <= 5).length;
+  const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const dateLabel = `${now.getDate()} ${THAI_MONTHS[now.getMonth()]} ${now.getFullYear()}`;
 
   const statusCounts = PROGRESS_STATUSES.map((st) => ({ st, count: db.products.filter((p) => !p.is_stock && p.status === st).length }));
   const maxCount = Math.max(1, ...statusCounts.map((s) => s.count));
@@ -35,7 +43,7 @@ export default function AdminDashboardPage() {
       <div className="mb-[22px] flex items-center justify-between">
         <div>
           <div className="text-2xl font-extrabold">ภาพรวมร้าน</div>
-          <div className="text-[13px] text-ink-faint">30 มิถุนายน 2026</div>
+          <div className="text-[13px] text-ink-faint">{dateLabel}</div>
         </div>
         <div className="flex gap-2.5">
           <button className="grid h-[38px] w-[38px] place-items-center rounded-[11px] border border-subtle bg-surface-2 text-ink"><Icon name="bell" size={19} /></button>
@@ -113,7 +121,7 @@ export default function AdminDashboardPage() {
           </div>
           <div className="mt-[18px] rounded-xl border border-[#d4af37]/40 p-3.5" style={{ background: 'linear-gradient(135deg, rgba(212,175,55,.18), rgba(161,98,7,.1))' }}>
             <div className="text-xs text-[#f1d27a]">ยอดรวมเดือนนี้</div>
-            <div className="mt-0.5 text-[22px] font-extrabold text-[#f1d27a]">{baht(186400)}</div>
+            <div className="mt-0.5 text-[22px] font-extrabold text-[#f1d27a]">{baht(monthIncome)}</div>
           </div>
         </div>
       </div>

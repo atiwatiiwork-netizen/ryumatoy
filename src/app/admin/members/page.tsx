@@ -21,7 +21,7 @@ export default function AdminMembersPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [manageId, setManageId] = useState<string | null>(null);
 
-  const pending = db.users.filter((u) => u.approved === false);
+  const pending = db.users.filter((u) => u.approved === false && !u.is_admin);
   const members = db.users.filter((u) => u.id !== 'u-admin' && u.approved !== false);
 
   const approve = async (u: User) => {
