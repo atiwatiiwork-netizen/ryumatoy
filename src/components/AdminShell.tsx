@@ -21,39 +21,54 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
   const awaitingParcel = db.tickets.filter((t) => t.product_status === 'arrived' && t.remaining_paid >= t.remaining_amount && !t.parcel_no).length;
 
-  const nav: { href: string; icon: IconName; label: string; active: boolean; badge?: number }[] = [
-    { href: '/admin', icon: 'dashboard', label: 'Dashboard', active: path === '/admin' },
-    { href: '/admin/home', icon: 'home', label: 'หน้าแรก / โปรโมชั่น', active: path.startsWith('/admin/home') },
-    { href: '/admin/orders', icon: 'ticket', label: 'สลิป / ออเดอร์', active: path.startsWith('/admin/orders'), badge: pending.length + pendingRP + awaitingParcel },
-    { href: '/admin/products', icon: 'box', label: 'จัดการสินค้า', active: path.startsWith('/admin/products') },
-    { href: '/admin/production', icon: 'swap', label: 'ปิดรอบสั่งผลิต', active: path.startsWith('/admin/production') },
-    { href: '/admin/board', icon: 'tag', label: 'กระดานปิดพรี', active: path.startsWith('/admin/board') },
-    { href: '/admin/stock', icon: 'bolt', label: 'ขายสต๊อกส่วนเกิน', active: path.startsWith('/admin/stock') },
-    { href: '/admin/members', icon: 'user', label: 'สมาชิก', active: path.startsWith('/admin/members'), badge: db.users.filter((u) => u.approved === false).length },
-    { href: '/admin/ranks', icon: 'verified', label: 'Ranks', active: path.startsWith('/admin/ranks'), badge: db.rankRequests.filter((r) => r.status === 'pending').length },
-    { href: '/admin/payment', icon: 'payments', label: 'ตั้งค่าการเงิน', active: path.startsWith('/admin/payment') },
+  type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
+  const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });
+  const groups: { title?: string; items: NavItem[] }[] = [
+    { items: [it('/admin', 'dashboard', 'Dashboard')] },
+    { title: 'สินค้า', items: [
+      it('/admin/products', 'box', 'จัดการสินค้า'),
+      it('/admin/production', 'swap', 'ปิดรอบสั่งผลิต'),
+      it('/admin/board', 'tag', 'กระดานปิดพรี'),
+      it('/admin/stock', 'bolt', 'ขายสต๊อกส่วนเกิน'),
+    ] },
+    { title: 'สมาชิก', items: [
+      it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false).length),
+      it('/admin/ranks', 'verified', 'Ranks', db.rankRequests.filter((r) => r.status === 'pending').length),
+    ] },
+    { title: 'ออเดอร์', items: [
+      it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP + awaitingParcel),
+      it('/admin/payment', 'payments', 'ตั้งค่าการเงิน'),
+    ] },
+    { title: 'แบนเนอร์', items: [it('/admin/home', 'home', 'หน้าแรก / โปรโมชั่น')] },
   ];
 
   return (
     <div className="flex min-h-screen bg-base font-sans text-ink">
-      <aside className="sticky top-0 flex h-screen w-[230px] flex-col gap-1 border-r border-subtle bg-sidebar px-3.5 py-5">
-        <div className="flex items-center gap-2.5 px-2 pb-[18px] pt-1">
+      <aside className="sticky top-0 flex h-screen w-[230px] flex-col gap-0.5 overflow-y-auto border-r border-subtle bg-sidebar px-3.5 py-5">
+        <div className="flex items-center gap-2.5 px-2 pb-[14px] pt-1">
           <img src="/ryuma-logo.png" alt="Ryuma" width={36} height={36} className="rounded-[9px]" />
           <div>
             <div className="text-base font-extrabold">Ryuma</div>
             <div className="text-[10px] tracking-widest text-ink-faint">ADMIN PANEL</div>
           </div>
         </div>
-        {nav.map((n) => (
-          <Link
-            key={n.label}
-            href={n.href}
-            className={cx('flex items-center gap-2.5 rounded-[11px] px-3 py-[11px] text-sm', n.active ? 'bg-cta font-bold text-white' : 'font-medium text-ink-muted2')}
-          >
-            <Icon name={n.icon} size={19} />
-            <span className="flex-1">{n.label}</span>
-            {n.badge ? <span className="rounded-full bg-primary-bright px-[7px] text-[11px] font-bold text-white">{n.badge}</span> : null}
-          </Link>
+        {groups.map((g, gi) => (
+          <div key={g.title ?? gi} className={cx(gi > 0 && 'mt-2.5')}>
+            {g.title && <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-ink-faint">{g.title}</div>}
+            <div className="flex flex-col gap-0.5">
+              {g.items.map((n) => (
+                <Link
+                  key={n.label}
+                  href={n.href}
+                  className={cx('flex items-center gap-2.5 rounded-[11px] px-3 py-[10px] text-sm', n.active ? 'bg-cta font-bold text-white' : 'font-medium text-ink-muted2')}
+                >
+                  <Icon name={n.icon} size={19} />
+                  <span className="flex-1">{n.label}</span>
+                  {n.badge ? <span className="rounded-full bg-primary-bright px-[7px] text-[11px] font-bold text-white">{n.badge}</span> : null}
+                </Link>
+              ))}
+            </div>
+          </div>
         ))}
         <div className="flex-1" />
         <div className="flex items-center gap-2.5 rounded-xl border border-subtle bg-surface-2 p-3">

@@ -34,6 +34,7 @@ export default function CheckoutPage() {
     return p && !p.is_stock ? depositForRank(db.settings, l.depositEach, myRank) : l.depositEach;
   };
   const payNow = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
+  const noPayment = payNow <= 0; // e.g. Diamond rank (0% deposit) → nothing to transfer now
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
@@ -80,11 +81,11 @@ export default function CheckoutPage() {
   };
 
   const submit = async () => {
-    if (!slip || blockedByStock) return;
+    if ((!slip && !noPayment) || blockedByStock) return;
     setBusy(true);
     // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
     await Promise.all(resIds.map((rid) => payReservation(rid)));
-    dispatch(submitOrder(currentUserId, cart.lines, slip, resIds));
+    dispatch(submitOrder(currentUserId, cart.lines, slip ?? '', resIds));
     cart.clear();
     setBusy(false);
     flash('ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
@@ -157,7 +158,7 @@ export default function CheckoutPage() {
           <>
             <Icon name={busy ? 'box' : 'camera'} size={28} className={cx('mx-auto mb-2', busy ? 'animate-pulse text-ink-faint' : 'text-primary-soft')} />
             <div className="text-sm font-semibold">{busy ? 'กำลังอัปโหลด…' : 'แตะเพื่อถ่าย / เลือกรูปสลิป'}</div>
-            <div className="mt-1 text-[11.5px] text-ink-faint">JPG / PNG ≤ 5MB · บังคับแนบ</div>
+            <div className="mt-1 text-[11.5px] text-ink-faint">JPG / PNG ≤ 5MB · {noPayment ? 'ไม่บังคับ (ยศนี้ไม่ต้องมัดจำ)' : 'บังคับแนบ'}</div>
           </>
         )}
       </label>
@@ -186,7 +187,7 @@ export default function CheckoutPage() {
           {needsReserve && expired && !soldOut && (
             <div className="mb-3 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3 text-center text-[13px] font-bold text-primary-soft">หมดเวลาชำระ · การจองถูกคืนแล้ว กรุณาเริ่มสั่งใหม่</div>
           )}
-          <Button disabled={!slip || busy || blockedByStock} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
+          <Button disabled={(!slip && !noPayment) || busy || blockedByStock} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
           <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ</div>
         </>
       )}
