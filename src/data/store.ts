@@ -53,6 +53,7 @@ export class Store {
 
   flush = async (): Promise<void> => {
     clearTimeout(this.timer);
+    if (!this.ready) return; // never persist the in-memory seed before the real load finishes (would clobber DB)
     const base = this.lastSynced;
     const target = this.db;
     if (base === target) return;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
@@ -142,6 +142,12 @@ function PricingConfig() {
   const [perYuan, setPerYuan] = useState(String(s.baht_per_yuan));
   const [depWcf, setDepWcf] = useState(String(s.deposit_wcf));
   const [depMega, setDepMega] = useState(String(s.deposit_mega));
+
+  // keep the form in sync with the real settings once they load from the DB (was showing stale seed)
+  useEffect(() => {
+    setYuanBase(String(s.yuan_base)); setBahtBase(String(s.baht_base)); setPerYuan(String(s.baht_per_yuan));
+    setDepWcf(String(s.deposit_wcf)); setDepMega(String(s.deposit_mega));
+  }, [s.yuan_base, s.baht_base, s.baht_per_yuan, s.deposit_wcf, s.deposit_mega]);
 
   const preview = { ...s, yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0 };
 
