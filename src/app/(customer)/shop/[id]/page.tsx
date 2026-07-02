@@ -66,7 +66,7 @@ export default function ProductDetailPage() {
         }
       />
 
-      <div className="mb-3.5"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} /></div>
+      <div className="mb-3.5"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} big /></div>
       {product.images.length > 1 && (
         <div className="mb-3.5 flex gap-2 overflow-x-auto no-scrollbar">
           {product.images.map((img, i) => (

@@ -57,7 +57,9 @@ export async function applyWatermark(file: File): Promise<File> {
     } catch { /* logo missing → text only */ }
 
     const text = 'RyumaToy';
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    // elegant serif wordmark with letter-spacing for a premium look
+    ctx.font = `600 ${fs}px Georgia, "Times New Roman", "Noto Serif", serif`;
+    try { (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${Math.round(fs * 0.07)}px`; } catch { /* older browsers */ }
     const textW = ctx.measureText(text).width;
     const rightX = w - pad;
     const textY = h - pad;                       // text baseline (bottom)
@@ -66,8 +68,8 @@ export async function applyWatermark(file: File): Promise<File> {
     // wordmark
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
-    ctx.shadowColor = dark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
-    ctx.shadowBlur = fs * 0.4;
+    ctx.shadowColor = dark ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.65)';
+    ctx.shadowBlur = fs * 0.45;
     ctx.fillStyle = ink;
     ctx.fillText(text, rightX, textY);
 

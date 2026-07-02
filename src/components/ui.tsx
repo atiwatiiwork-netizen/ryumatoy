@@ -107,7 +107,7 @@ export function ProgressBar({ pct, fill = '#dc2626' }: { pct: number; fill?: str
 }
 
 /** Product image — real photo when `src` is set, else striped placeholder. Keeps the ribbon. */
-export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon = true, src }: { isStock: boolean; size?: number; radius?: string; showRibbon?: boolean; src?: string }) {
+export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon = true, src, big = false }: { isStock: boolean; size?: number; radius?: string; showRibbon?: boolean; src?: string; big?: boolean }) {
   return (
     <div
       className={cx('relative flex items-center justify-center overflow-hidden border border-subtle', src ? 'bg-surface-3' : 'bg-stripe', radius, !size && 'aspect-square w-full')}
@@ -117,7 +117,7 @@ export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon 
         ? <img src={src} alt="" className="h-full w-full object-contain" />
         : <Icon name="box" size={size ? Math.min(46, size * 0.42) : 44} strokeWidth={1.4} className="text-primary-soft/25" />}
       {showRibbon && (
-        <div className={cx('absolute -left-[34px] top-3 -rotate-45 px-10 py-[3px] text-[9px] font-extrabold tracking-wide text-white', isStock ? 'bg-success' : 'bg-cta')}>
+        <div className={cx('absolute -rotate-45 font-extrabold tracking-wide text-white', big ? '-left-[52px] top-5 px-16 py-1 text-[15px]' : '-left-[34px] top-3 px-10 py-[3px] text-[9px]', isStock ? 'bg-success' : 'bg-cta')}>
           {isStock ? 'STOCK' : 'PRE-ORDER'}
         </div>
       )}

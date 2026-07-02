@@ -6,7 +6,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
-import { Button, StatusBadge, ProgressBar } from '@/components/ui';
+import { Button, StatusBadge, ProgressBar, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { paidPercent } from '@/domain/services/tickets';
 
@@ -50,7 +50,7 @@ export default function HomePage() {
           {heroImg && <img src={heroImg} alt="" className="absolute inset-0 h-full w-full object-cover" />}
           {heroImg && <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(13,8,9,.92), rgba(13,8,9,.4))' }} />}
           <div className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(255,255,255,.03)_0_12px,transparent_12px_24px)]" />
-          <div className="absolute -left-9 top-5 -rotate-45 bg-cta px-12 py-1 text-[10px] font-extrabold tracking-widest text-white">PRE-ORDER</div>
+          <div className={cx('absolute -left-9 top-5 -rotate-45 px-12 py-1 text-[10px] font-extrabold tracking-widest text-white', hero.is_stock ? 'bg-success' : 'bg-cta')}>{hero.is_stock ? 'STOCK' : 'PRE-ORDER'}</div>
           <Icon name="box" size={300} strokeWidth={1} className="absolute -right-2 top-4 hidden text-primary/[0.13] lg:block" />
           <div className="relative flex h-[200px] flex-col justify-end p-4 lg:h-full lg:max-w-[520px] lg:justify-center lg:pl-11">
             <div><StatusBadge status={hero.status as StatusKey} /></div>
