@@ -16,7 +16,10 @@ export default function HomePage() {
   const CURRENT_USER_ID = useCurrentUserId();
   // only sellable items appear on home: in-stock, or pre-orders still open for booking
   const sellable = (p: (typeof db.products)[number]) => p.is_stock || p.status === 'open';
-  const hero = db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
+  // admin-featured product wins; else auto-pick first open pre-order / in-stock
+  const featured = db.settings.hero_product_id ? db.products.find((p) => p.id === db.settings.hero_product_id) : undefined;
+  const hero = featured ?? db.products.find((p) => !p.is_stock && p.status === 'open') ?? db.products.find((p) => p.is_stock);
+  const heroImg = db.settings.hero_image_url;
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
   const newest = [...db.products].filter(sellable).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
 
@@ -44,6 +47,8 @@ export default function HomePage() {
           className="relative mb-2 block overflow-hidden rounded-2xl border border-accent-soft lg:mb-7 lg:h-[300px]"
           style={{ background: 'linear-gradient(115deg, rgba(185,28,28,.42), #160d0d 60%, #0d0809 100%)' }}
         >
+          {heroImg && <img src={heroImg} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+          {heroImg && <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(13,8,9,.92), rgba(13,8,9,.4))' }} />}
           <div className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(255,255,255,.03)_0_12px,transparent_12px_24px)]" />
           <div className="absolute -left-9 top-5 -rotate-45 bg-cta px-12 py-1 text-[10px] font-extrabold tracking-widest text-white">PRE-ORDER</div>
           <Icon name="box" size={300} strokeWidth={1} className="absolute -right-2 top-4 hidden text-primary/[0.13] lg:block" />

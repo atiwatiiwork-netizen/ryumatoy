@@ -25,7 +25,7 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
 }
 
 /** Submit a cart as an order awaiting admin approval (PRD §9 step 5). */
-export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) {
+export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[]) {
   return (db: Database): Database => {
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
@@ -54,6 +54,7 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string) 
       slip_url: slipUrl,
       status: 'pending_approval',
       created_at: new Date().toISOString(),
+      reservation_ids: reservationIds && reservationIds.length ? reservationIds : undefined,
       items,
     };
     return { ...db, orders: [order, ...db.orders] };
@@ -109,6 +110,12 @@ export function approveOrder(orderId: string) {
     return updated;
   };
 }
+
+/** Reject a pending order (slip not valid). Stock holds are released separately via RPC. */
+export const rejectOrder = (orderId: string) => (db: Database): Database => ({
+  ...db,
+  orders: db.orders.map((o) => (o.id === orderId ? { ...o, status: 'rejected' as const } : o)),
+});
 
 /**
  * Reopen leftover/surplus stock as a new batch on the same product (SKU). The

@@ -11,6 +11,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
 import { instockPriceFor } from '@/domain/services/ranks';
+import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 
@@ -40,8 +41,13 @@ export default function ProductDetailPage() {
   const deposit = product.is_stock ? price : rawDeposit;
   const memberSaved = product.is_stock && price < rawPrice;
   const fr = franchiseOf(db, product);
+  // live availability for limited-qty items (in-stock / batch) — reservation-aware
+  const limited = batch ? true : product.is_stock;
+  const avail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
+  const soldOut = limited && (avail ?? 1) <= 0;
 
   const addToCart = () => {
+    if (soldOut) return flash('สินค้าหมด/ถูกจองครบแล้ว');
     cart.add({ productId: product.id, variantId: batch ? undefined : variantId, batchId: batch?.id, depositEach: deposit, priceEach: price });
     flash('เพิ่มลงตะกร้าแล้ว');
     router.push('/cart');
@@ -110,9 +116,14 @@ export default function ProductDetailPage() {
           <span className="text-ink-faint line-through">{baht(rawPrice)}</span>
         </div>
       )}
+      {limited && (
+        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : 'text-[#4ade80]')}>
+          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : `เหลือ ${avail} ชิ้น`}
+        </div>
+      )}
       <div className="flex gap-2.5">
         <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
-        <Button onClick={addToCart} icon="cart">เพิ่มลงตะกร้า · {baht(product.is_stock ? price : deposit)}</Button>
+        <Button onClick={addToCart} icon="cart" disabled={soldOut}>{soldOut ? 'สินค้าหมด' : `เพิ่มลงตะกร้า · ${baht(product.is_stock ? price : deposit)}`}</Button>
       </div>
     </div>
   );

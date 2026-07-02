@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
@@ -8,6 +8,7 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
+import { reserveStock, payReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
@@ -26,6 +27,41 @@ export default function CheckoutPage() {
   const payNow = cart.depositTotal();
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
+  // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
+  const stockLines = cart.lines.filter((l) => l.batchId || db.products.find((p) => p.id === l.productId)?.is_stock);
+  const needsReserve = canLogin && stockLines.length > 0;
+  const [resIds, setResIds] = useState<string[]>([]);
+  const [resUntil, setResUntil] = useState<number | null>(null);
+  const [soldOut, setSoldOut] = useState(false);
+  const [expired, setExpired] = useState(false);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (started.current || mustLogin || needsApproval || !needsReserve) return;
+    started.current = true;
+    (async () => {
+      const ids: string[] = []; let earliest = Infinity;
+      for (const l of stockLines) {
+        const r = await reserveStock(l.productId, l.batchId, l.qty, currentUserId);
+        if (r.ok && r.reservation_id) { ids.push(r.reservation_id); if (r.until) earliest = Math.min(earliest, new Date(r.until).getTime()); }
+        else setSoldOut(true);
+      }
+      setResIds(ids);
+      if (earliest !== Infinity) setResUntil(earliest);
+    })();
+  }, [mustLogin, needsApproval, needsReserve, stockLines, currentUserId]);
+
+  useEffect(() => {
+    if (!resUntil) return;
+    const t = setInterval(() => { const n = Date.now(); setNowTs(n); if (n >= resUntil) setExpired(true); }, 1000);
+    return () => clearInterval(t);
+  }, [resUntil]);
+
+  const secsLeft = resUntil ? Math.max(0, Math.floor((resUntil - nowTs) / 1000)) : 0;
+  const mmss = `${String(Math.floor(secsLeft / 60)).padStart(2, '0')}:${String(secsLeft % 60).padStart(2, '0')}`;
+  const blockedByStock = needsReserve && (soldOut || expired);
+
   const onSlip = async (file?: File) => {
     if (!file) return;
     setBusy(true);
@@ -34,10 +70,14 @@ export default function CheckoutPage() {
     finally { setBusy(false); }
   };
 
-  const submit = () => {
-    if (!slip) return;
-    dispatch(submitOrder(currentUserId, cart.lines, slip));
+  const submit = async () => {
+    if (!slip || blockedByStock) return;
+    setBusy(true);
+    // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
+    await Promise.all(resIds.map((rid) => payReservation(rid)));
+    dispatch(submitOrder(currentUserId, cart.lines, slip, resIds));
     cart.clear();
+    setBusy(false);
     flash('ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
   };
@@ -126,7 +166,18 @@ export default function CheckoutPage() {
         </div>
       ) : (
         <>
-          <Button disabled={!slip || busy} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
+          {needsReserve && !soldOut && resUntil && !expired && (
+            <div className="mb-3 flex items-center justify-center gap-2 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.12] py-2.5 text-[13px] font-bold text-[#fbbf24]">
+              <Icon name="bell" size={16} /> จองสินค้าไว้ให้แล้ว · ชำระภายใน {mmss}
+            </div>
+          )}
+          {needsReserve && soldOut && (
+            <div className="mb-3 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3 text-center text-[13px] font-bold text-primary-soft">สินค้าถูกจองครบแล้ว · ขออภัย สั่งไม่ได้ในรอบนี้</div>
+          )}
+          {needsReserve && expired && !soldOut && (
+            <div className="mb-3 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3 text-center text-[13px] font-bold text-primary-soft">หมดเวลาชำระ · การจองถูกคืนแล้ว กรุณาเริ่มสั่งใหม่</div>
+          )}
+          <Button disabled={!slip || busy || blockedByStock} onClick={submit}>ส่งคำขอ · รอ Admin ตรวจสอบ</Button>
           <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ</div>
         </>
       )}

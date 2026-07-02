@@ -49,7 +49,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, transfers, coupons, rankTiers, paymentAccounts, settings] =
+    const [users, categories, manufacturers, franchises, series, products, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -65,6 +65,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('preorder_tickets').select('*'),
         sb.from('remaining_payments').select('*'),
         sb.from('rank_requests').select('*'),
+        sb.from('stock_reservations').select('*'),
         sb.from('ticket_transfers').select('*'),
         sb.from('coupons').select('*'),
         sb.from('rank_tiers').select('*'),
@@ -72,7 +73,7 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, categories, manufacturers, franchises, series, products, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, transfers, coupons, rankTiers, paymentAccounts, settings];
+    const results = [users, categories, manufacturers, franchises, series, products, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
@@ -97,6 +98,7 @@ export const supabaseAdapter: PersistenceAdapter = {
       tickets: (tickets.data ?? []) as Database['tickets'],
       remainingPayments: (remainingPayments.data ?? []) as Database['remainingPayments'],
       rankRequests: (rankRequests.data ?? []) as Database['rankRequests'],
+      stockReservations: (stockReservations.data ?? []) as Database['stockReservations'],
       transfers: (transfers.data ?? []) as Database['transfers'],
       coupons: (coupons.data ?? []) as Database['coupons'],
       rankTiers: (rankTiers.data ?? []) as Database['rankTiers'],
@@ -119,6 +121,8 @@ export const supabaseAdapter: PersistenceAdapter = {
             rank_gold_deposit_pct: Number(s.rank_gold_deposit_pct ?? SEED_DATABASE.settings.rank_gold_deposit_pct),
             instock_disc_gold_type: (s.instock_disc_gold_type ?? SEED_DATABASE.settings.instock_disc_gold_type) as 'percent' | 'baht',
             instock_disc_gold_value: Number(s.instock_disc_gold_value ?? SEED_DATABASE.settings.instock_disc_gold_value),
+            hero_product_id: (s.hero_product_id ?? undefined) as string | undefined,
+            hero_image_url: (s.hero_image_url ?? undefined) as string | undefined,
           }
         : SEED_DATABASE.settings,
     };

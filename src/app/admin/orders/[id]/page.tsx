@@ -6,7 +6,8 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, RankBadge } from '@/components/ui';
-import { approveOrder } from '@/data/mutations';
+import { approveOrder, rejectOrder } from '@/data/mutations';
+import { confirmReservation, releaseReservation } from '@/lib/reserve';
 import { franchiseOf } from '@/domain/services/catalog';
 import { nextTicketNo } from '@/domain/services/tickets';
 
@@ -33,9 +34,19 @@ export default function SlipApprovalPage() {
   const nextTk = firstProduct ? nextTicketNo(db, franchiseOf(db, firstProduct)?.abbr ?? 'xx') : '';
   const approved = order.status === 'approved';
 
-  const approve = () => {
+  const approve = async () => {
     dispatch(approveOrder(order.id));
+    // confirm any stock holds → real sale
+    await Promise.all((order.reservation_ids ?? []).map((rid) => confirmReservation(rid)));
     flash(`อนุมัติแล้ว · ออก Ticket ${order.items.length} ใบ`);
+    router.push('/admin');
+  };
+
+  const reject = async () => {
+    if (!confirm('ปฏิเสธสลิปนี้? สต๊อกที่จองไว้จะถูกคืน')) return;
+    dispatch(rejectOrder(order.id));
+    await Promise.all((order.reservation_ids ?? []).map((rid) => releaseReservation(rid)));
+    flash('ปฏิเสธออเดอร์แล้ว · คืนสต๊อก');
     router.push('/admin');
   };
 
@@ -102,7 +113,7 @@ export default function SlipApprovalPage() {
           ) : (
             <>
               <Button variant="success" icon="check" onClick={approve}>Approve · ออก Ticket</Button>
-              <button onClick={() => flash('เปิด LINE OA เพื่อติดต่อลูกค้า')} className="mt-2.5 w-full rounded-btn border-[1.5px] border-subtle py-3 text-sm font-bold text-ink-muted2">ติดต่อลูกค้าผ่าน LINE</button>
+              <button onClick={reject} className="mt-2.5 w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
             </>
           )}
         </div>

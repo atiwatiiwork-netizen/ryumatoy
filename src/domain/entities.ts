@@ -112,6 +112,20 @@ export interface StockAddition {
   created_at: string;
 }
 
+/** A 15-min stock hold (server-managed via RPC). Loaded read-only for availability display. */
+export type ReservationStatus = 'active' | 'paid' | 'confirmed' | 'released';
+export interface StockReservation {
+  id: string;
+  product_id?: string;
+  batch_id?: string;
+  user_id?: string;
+  order_id?: string;
+  qty: number;
+  status: ReservationStatus;
+  reserved_until?: string;
+  created_at?: string;
+}
+
 export interface OrderItem {
   id: string;
   order_id: string;
@@ -135,6 +149,7 @@ export interface Order {
   status: OrderStatus;
   created_at: string;
   approved_at?: string;
+  reservation_ids?: string[]; // stock holds to confirm on approve / release on reject
   items: OrderItem[];
 }
 
@@ -271,6 +286,9 @@ export interface ShopSettings {
   rank_gold_deposit_pct: number; // 50 — Gold pays this % of the standard deposit (rest rolls into remaining; total unchanged)
   instock_disc_gold_type: 'percent' | 'baht'; // Gold in-stock discount kind
   instock_disc_gold_value: number; // 0 by default
+  // homepage hero banner (admin-controlled)
+  hero_product_id?: string; // featured product; empty = auto-pick first open pre-order
+  hero_image_url?: string; // custom banner image; empty = product image / placeholder
 }
 
 /** The whole app database as one JSON object (single source of truth). */
@@ -288,6 +306,7 @@ export interface Database {
   tickets: PreorderTicket[];
   remainingPayments: RemainingPayment[];
   rankRequests: RankRequest[];
+  stockReservations: StockReservation[];
   transfers: TicketTransfer[];
   coupons: Coupon[];
   rankTiers: RankTier[];
