@@ -11,6 +11,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
 import { instockPriceFor, depositForRank } from '@/domain/services/ranks';
+import { useSmartBack } from '@/lib/nav';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
@@ -19,6 +20,7 @@ import { RANK } from '@/lib/theme';
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const goBack = useSmartBack('/shop');
   const params = useSearchParams();
   const db = useDatabase();
   const cart = useCart();
@@ -62,7 +64,7 @@ export default function ProductDetailPage() {
     <div className="mx-auto max-w-[640px]">
       <BackBar
         title=""
-        onBack={() => router.push('/shop')}
+        onBack={goBack}
         right={
           <div className="flex gap-2">
             <button className="grid h-[38px] w-[38px] place-items-center rounded-full border border-subtle bg-surface-3 text-ink"><Icon name="heart" size={18} /></button>

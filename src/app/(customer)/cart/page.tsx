@@ -7,6 +7,7 @@ import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { depositForRank } from '@/domain/services/ranks';
+import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProductThumb, cx } from '@/components/ui';
@@ -28,8 +29,7 @@ export default function CartPage() {
   };
   const depositSum = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
   const payNow = depositSum;
-  // back to wherever the customer came from (board / shop / etc.), not always the menu
-  const goBack = () => { if (typeof window !== 'undefined' && window.history.length > 1) router.back(); else router.push('/shop'); };
+  const goBack = useSmartBack('/shop'); // back to wherever the customer came from (board / shop)
 
   if (cart.lines.length === 0) {
     return (

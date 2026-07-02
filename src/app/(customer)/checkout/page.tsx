@@ -13,9 +13,11 @@ import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
 import { depositForRank } from '@/domain/services/ranks';
+import { useSmartBack } from '@/lib/nav';
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const goBack = useSmartBack('/cart');
   const db = useDatabase();
   const dispatch = useDispatch();
   const cart = useCart();
@@ -92,7 +94,7 @@ export default function CheckoutPage() {
   if (cart.lines.length === 0) {
     return (
       <div className="mx-auto max-w-[640px]">
-        <BackBar title="ชำระเงิน" onBack={() => router.push('/cart')} />
+        <BackBar title="ชำระเงิน" onBack={goBack} />
         <div className="py-16 text-center text-ink-faint">ไม่มีรายการให้ชำระ</div>
       </div>
     );
@@ -100,7 +102,7 @@ export default function CheckoutPage() {
 
   return (
     <div className="mx-auto max-w-[640px]">
-      <BackBar title="ชำระเงิน" onBack={() => router.push('/cart')} />
+      <BackBar title="ชำระเงิน" onBack={goBack} />
 
       <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-[15px]">
         {cart.lines.map((l) => {

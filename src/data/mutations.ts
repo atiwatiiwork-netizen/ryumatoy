@@ -355,6 +355,29 @@ export const removeProduct = (pid: string) => (db: Database): Database => ({
   variants: db.variants.filter((v) => v.product_id !== pid),
 });
 
+/** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
+ *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
+ *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */
+export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: Database): Database => ({
+  ...db,
+  tickets: db.tickets.map((t) => {
+    if (t.id !== ticketId) return t;
+    const total = t.deposit_paid + t.remaining_amount;
+    const dep = Math.max(0, Math.min(newDeposit, total));
+    return { ...t, deposit_paid: dep, remaining_amount: total - dep };
+  }),
+});
+
+/** Admin deletes a ticket entirely — removes it + any linked remaining-payments and
+ *  P2P transfer listings from the DB. (Stock return for in-stock items is handled in the
+ *  admin handler via releaseReservation; pre-order counts drop automatically.) */
+export const deleteTicket = (ticketId: string) => (db: Database): Database => ({
+  ...db,
+  tickets: db.tickets.filter((t) => t.id !== ticketId),
+  remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId),
+  transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
+});
+
 // ── Closing pre-order boards (กระดานปิดพรี) — one board = one maker ──────────
 export const createBoard = (makerId: string, title: string) => (db: Database): Database => ({
   ...db,

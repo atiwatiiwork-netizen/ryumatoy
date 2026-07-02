@@ -13,6 +13,7 @@ import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { listForResale, submitRemainingPayment } from '@/data/mutations';
+import { useSmartBack } from '@/lib/nav';
 import type { ProductStatus } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
@@ -26,6 +27,7 @@ const TIMELINE: { key: ProductStatus; label: string }[] = [
 export default function TicketDetailPage() {
   const { ticketNo } = useParams<{ ticketNo: string }>();
   const router = useRouter();
+  const goBack = useSmartBack('/wallet');
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
@@ -71,7 +73,7 @@ export default function TicketDetailPage() {
 
   return (
     <div className="mx-auto max-w-[640px]">
-      <BackBar title="ใบพรี" onBack={() => router.push('/wallet')} />
+      <BackBar title="ใบพรี" onBack={goBack} />
 
       <div className="relative mb-4 rounded-2xl border border-[#b91c1c]/35 bg-surface-2 px-[18px] py-[22px] text-center">
         <div className="absolute -left-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
