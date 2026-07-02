@@ -1,5 +1,21 @@
 import type { Database, RankName, RankTier, ShopSettings } from '../entities';
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ *  RANK PERKS — SINGLE SOURCE OF TRUTH  (โครงสร้าง DNA ของระบบ)
+ *  ────────────────────────────────────────────────────────────────────────────
+ *  DNA RULE: any place that charges a deposit, prices an item, or gates access
+ *  MUST resolve the user's rank through THIS file — never hard-code a perk inline.
+ *  Every current & future privilege lives here so the whole app stays consistent:
+ *    • deposit perk   → depositForRank() / depositPctForRank()   (Gold pays 50%)
+ *    • in-stock disc  → instockPriceFor() / instockDiscount()
+ *    • early access   → earlyAccessHoursFor()                    (future "เห็นก่อน")
+ *    • one snapshot   → rankPerks()  (all perks for a rank in one object)
+ *  When adding a new perk: add it here + surface it via rankPerks(), then read it
+ *  from the feature — do not compute rank logic anywhere else.
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
 /** Rank order low→high. */
 export const RANK_ORDER: RankName[] = ['bronze', 'silver', 'gold', 'diamond', 'legend'];
 export const rankIndex = (r: RankName) => RANK_ORDER.indexOf(r);
@@ -49,6 +65,23 @@ export function instockPriceFor(settings: ShopSettings, rank: RankName, price: n
   if (!d) return price;
   const off = d.type === 'percent' ? (price * d.value) / 100 : d.value;
   return Math.max(0, price - off);
+}
+
+/** Early-access window (hours a rank can see/book new items before everyone) — future
+ *  "เห็นก่อน" perk. Reads rank_tiers.early_access_hours; 0 = no head start (default now). */
+export function earlyAccessHoursFor(db: Database, rank: RankName): number {
+  return db.rankTiers.find((t) => t.name === rank)?.early_access_hours ?? 0;
+}
+
+/** One snapshot of EVERY perk a rank gets — the unified view of all privileges.
+ *  Features should read what they need from here rather than recompute rank logic. */
+export function rankPerks(db: Database, settings: ShopSettings, rank: RankName) {
+  return {
+    rank,
+    depositPct: depositPctForRank(settings, rank),        // % of standard deposit paid now
+    instockDiscount: instockDiscount(settings, rank),     // buy-now discount (or null)
+    earlyAccessHours: earlyAccessHoursFor(db, rank),      // head-start window (future)
+  };
 }
 
 /** Rank helpers — auto-upgrade on total_spent, never downgrade (PRD §13). */

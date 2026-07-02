@@ -10,7 +10,7 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining } from '@/domain/services/catalog';
-import { instockPriceFor } from '@/domain/services/ranks';
+import { instockPriceFor, depositForRank } from '@/domain/services/ranks';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
@@ -39,7 +39,11 @@ export default function ProductDetailPage() {
   // in-stock rank discount (Gold+): reduce the buy-now price for the current member
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
   const price = product.is_stock ? instockPriceFor(db.settings, myRank, rawPrice) : rawPrice;
+  // `deposit` = the BASE value stored on the cart line (submitOrder re-applies the rank perk).
   const deposit = product.is_stock ? price : rawDeposit;
+  // `shownDeposit` = what the member actually pays now (pre-orders get the rank deposit perk,
+  // e.g. Gold 50%) — DNA rule: every deposit shown to a user must reflect their rank.
+  const shownDeposit = product.is_stock ? price : depositForRank(db.settings, rawDeposit, myRank);
   const memberSaved = product.is_stock && price < rawPrice;
   const fr = franchiseOf(db, product);
   // live availability for limited-qty items (in-stock / batch) — reservation-aware
@@ -91,8 +95,8 @@ export default function ProductDetailPage() {
 
       {!product.is_stock && (
         <div className="mb-3.5 grid grid-cols-2 gap-2.5">
-          <div className="rounded-xl border border-[#b91c1c]/25 bg-surface-2 p-3"><div className="text-[11.5px] text-ink-muted">มัดจำ (จ่ายตอนนี้)</div><div className="mt-0.5 text-lg font-extrabold">{baht(deposit)}</div></div>
-          <div className="rounded-xl border border-subtle bg-surface-2 p-3"><div className="text-[11.5px] text-ink-muted">ส่วนต่างคงเหลือ</div><div className="mt-0.5 text-lg font-extrabold">{baht(remaining(price, deposit))}</div></div>
+          <div className="rounded-xl border border-[#b91c1c]/25 bg-surface-2 p-3"><div className="text-[11.5px] text-ink-muted">มัดจำ (จ่ายตอนนี้)</div><div className="mt-0.5 text-lg font-extrabold">{baht(shownDeposit)}</div></div>
+          <div className="rounded-xl border border-subtle bg-surface-2 p-3"><div className="text-[11.5px] text-ink-muted">ส่วนต่างคงเหลือ</div><div className="mt-0.5 text-lg font-extrabold">{baht(remaining(price, shownDeposit))}</div></div>
         </div>
       )}
 
@@ -129,7 +133,7 @@ export default function ProductDetailPage() {
       )}
       <div className="flex gap-2.5">
         <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
-        <Button onClick={addToCart} icon="cart" disabled={soldOut}>{soldOut ? 'สินค้าหมด' : `เพิ่มลงตะกร้า · ${baht(product.is_stock ? price : deposit)}`}</Button>
+        <Button onClick={addToCart} icon="cart" disabled={soldOut}>{soldOut ? 'สินค้าหมด' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}</Button>
       </div>
     </div>
   );
