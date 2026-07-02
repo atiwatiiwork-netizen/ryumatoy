@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
+import { applyWatermark } from '@/lib/watermark';
 import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -462,7 +463,7 @@ function Products() {
   const addImage = async (file?: File) => {
     if (!file) return;
     setImgBusy(true);
-    try { const url = await uploadImage(file, 'product'); setDraft((d) => ({ ...d, images: [...d.images, url] })); flash('เพิ่มรูปแล้ว'); }
+    try { const url = await uploadImage(await applyWatermark(file), 'product'); setDraft((d) => ({ ...d, images: [...d.images, url] })); flash('เพิ่มรูป + ลายน้ำแล้ว'); }
     catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
     finally { setImgBusy(false); }
   };
