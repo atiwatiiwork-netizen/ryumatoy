@@ -450,7 +450,7 @@ interface Draft {
   height_cm: string;
   width_cm: string;
   depth_cm: string;
-  variants: { id?: string; name: string; price: string }[]; // price blank = same as product
+  variants: { id?: string; name: string; price: string; image?: string }[]; // price blank = same as product
 }
 const emptyDraft = (fid: string, mid: string, deposit: number): Draft => ({
   franchise_id: fid, manufacturer_id: mid, series_id: '', series_name: '', wcf_type: 'wcf', cost_yuan: '', description: '', eta_note: '', eta_q: '', eta_year: '', price_total: '', deposit_amount: String(deposit), is_stock: false, stock_qty: '', status: 'open', tracking_no: '', shipped_at: '', images: [], height_cm: '', width_cm: '', depth_cm: '', variants: [],
@@ -464,6 +464,14 @@ function Products() {
   const fresh = () => emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? '', depositFor(st, 'wcf'));
   const [draft, setDraft] = useState<Draft>(fresh);
   const [imgBusy, setImgBusy] = useState(false);
+  const [varImgIdx, setVarImgIdx] = useState<number | null>(null);
+  const addVariantImage = async (i: number, file?: File) => {
+    if (!file) return;
+    setVarImgIdx(i);
+    try { const url = await uploadImage(await applyWatermark(file), 'product'); setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, image: url } : x)) })); flash('เพิ่มรูปแบบแล้ว'); }
+    catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
+    finally { setVarImgIdx(null); }
+  };
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
   // when adding, snap the default เรื่อง/ค่าย to valid ids once real data loads (avoid orphan on save)
@@ -528,7 +536,7 @@ function Products() {
     };
     dispatch(upsertProduct(product));
     // variants: blank price = inherit the product price
-    dispatch(setProductVariants(product.id, draft.variants.filter((v) => v.name.trim()).map((v) => ({ id: v.id, name: v.name, price_total: v.price ? Number(v.price) : undefined }))));
+    dispatch(setProductVariants(product.id, draft.variants.filter((v) => v.name.trim()).map((v) => ({ id: v.id, name: v.name, price_total: v.price ? Number(v.price) : undefined, image_url: v.image }))));
     // cascade the lifecycle status to this product's tickets (customer wallet tracking)
     dispatch(setProductStatus(product.id, product.status));
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
@@ -544,7 +552,7 @@ function Products() {
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
     tracking_no: p.tracking_no ?? '', shipped_at: p.shipped_at ? p.shipped_at.slice(0, 10) : '', images: p.images ?? [],
     height_cm: p.height_cm != null ? String(p.height_cm) : '', width_cm: p.width_cm != null ? String(p.width_cm) : '', depth_cm: p.depth_cm != null ? String(p.depth_cm) : '',
-    variants: variantsOf(db, p.id).map((v) => ({ id: v.id, name: v.name ?? '', price: v.price_total != null ? String(v.price_total) : '' })),
+    variants: variantsOf(db, p.id).map((v) => ({ id: v.id, name: v.name ?? '', price: v.price_total != null ? String(v.price_total) : '', image: v.image_url })),
     });
   };
 
@@ -659,13 +667,19 @@ function Products() {
               ) : (
                 <div className="flex flex-col gap-2">
                   {draft.variants.map((v, i) => (
-                    <div key={i} className="flex gap-2">
-                      <input className={cx(inputCls, 'flex-1')} value={v.name} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) }))} placeholder="ชื่อแบบ เช่น สีแดง" />
-                      <input className={cx(inputCls, 'w-24')} inputMode="numeric" value={v.price} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, price: e.target.value.replace(/[^\d]/g, '') } : x)) }))} placeholder="ราคา*" />
+                    <div key={i} className="flex items-start gap-2 rounded-xl border border-subtle bg-surface-3 p-2">
+                      <label className="grid h-[68px] w-[68px] shrink-0 cursor-pointer place-items-center overflow-hidden rounded-lg border border-dashed border-accent bg-surface-2 text-ink-faint">
+                        {varImgIdx === i ? <Icon name="box" size={18} className="animate-pulse" /> : v.image ? <img src={v.image} alt="" className="h-full w-full object-cover" /> : <div className="flex flex-col items-center gap-0.5"><Icon name="camera" size={16} /><span className="text-[9px]">รูปแบบ</span></div>}
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => addVariantImage(i, e.target.files?.[0])} />
+                      </label>
+                      <div className="flex flex-1 flex-col gap-2">
+                        <input className={inputCls} value={v.name} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) }))} placeholder="ชื่อแบบ เช่น สีแดง" />
+                        <input className={inputCls} inputMode="numeric" value={v.price} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, price: e.target.value.replace(/[^\d]/g, '') } : x)) }))} placeholder="ราคาแบบนี้ (เว้นว่าง = ราคาสินค้า)" />
+                      </div>
                       <button type="button" onClick={() => setDraft((d) => ({ ...d, variants: d.variants.filter((_, j) => j !== i) }))} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-[#f87171]/40 text-[#f87171]"><Icon name="x" size={14} /></button>
                     </div>
                   ))}
-                  <span className="text-[11px] text-ink-faint">*ราคาเว้นว่าง = ใช้ราคาเต็มของสินค้า</span>
+                  <span className="text-[11px] text-ink-faint">แต่ละแบบใส่ รูป + ชื่อ + ราคา ได้ · ลูกค้าเลือกแบบในหน้าสินค้า (รูป/ราคาจะเปลี่ยนตามแบบ)</span>
                 </div>
               )}
             </div>

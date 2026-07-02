@@ -357,7 +357,7 @@ export const removeProduct = (pid: string) => (db: Database): Database => ({
 
 /** Replace a product's variants with the given list. A blank variant price inherits the
  *  product's price; variants always share the product's deposit. */
-export const setProductVariants = (productId: string, list: { id?: string; name: string; price_total?: number }[]) => (db: Database): Database => {
+export const setProductVariants = (productId: string, list: { id?: string; name: string; price_total?: number; image_url?: string }[]) => (db: Database): Database => {
   const p = db.products.find((pp) => pp.id === productId);
   const basePrice = p?.price_total ?? 0;
   const baseDeposit = p?.deposit_amount ?? 0;
@@ -365,7 +365,7 @@ export const setProductVariants = (productId: string, list: { id?: string; name:
     ...db,
     variants: [
       ...db.variants.filter((v) => v.product_id !== productId),
-      ...list.filter((v) => v.name.trim()).map((v) => ({ id: v.id ?? id('v'), product_id: productId, name: v.name.trim(), price_total: v.price_total ?? basePrice, deposit_amount: baseDeposit })),
+      ...list.filter((v) => v.name.trim()).map((v) => ({ id: v.id ?? id('v'), product_id: productId, name: v.name.trim(), price_total: v.price_total ?? basePrice, deposit_amount: baseDeposit, image_url: v.image_url })),
     ],
   };
 };

@@ -53,6 +53,7 @@ export interface ProductVariant {
   price_total: number;
   deposit_amount: number;
   stock_qty?: number;
+  image_url?: string; // per-variant image (shown when the customer picks this variant)
 }
 
 /** Deposit tier — Mega WCF carries a higher default deposit than standard WCF. */

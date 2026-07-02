@@ -81,9 +81,9 @@ export default function ProductDetailPage() {
         }
       />
 
-      <div className="mb-2"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={product.images[0]} big /></div>
-      {product.images[0] && (
-        <button onClick={() => downloadBranded(product.images[0], product.is_stock, product.series_name)} className="mb-3.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-muted2">
+      <div className="mb-2"><ProductThumb isStock={product.is_stock} radius="rounded-2xl" src={variant?.image_url ?? product.images[0]} big /></div>
+      {(variant?.image_url ?? product.images[0]) && (
+        <button onClick={() => downloadBranded((variant?.image_url ?? product.images[0])!, product.is_stock, product.series_name)} className="mb-3.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-muted2">
           <Icon name="share" size={15} /> เซฟรูป (ติดแบรนด์ + ป้าย)
         </button>
       )}
@@ -126,8 +126,9 @@ export default function ProductDetailPage() {
           <div className="mb-2.5 text-sm font-bold">เลือกแบบ</div>
           <div className="mb-5 flex flex-col gap-2.5">
             {variants.map((v) => (
-              <button key={v.id} onClick={() => setVariantId(v.id)} className={cx('flex items-center justify-between rounded-xl border-2 bg-surface-2 px-3.5 py-3 text-left', v.id === variantId ? 'border-primary' : 'border-subtle')}>
-                <span className="text-[13.5px] font-semibold">{v.name}</span>
+              <button key={v.id} onClick={() => setVariantId(v.id)} className={cx('flex items-center gap-3 rounded-xl border-2 bg-surface-2 px-3 py-2.5 text-left', v.id === variantId ? 'border-primary' : 'border-subtle')}>
+                {v.image_url && <img src={v.image_url} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />}
+                <span className="flex-1 text-[13.5px] font-semibold">{v.name}</span>
                 <span className="text-sm font-bold text-primary-soft">{baht(v.price_total)}</span>
               </button>
             ))}
