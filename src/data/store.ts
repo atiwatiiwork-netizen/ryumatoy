@@ -23,6 +23,9 @@ export class Store {
   private timer?: ReturnType<typeof setTimeout>;
   private saving: Promise<void> = Promise.resolve();
   private reloadSeq = 0;
+  /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
+   *  silently losing data. Called with the backend error message. */
+  onPersistError?: (message: string) => void;
 
   constructor(private adapter: PersistenceAdapter) {}
 
@@ -69,7 +72,12 @@ export class Store {
     this.lastSynced = target;
     this.saving = this.saving
       .then(() => this.adapter.persist(target, base))
-      .catch((err) => console.error('[store] persist failed', err));
+      .catch((err) => {
+        console.error('[store] persist failed', err);
+        // rewind so the next change re-attempts these rows instead of treating them as synced
+        this.lastSynced = base;
+        this.onPersistError?.(err instanceof Error ? err.message : String(err));
+      });
     await this.saving;
   };
 

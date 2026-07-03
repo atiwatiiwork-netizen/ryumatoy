@@ -1,10 +1,12 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
+import { useToast } from '@/state/ToastProvider';
+import { store } from '@/data/store';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -14,6 +16,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const db = useDatabase();
   const { isAdmin, isLoggedIn, signInFacebook } = useAuth();
+  const { flash } = useToast();
+  // a failed background save (schema drift, RLS, etc.) must not vanish silently → toast it here.
+  useEffect(() => {
+    store.onPersistError = (m) => flash('บันทึกไม่สำเร็จ — ' + m);
+    return () => { store.onPersistError = undefined; };
+  }, [flash]);
 
   // lock the admin panel to admin Facebook accounts on live (preview/dev stays open)
   if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
