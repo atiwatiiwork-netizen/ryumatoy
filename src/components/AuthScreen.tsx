@@ -42,7 +42,7 @@ export function AuthScreen() {
   };
 
   const doSignup = async () => {
-    if (!name.trim()) return setMsg('กรอกชื่อ');
+    if (!name.trim()) return setMsg('กรอกชื่อบน Facebook');
     if (phone.length < 9) return setMsg('กรอกเบอร์ให้ถูกต้อง');
     if (!fb.trim()) return setMsg('ใส่ลิงก์หรือชื่อ Facebook (แอดมินใช้ยืนยันตัวตนก่อนอนุมัติ)');
     if (pin.length !== 6) return setMsg('PIN ต้องมี 6 หลัก');
@@ -83,7 +83,7 @@ export function AuthScreen() {
       {msg && <div className="mb-3 rounded-xl border border-accent bg-[#b91c1c]/[0.12] px-3.5 py-2.5 text-[13px] text-primary-soft">{msg}</div>}
 
       <div className="flex flex-col gap-3">
-        {mode === 'signup' && <Field label="ชื่อ-นามสกุล"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="ชื่อจริงสำหรับจัดส่ง" /></Field>}
+        {mode === 'signup' && <Field label="ชื่อบน Facebook *"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="ชื่อที่แสดงบนโปรไฟล์ FB ของคุณ" /></Field>}
         <Field label="เบอร์โทรศัพท์"><input className={inputCls} inputMode="tel" value={phone} onChange={(e) => setPhone(digits(e.target.value))} maxLength={10} placeholder="08xxxxxxxx" /></Field>
         {mode === 'signup' && <Field label="ลิงก์ / ชื่อ Facebook *"><input className={inputCls} value={fb} onChange={(e) => setFb(e.target.value)} placeholder="วางลิงก์โปรไฟล์ FB (แอดมินใช้ยืนยันตัวตน)" /></Field>}
         <Field label={mode === 'signup' ? 'ตั้ง PIN 6 หลัก' : mode === 'forgot' ? 'PIN ใหม่ 6 หลัก' : 'PIN 6 หลัก'}>

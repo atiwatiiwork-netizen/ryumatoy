@@ -108,6 +108,25 @@ export class Store {
     this.emit();
   };
 
+  /** Background auto-refresh (polling / tab-focus). Safe by design: it does NOTHING when there
+   *  are unsaved local changes (lastSynced !== db), and bails if any local write lands while the
+   *  fetch is in flight — so it can never clobber something the user just did or is typing. */
+  reloadIfIdle = async (): Promise<void> => {
+    if (!this.ready || this.lastSynced !== this.db) return; // pending edits → leave them alone
+    const before = this.db;
+    const seq = ++this.reloadSeq;
+    let data: Database;
+    try {
+      data = await this.adapter.load();
+    } catch {
+      return; // transient network error → just skip this tick
+    }
+    if (seq !== this.reloadSeq || this.db !== before) return; // superseded or a local write landed
+    this.db = data;
+    this.lastSynced = data;
+    this.emit();
+  };
+
   private scheduleFlush() {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.flush(), 350);

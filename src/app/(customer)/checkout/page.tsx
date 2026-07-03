@@ -33,12 +33,14 @@ export default function CheckoutPage() {
     const p = db.products.find((pp) => pp.id === l.productId);
     return lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock: p?.is_stock ?? true }, myRank);
   };
-  const payNow = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
+  // only lines whose product still exists (a persisted cart may reference a since-removed product)
+  const validLines = cart.lines.filter((l) => db.products.some((p) => p.id === l.productId));
+  const payNow = validLines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
   const noPayment = payNow <= 0; // e.g. Diamond rank (0% deposit) → nothing to transfer now
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
-  const stockLines = cart.lines.filter((l) => l.batchId || db.products.find((p) => p.id === l.productId)?.is_stock);
+  const stockLines = validLines.filter((l) => l.batchId || db.products.find((p) => p.id === l.productId)?.is_stock);
   const needsReserve = canLogin && stockLines.length > 0;
   const [resIds, setResIds] = useState<string[]>([]);
   const [resUntil, setResUntil] = useState<number | null>(null);
@@ -85,7 +87,7 @@ export default function CheckoutPage() {
     setBusy(true);
     // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
     await Promise.all(resIds.map((rid) => payReservation(rid)));
-    dispatch(submitOrder(currentUserId, cart.lines, slip ?? '', resIds));
+    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds));
     cart.clear();
     setBusy(false);
     flash('ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
@@ -107,7 +109,8 @@ export default function CheckoutPage() {
 
       <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-[15px]">
         {cart.lines.map((l) => {
-          const product = db.products.find((p) => p.id === l.productId)!;
+          const product = db.products.find((p) => p.id === l.productId);
+          if (!product) return null; // product removed since added → skip (never crash)
           const variant = db.variants.find((v) => v.id === l.variantId);
           return (
             <div key={l.productId + (l.variantId ?? '')} className="flex justify-between gap-2.5 py-1 text-[13px]">

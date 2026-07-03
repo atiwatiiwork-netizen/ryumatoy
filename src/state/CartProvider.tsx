@@ -1,7 +1,16 @@
 'use client';
 
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 import type { ReactNode } from 'react';
+
+const CART_KEY = 'ryuma_cart'; // persist the cart so it survives a refresh / tab reload
+function loadCart(): { lines: CartLine[]; coupon: string | null } {
+  if (typeof window === 'undefined') return { lines: [], coupon: null };
+  try {
+    const p = JSON.parse(localStorage.getItem(CART_KEY) ?? '{}');
+    return { lines: Array.isArray(p.lines) ? p.lines : [], coupon: p.coupon ?? null };
+  } catch { return { lines: [], coupon: null }; }
+}
 
 /**
  * Cart — UI-only state until checkout. Each line references a product (+ optional
@@ -34,8 +43,13 @@ const same = (a: CartLine, productId: string, variantId?: string) =>
   a.productId === productId && a.variantId === variantId;
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [lines, setLines] = useState<CartLine[]>([]);
-  const [coupon, setCoupon] = useState<string | null>(null);
+  const [lines, setLines] = useState<CartLine[]>(() => loadCart().lines);
+  const [coupon, setCoupon] = useState<string | null>(() => loadCart().coupon);
+
+  // keep localStorage in sync so a refresh / accidental reload doesn't drop the cart
+  useEffect(() => {
+    try { localStorage.setItem(CART_KEY, JSON.stringify({ lines, coupon })); } catch { /* private mode / full */ }
+  }, [lines, coupon]);
 
   const add = useCallback((line: Omit<CartLine, 'qty'> & { qty?: number }) => {
     const qty = line.qty ?? 1;

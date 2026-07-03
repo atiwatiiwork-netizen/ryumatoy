@@ -15,6 +15,18 @@ const StoreContext = createContext(store);
 export function DataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void store.init();
+    // Auto-refresh so customers see approvals / new products without a manual reload. Uses the
+    // idle-guarded reload (never clobbers unsaved edits or the cart, which lives outside the store).
+    const refresh = () => { if (document.visibilityState === 'visible') void store.reloadIfIdle(); };
+    const onFocus = () => void store.reloadIfIdle();
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', onFocus);
+    const timer = setInterval(refresh, 40_000); // gentle poll while the tab is open
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', onFocus);
+      clearInterval(timer);
+    };
   }, []);
   return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
 }

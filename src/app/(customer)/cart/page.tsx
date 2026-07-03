@@ -27,7 +27,7 @@ export default function CartPage() {
     const p = db.products.find((pp) => pp.id === l.productId);
     return lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock: p?.is_stock ?? true }, myRank);
   };
-  const depositSum = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
+  const depositSum = cart.lines.reduce((s, l) => (db.products.some((p) => p.id === l.productId) ? s + unitDeposit(l) * l.qty : s), 0);
   const payNow = depositSum;
   const goBack = useSmartBack('/shop'); // back to wherever the customer came from (board / shop)
 
@@ -50,7 +50,8 @@ export default function CartPage() {
 
       <div className="mb-[18px] flex flex-col gap-2.5">
         {cart.lines.map((l) => {
-          const product = db.products.find((p) => p.id === l.productId)!;
+          const product = db.products.find((p) => p.id === l.productId);
+          if (!product) return null; // product was removed since it was added → skip (never crash)
           const variant = db.variants.find((v) => v.id === l.variantId);
           const isPre = !product.is_stock;
           return (
