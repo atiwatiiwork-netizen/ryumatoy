@@ -43,6 +43,17 @@ export function variantsOf(db: Database, productId: string): ProductVariant[] {
   return db.variants.filter((v) => v.product_id === productId);
 }
 
+/** Product is still taking bookings via an OPEN board → shown in shop, but NOT yet eligible for the
+ *  production queue (the board must be closed first). Prevents a board product being finalized twice. */
+export function inOpenBoard(db: Database, p: Product): boolean {
+  return !!p.board_id && db.boards.some((b) => b.id === p.board_id && b.status === 'open');
+}
+/** Board round has ended (board closed) but the product hasn't been sent to production yet →
+ *  hidden from the shop, and now eligible for ปิดรอบสั่งผลิต to set the final production qty. */
+export function inClosedBoard(db: Database, p: Product): boolean {
+  return !!p.board_id && db.boards.some((b) => b.id === p.board_id && b.status !== 'open');
+}
+
 /** Series under a franchise (optionally further limited to those a maker carries). */
 export function seriesForFranchise(db: Database, franchiseId: string, makerId?: string): Series[] {
   return db.series.filter((s) => s.franchise_ids.includes(franchiseId) && (!makerId || s.maker_ids.includes(makerId)));
@@ -101,6 +112,8 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
   return db.products.filter((p) => {
     // pre-orders leave the shop once the round closes (→ผลิต/เดินทาง/…); wallet still tracks them
     if (!p.is_stock && p.status !== 'open') return false;
+    // a closed board ends its round → its products leave the shop even though still 'open'
+    if (inClosedBoard(db, p)) return false;
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;
     if (f.categoryId && categoryOf(db, p)?.id !== f.categoryId) return false;

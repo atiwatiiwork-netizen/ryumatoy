@@ -10,7 +10,7 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
@@ -307,7 +307,9 @@ function LotStatus() {
   const db = useDatabase();
   const [makerId, setMakerId] = useState(db.manufacturers[0]?.id ?? '');
   useEffect(() => { if (db.manufacturers.length && !db.manufacturers.some((m) => m.id === makerId)) setMakerId(db.manufacturers[0].id); }, [db.manufacturers, makerId]);
-  const lots = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status !== 'closed');
+  // exclude products still in an OPEN board — they're managed via the board (close it first),
+  // so they can't be finalized in two places.
+  const lots = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status !== 'closed' && !inOpenBoard(db, p));
   return (
     <div className="max-w-[720px]">
       <div className="mb-4 flex items-center gap-3">

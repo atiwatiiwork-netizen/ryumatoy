@@ -36,7 +36,7 @@ export default function AdminBoardPage() {
   return (
     <div>
       <div className="mb-1 text-2xl font-extrabold">กระดานปิดพรี</div>
-      <div className="mb-5 text-[13px] text-ink-faint">1 กระดาน = 1 ค่าย · อัปโหลดโปสเตอร์ + เลือกสินค้าของค่ายนั้น · กด “ปิดกระดาน” เมื่อค่ายไม่รับแล้ว (สินค้าทุกตัว → ผลิต)</div>
+      <div className="mb-5 text-[13px] text-ink-faint">1 กระดาน = 1 ค่าย · อัปโหลดโปสเตอร์ + เลือกสินค้าของค่ายนั้น · กด “ปิดกระดาน” เมื่อค่ายไม่รับแล้ว → ไปใส่จำนวนไฟนอลที่ “ปิดรอบสั่งผลิต”</div>
 
       {/* create */}
       <div className="mb-5 rounded-2xl border border-subtle bg-surface-2 p-5">
@@ -109,9 +109,9 @@ function BoardCard({ board }: { board: PreorderBoard }) {
   };
 
   const close = () => {
-    if (!confirm(`ปิดกระดาน “${board.title}” ?\nสินค้า ${inBoard.size} รายการจะเข้าสถานะ "ผลิต" (หยุดรับจองใหม่ · ออเดอร์ที่จองไว้แล้วไม่กระทบ)`)) return;
+    if (!confirm(`ปิดกระดาน “${board.title}” ?\nสินค้า ${inBoard.size} รายการจะหยุดรับจองใหม่ แล้วไปโผล่ที่ "ปิดรอบสั่งผลิต" ให้ใส่จำนวนไฟนอล (ออเดอร์ที่จองไว้ไม่กระทบ)`)) return;
     dispatch(closeBoard(board.id));
-    flash('ปิดกระดานแล้ว → สินค้าเข้าผลิต');
+    flash('ปิดกระดานแล้ว → ไปตั้งจำนวนผลิตที่ “ปิดรอบสั่งผลิต”');
   };
   const del = () => {
     if (!confirm(`ลบกระดาน “${board.title}” ?\n(สินค้าจะถูกปลดออกจากกระดาน แต่ไม่ถูกลบ)`)) return;

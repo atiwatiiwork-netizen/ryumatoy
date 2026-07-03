@@ -6,7 +6,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
-import { orderedQtyOf, franchiseOf } from '@/domain/services/catalog';
+import { orderedQtyOf, franchiseOf, inOpenBoard } from '@/domain/services/catalog';
 import { closeProduction } from '@/data/mutations';
 
 const inputCls = 'w-20 rounded-lg border border-subtle bg-surface-3 px-2.5 py-2 text-center text-sm text-ink outline-none focus:border-accent';
@@ -21,8 +21,9 @@ export default function ProductionPage() {
   // after the real data loads, the seeded default id may not exist → snap to a valid maker
   useEffect(() => { if (db.manufacturers.length && !db.manufacturers.some((m) => m.id === makerId)) setMakerId(db.manufacturers[0].id); }, [db.manufacturers, makerId]);
 
-  // open pre-orders (still accepting orders) for the chosen ค่าย
-  const items = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status === 'open');
+  // open pre-orders ready to finalize: for the chosen ค่าย, still 'open', and NOT sitting in an
+  // open board (those are managed by the board — close the board first, then they show up here).
+  const items = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status === 'open' && !inOpenBoard(db, p));
   const orderedOf = (pid: string) => orderedQtyOf(db, pid);
   const finalOf = (pid: string) => Number(qty[pid] ?? String(orderedOf(pid))) || 0;
   const chosen = items.filter((p) => sel[p.id]);

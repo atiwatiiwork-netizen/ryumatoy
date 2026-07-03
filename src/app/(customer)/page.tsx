@@ -10,13 +10,15 @@ import { Icon } from '@/components/Icon';
 import { StatusBadge, ProgressBar, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { paidPercent } from '@/domain/services/tickets';
+import { inClosedBoard } from '@/domain/services/catalog';
 
 /** Home — responsive (mobile phone layout ↔ desktop top-nav web, HANDOFF.md). */
 export default function HomePage() {
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
   // only sellable items appear on home: in-stock, or pre-orders still open for booking
-  const sellable = (p: (typeof db.products)[number]) => p.is_stock || p.status === 'open';
+  // (a product whose board has closed has ended its round → not sellable anymore)
+  const sellable = (p: (typeof db.products)[number]) => (p.is_stock || p.status === 'open') && !inClosedBoard(db, p);
   const promos = db.settings.announcements ?? [];
   const closingBoards = db.boards.filter((b) => b.status === 'open' && b.poster_url);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);

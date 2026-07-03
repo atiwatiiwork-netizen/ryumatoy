@@ -430,15 +430,12 @@ export const removeBoard = (boardId: string) => (db: Database): Database => ({
 
 /** Close a board: archive it + send every product in it to production (final qty =
  *  the booked amount), cascading ticket product_status like closeProduction. */
-export const closeBoard = (boardId: string) => (db: Database): Database => {
-  const pids = new Set(db.products.filter((p) => p.board_id === boardId).map((p) => p.id));
-  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
-  return {
-    ...db,
-    boards: db.boards.map((b) => (b.id === boardId ? { ...b, status: 'closed', closed_at: new Date().toISOString() } : b)),
-    products: db.products.map((p) =>
-      pids.has(p.id) ? { ...p, status: 'production', production_qty: p.production_qty ?? orderedOf(p.id), surplus_qty: p.surplus_qty ?? 0 } : p,
-    ),
-    tickets: db.tickets.map((t) => (pids.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
-  };
-};
+/** Close a board = end its pre-order round. Products stay `status:'open'` but, because the board
+ *  is now closed, they leave the shop (inClosedBoard) and become eligible for ปิดรอบสั่งผลิต
+ *  (production) where the admin enters the final production qty. No product is finalized here —
+ *  that keeps the flow single-track: an OPEN-board product never appears in the production queue,
+ *  and a CLOSED-board product appears there exactly once until closeProduction sends it to 'production'. */
+export const closeBoard = (boardId: string) => (db: Database): Database => ({
+  ...db,
+  boards: db.boards.map((b) => (b.id === boardId ? { ...b, status: 'closed', closed_at: new Date().toISOString() } : b)),
+});
