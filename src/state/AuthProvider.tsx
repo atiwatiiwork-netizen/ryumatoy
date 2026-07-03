@@ -48,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [appUserId, setAppUserId] = useState<string | null>(null);
   const [ready, setReady] = useState(!hasSupabase); // demo (no backend) is ready at once
   const prevUid = useRef<string | null>(null);
+  const signingUp = useRef(false); // block adopt() auto-provision while our own signup is creating the row
 
   // Map a Supabase Auth session to the app users.id. FB admin: users.id = auth uid.
   // Phone customer: users row linked via auth_id.
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // self-heal: a valid session that resolves to nothing means users.auth_id was
       // never linked (e.g. logged in during the v21-before-v23 window) → the app would
       // hang forever. Link it by the phone in the synthetic email, then re-resolve.
-      if (u && !isFacebook(u) && !r1) {
+      if (u && !isFacebook(u) && !r1 && !signingUp.current) {
         try { await supabase?.rpc('ryuma_link_self'); } catch { /* RPC may not exist yet */ }
         r1 = await resolveAppUser(u);
       }
@@ -127,16 +128,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!supabase) return { error: 'no_server' };
     if ((pin || '').length !== 6) return { error: 'bad_pin' };
     const email = emailFor(phone);
-    const { data: su, error: suErr } = await supabase.auth.signUp({ email, password: pin });
-    if (suErr) return /already/i.test(suErr.message) ? { error: 'phone_taken' } : { error: suErr.message };
-    if (!su.session || !su.user) return { error: 'confirm_email_on' }; // Supabase "Confirm email" must be OFF
-    const { data, error } = await supabase.rpc('ryuma_signup_v2', { p_name: name, p_phone: phone, p_fb: fb, p_auth_id: su.user.id });
-    const res = (data ?? { error: error?.message ?? 'error' }) as RpcResult;
-    if (res.ok && res.user_id) {
-      setAppUserId(res.user_id);   // beat the adopt() race
-      await store.reload();        // row is committed now → make sure the store has it
+    signingUp.current = true; // stop adopt() from auto-provisioning a nameless row underneath us
+    try {
+      const { data: su, error: suErr } = await supabase.auth.signUp({ email, password: pin });
+      if (suErr) return /already/i.test(suErr.message) ? { error: 'phone_taken' } : { error: suErr.message };
+      if (!su.session || !su.user) return { error: 'confirm_email_on' }; // Supabase "Confirm email" must be OFF
+      const authId = su.user.id;
+      // With signingUp guarding adopt(), no auto-provision races us → this inserts the row with the
+      // real name + FB. v34 makes the RPC also self-heal a provisioned row if one ever slips through.
+      const { data, error } = await supabase.rpc('ryuma_signup_v2', { p_name: name, p_phone: phone, p_fb: fb, p_auth_id: authId });
+      const res = (data ?? { error: error?.message ?? 'error' }) as RpcResult;
+      if (res.ok && res.user_id) { setAppUserId(res.user_id); await store.reload(); }
+      return res;
+    } finally {
+      signingUp.current = false;
     }
-    return res;
   }, []);
 
   const setNewPin = useCallback(async (phone: string, pin: string): Promise<RpcResult> => {

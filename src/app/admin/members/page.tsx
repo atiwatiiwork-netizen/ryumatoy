@@ -40,6 +40,19 @@ export default function AdminMembersPage() {
     }
   };
 
+  // Reject = purge the request entirely (profile + login + any submitted data) so the phone + FB
+  // link are freed for a fresh signup. Same backend as delete; different intent/wording.
+  const reject = async (u: User) => {
+    if (!confirm(`ปฏิเสธ + ลบคำขอของ "${u.display_name}" (${u.phone ?? '-'})?\n\nจะลบข้อมูลที่ส่งมาทั้งหมด (โปรไฟล์ + บัญชีเข้าสู่ระบบ เบอร์+PIN + FB) เพื่อให้เบอร์/ลิงก์เฟสว่างสำหรับสมัครใหม่\nกู้คืนไม่ได้`)) return;
+    if (supabase) {
+      const { data, error } = await supabase.rpc('ryuma_admin_purge_user', { p_user_id: u.id });
+      const res = (data ?? {}) as { ok?: boolean; error?: string };
+      if (error || !res.ok) return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : `ปฏิเสธไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
+    }
+    dispatch(removeUser(u.id));
+    flash('ปฏิเสธ + ลบคำขอแล้ว · เบอร์/FB ว่างให้สมัครใหม่ได้');
+  };
+
   const resetPin = (u: User) => {
     if (!confirm(`อนุญาตให้ "${u.display_name}" ตั้ง PIN ใหม่?`)) return;
     dispatch(updateUser(u.id, { pin_reset: true }));
@@ -67,7 +80,7 @@ export default function AdminMembersPage() {
         <div className="mb-3 flex items-center gap-2 text-base font-bold text-ink"><Icon name="bell" size={18} className="text-[#fbbf24]" /> <span>รออนุมัติ</span> <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{pending.length}</span></div>
         {pending.length === 0 ? <div className="py-3 text-[13px] text-ink-faint">ไม่มีสมาชิกรออนุมัติ 🎉</div> : (
           <div className="flex flex-col gap-2.5">
-            {pending.map((u) => <PendingRow key={u.id} u={u} onApprove={() => approve(u)} />)}
+            {pending.map((u) => <PendingRow key={u.id} u={u} onApprove={() => approve(u)} onReject={() => reject(u)} />)}
           </div>
         )}
       </div>
@@ -210,7 +223,7 @@ const STATUS_LABEL: Record<string, string> = { open: 'เปิดจอง', pr
 
 // Pending-approval row. FB present → clickable verify link; FB missing → admin can paste the link
 // the customer sends (handles a stale cached signup build that didn't capture it).
-function PendingRow({ u, onApprove }: { u: User; onApprove: () => void }) {
+function PendingRow({ u, onApprove, onReject }: { u: User; onApprove: () => void; onReject: () => void }) {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [editing, setEditing] = useState(false);
@@ -236,7 +249,10 @@ function PendingRow({ u, onApprove }: { u: User; onApprove: () => void }) {
               </div>
             : <button onClick={() => setEditing(true)} className="mt-0.5 text-[11px] font-semibold text-[#fbbf24] hover:underline">⚠️ ไม่ได้ให้ FB — แตะเพื่อเพิ่ม/ตรวจสอบ</button>}
       </div>
-      <button onClick={onApprove} className="shrink-0 rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
+      <div className="flex shrink-0 gap-2">
+        <button onClick={onReject} className="rounded-[9px] border border-[#f87171]/50 bg-[#f87171]/[0.08] px-3 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>
+        <button onClick={onApprove} className="rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
+      </div>
     </div>
   );
 }
