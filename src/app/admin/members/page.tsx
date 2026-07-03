@@ -14,6 +14,10 @@ import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
 import type { User, PreorderTicket } from '@/domain/entities';
 
+// FB link/name the customer typed at signup → an openable URL. A pasted link opens directly;
+// a plain name opens a Facebook search so the admin can find the profile and verify the person.
+const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://www.facebook.com/search/top?q=${encodeURIComponent(s.trim())}`);
+
 export default function AdminMembersPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
@@ -68,9 +72,12 @@ export default function AdminMembersPage() {
                 <Avatar u={u} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{u.display_name}</div>
-                  <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ไม่มีเบอร์'}{u.fb_link ? ` · FB: ${u.fb_link}` : ''}</div>
+                  <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ไม่มีเบอร์'}</div>
+                  {u.fb_link
+                    ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11.5px] font-semibold text-[#60a5fa] hover:underline">🔗 FB: {u.fb_link}</a>
+                    : <div className="mt-0.5 text-[11px] font-semibold text-[#fbbf24]">⚠️ ไม่ได้ให้ FB — ตรวจสอบก่อนอนุมัติ</div>}
                 </div>
-                <button onClick={() => approve(u)} className="rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
+                <button onClick={() => approve(u)} className="shrink-0 rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
               </div>
             ))}
           </div>
@@ -101,7 +108,12 @@ export default function AdminMembersPage() {
                     <Row label="เบอร์โทร" value={u.phone} />
                     <Row label="ที่อยู่จัดส่ง" value={u.shipping_address} />
                     <Row label="LINE ID" value={u.line_id} />
-                    <Row label="Facebook" value={u.fb_link || (u.facebook_id ? 'เชื่อมต่อแล้ว' : '—')} />
+                    <div className="flex gap-2">
+                      <span className="w-24 shrink-0 text-ink-faint">Facebook</span>
+                      {u.fb_link
+                        ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[#60a5fa] hover:underline">🔗 {u.fb_link}</a>
+                        : <span className="text-ink">{u.facebook_id ? 'เชื่อมต่อแล้ว' : '—'}</span>}
+                    </div>
                     <Row label="สะสม" value={`${pieces} ชิ้น · ${RANK[u.rank as RankKey].label}`} />
                     <div className="mt-1 flex flex-wrap gap-2">
                       <button onClick={() => setManageId(u.id)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">จัดการตั๋วพรี ({tickets})</button>

@@ -44,6 +44,7 @@ export function AuthScreen() {
   const doSignup = async () => {
     if (!name.trim()) return setMsg('กรอกชื่อ');
     if (phone.length < 9) return setMsg('กรอกเบอร์ให้ถูกต้อง');
+    if (!fb.trim()) return setMsg('ใส่ลิงก์หรือชื่อ Facebook (แอดมินใช้ยืนยันตัวตนก่อนอนุมัติ)');
     if (pin.length !== 6) return setMsg('PIN ต้องมี 6 หลัก');
     if (pin !== pin2) return setMsg('PIN สองช่องไม่ตรงกัน');
     setBusy(true); setMsg(null);
@@ -84,7 +85,7 @@ export function AuthScreen() {
       <div className="flex flex-col gap-3">
         {mode === 'signup' && <Field label="ชื่อ-นามสกุล"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="ชื่อจริงสำหรับจัดส่ง" /></Field>}
         <Field label="เบอร์โทรศัพท์"><input className={inputCls} inputMode="tel" value={phone} onChange={(e) => setPhone(digits(e.target.value))} maxLength={10} placeholder="08xxxxxxxx" /></Field>
-        {mode === 'signup' && <Field label="ลิงก์ / ชื่อ Facebook (ให้แอดมินตรวจ)"><input className={inputCls} value={fb} onChange={(e) => setFb(e.target.value)} placeholder="facebook.com/yourname" /></Field>}
+        {mode === 'signup' && <Field label="ลิงก์ / ชื่อ Facebook *"><input className={inputCls} value={fb} onChange={(e) => setFb(e.target.value)} placeholder="วางลิงก์โปรไฟล์ FB (แอดมินใช้ยืนยันตัวตน)" /></Field>}
         <Field label={mode === 'signup' ? 'ตั้ง PIN 6 หลัก' : mode === 'forgot' ? 'PIN ใหม่ 6 หลัก' : 'PIN 6 หลัก'}>
           <input className={cx(inputCls, 'tracking-[0.4em]')} inputMode="numeric" type="password" value={pin} onChange={(e) => setPin(digits(e.target.value).slice(0, 6))} maxLength={6} placeholder="••••••" />
         </Field>
