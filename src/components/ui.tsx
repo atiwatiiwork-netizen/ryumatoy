@@ -107,13 +107,20 @@ export function ProgressBar({ pct, fill = '#dc2626' }: { pct: number; fill?: str
 }
 
 /** Product image — real photo when `src` is set, else striped placeholder. Keeps the ribbon. */
-export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon = true, src, big = false }: { isStock: boolean; size?: number; radius?: string; showRibbon?: boolean; src?: string; big?: boolean }) {
+export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon = true, src, srcB, big = false }: { isStock: boolean; size?: number; radius?: string; showRibbon?: boolean; src?: string; srcB?: string; big?: boolean }) {
+  const split = Boolean(src && srcB); // two variant images shown as a diagonal split (teaser, no variant chosen yet)
   return (
     <div
       className={cx('relative flex items-center justify-center overflow-hidden border border-subtle', src ? 'bg-surface-3' : 'bg-stripe', radius, !size && 'aspect-square w-full')}
       style={size ? { width: size, height: size } : undefined}
     >
-      {src
+      {split ? (
+        <>
+          <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }} />
+          <img src={srcB} alt="" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }} />
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(45deg, transparent calc(50% - 1px), rgba(255,255,255,.4) 50%, transparent calc(50% + 1px))' }} />
+        </>
+      ) : src
         ? <img src={src} alt="" className="h-full w-full object-contain" />
         : <Icon name="box" size={size ? Math.min(46, size * 0.42) : 44} strokeWidth={1.4} className="text-primary-soft/25" />}
       {showRibbon && (

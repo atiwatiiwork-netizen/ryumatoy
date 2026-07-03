@@ -48,6 +48,29 @@ export function seriesForFranchise(db: Database, franchiseId: string, makerId?: 
   return db.series.filter((s) => s.franchise_ids.includes(franchiseId) && (!makerId || s.maker_ids.includes(makerId)));
 }
 
+/** Group products by ค่าย → then ซีรีย์, newest-first within each group. Products with no
+ *  series fall into a null-series group. Used by both the admin list and the customer shop
+ *  so everything reads in a tidy maker → series order. */
+export function groupByMakerSeries(db: Database, products: Product[]) {
+  const byMaker = new Map<string, Product[]>();
+  for (const p of products) { if (!byMaker.has(p.manufacturer_id)) byMaker.set(p.manufacturer_id, []); byMaker.get(p.manufacturer_id)!.push(p); }
+  const newestFirst = (a: Product, b: Product) => (a.created_at < b.created_at ? 1 : -1);
+  return [...byMaker.entries()]
+    .map(([makerId, ps]) => {
+      const bySeries = new Map<string, Product[]>();
+      for (const p of ps) { const k = p.series_id ?? '__none'; if (!bySeries.has(k)) bySeries.set(k, []); bySeries.get(k)!.push(p); }
+      const groups = [...bySeries.entries()]
+        .map(([sid, gps]) => ({
+          seriesId: sid === '__none' ? null : sid,
+          seriesName: sid === '__none' ? null : (db.series.find((s) => s.id === sid)?.name ?? null),
+          products: gps.sort(newestFirst),
+        }))
+        .sort((a, b) => (a.seriesName ?? 'zzz').localeCompare(b.seriesName ?? 'zzz')); // named series first, "อื่นๆ" last
+      return { makerId, makerName: db.manufacturers.find((m) => m.id === makerId)?.name ?? '—', groups };
+    })
+    .sort((a, b) => a.makerName.localeCompare(b.makerName));
+}
+
 const TYPE_LABEL: Record<Product['type'], string> = {
   wcf: 'WCF',
   figure: 'Figure',

@@ -7,7 +7,7 @@ import { Icon } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
-import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, batchRemaining, type ProductFilter } from '@/domain/services/catalog';
+import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, batchRemaining, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -136,10 +136,25 @@ function ShopInner() {
             {category === 'instock' ? 'พร้อมส่ง' : category === 'preorder' ? 'พรีออเดอร์' : 'สินค้าทั้งหมด'}
             <span className="font-normal text-ink-faint lg:text-sm"> · {results.length + openBatches.length} รายการ</span>
           </div>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-            {openBatches.map((b) => <BatchCard key={b.id} batch={b} />)}
-            {results.map((p) => <ProductCard key={p.id} product={p} />)}
-          </div>
+          {openBatches.length > 0 && (
+            <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+              {openBatches.map((b) => <BatchCard key={b.id} batch={b} />)}
+            </div>
+          )}
+          {/* grouped by ค่าย → ซีรีย์, newest-first within each group */}
+          {groupByMakerSeries(db, results).map((mk) => (
+            <div key={mk.makerId} className="mb-6">
+              <div className="mb-2.5 flex items-center gap-2 text-[15px] font-extrabold lg:text-base"><span className="h-4 w-1 rounded-full bg-primary-bright" /> {mk.makerName}</div>
+              {mk.groups.map((g) => (
+                <div key={g.seriesId ?? '__none'} className="mb-4">
+                  {g.seriesName && <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {g.seriesName}</div>}
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+                    {g.products.map((p) => <ProductCard key={p.id} product={p} />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
           {results.length + openBatches.length === 0 && <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>}
         </div>
       </div>

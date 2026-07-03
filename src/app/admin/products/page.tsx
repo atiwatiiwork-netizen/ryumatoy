@@ -10,7 +10,7 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
@@ -701,21 +701,32 @@ function Products() {
 
       <Panel>
         <div className="mb-3 font-bold">สินค้าทั้งหมด ({db.products.length})</div>
-        <div className="flex flex-col divide-y divide-hair">
-          {db.products.map((p) => (
-            <div key={p.id} className="flex items-center gap-3 py-3">
-              <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-stripe"><Icon name="box" size={20} className="text-primary-soft/25" /></div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13.5px] font-semibold">{p.series_name}</div>
-                <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {manufacturerOf(db, p)?.name} · {categoryOf(db, p)?.name ?? '—'} · {baht(p.price_total)}</div>
+        {db.products.length === 0 ? (
+          <div className="py-8 text-center text-ink-faint">ยังไม่มีสินค้า</div>
+        ) : groupByMakerSeries(db, db.products).map((mk) => (
+          <div key={mk.makerId} className="mb-4">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-extrabold text-primary-soft">🏭 {mk.makerName}</div>
+            {mk.groups.map((g) => (
+              <div key={g.seriesId ?? '__none'} className="mb-2 rounded-xl border border-subtle bg-surface-3/40 p-2">
+                <div className="mb-1 pl-1 text-[11.5px] font-bold text-ink-muted2">{g.seriesName ?? 'อื่นๆ (ไม่มีซีรีย์)'} <span className="text-ink-faint">· {g.products.length}</span></div>
+                <div className="flex flex-col divide-y divide-hair">
+                  {g.products.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3 py-2.5">
+                      <div className="grid h-10 w-10 flex-shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{p.images[0] ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] font-semibold">{p.series_name}</div>
+                        <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {categoryOf(db, p)?.name ?? '—'} · {baht(p.price_total)}</div>
+                      </div>
+                      <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
+                      <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+                      <button onClick={() => del(p)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
-              <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
-              <button onClick={() => del(p)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
-            </div>
-          ))}
-          {db.products.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีสินค้า</div>}
-        </div>
+            ))}
+          </div>
+        ))}
       </Panel>
     </div>
   );
