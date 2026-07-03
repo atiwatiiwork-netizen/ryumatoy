@@ -505,10 +505,9 @@ function Products() {
   const reset = () => setDraft(fresh());
 
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
-  // variant products are variant-driven: price comes from each variant (product ราคาเต็ม/หยวน are
-  // hidden + unused); ONE shared มัดจำ applies to every variant. (DNA: no price duplication)
-  const namedVariants = draft.variants.filter((v) => v.name.trim());
-  const hasVariants = namedVariants.length > 0;
+  // variant-driven mode kicks in as soon as a variant ROW exists (before names are typed) — the
+  // product ราคาเต็ม/หยวน are hidden + unused; ONE shared มัดจำ applies to every variant. (DNA: no price dup)
+  const hasVariants = draft.variants.length > 0;
 
   const save = () => {
     if (!draft.franchise_id || !draft.manufacturer_id) return flash('เลือกเรื่อง + ค่าย');
@@ -516,8 +515,9 @@ function Products() {
     const isStock = hasVariants ? false : draft.is_stock; // variants = pre-order multi-choice
     let price: number;
     if (hasVariants) {
-      if (namedVariants.some((v) => !(Number(v.price) > 0))) return flash('กรอกราคาของทุกแบบ (variant)');
-      price = Math.min(...namedVariants.map((v) => Number(v.price))); // for list display; card reads variants
+      if (draft.variants.some((v) => !v.name.trim())) return flash('กรอกชื่อทุกแบบ (variant) หรือลบแบบที่ว่าง');
+      if (draft.variants.some((v) => !(Number(v.price) > 0))) return flash('กรอกราคาของทุกแบบ (variant)');
+      price = Math.min(...draft.variants.map((v) => Number(v.price))); // for list display; card reads variants
     } else {
       price = Number(draft.price_total) || 0;
       if (price <= 0) return flash('กรอกราคาเต็ม');
@@ -557,7 +557,7 @@ function Products() {
     };
     dispatch(upsertProduct(product));
     // variant products: each variant carries its own price; ALL share product.deposit_amount (sharedDeposit)
-    dispatch(setProductVariants(product.id, namedVariants.map((v) => ({ id: v.id, name: v.name, price_total: Number(v.price), image_url: v.image }))));
+    dispatch(setProductVariants(product.id, draft.variants.map((v) => ({ id: v.id, name: v.name, price_total: Number(v.price), image_url: v.image }))));
     // cascade the lifecycle status to this product's tickets (customer wallet tracking)
     dispatch(setProductStatus(product.id, product.status));
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
