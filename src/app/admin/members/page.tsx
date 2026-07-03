@@ -67,19 +67,7 @@ export default function AdminMembersPage() {
         <div className="mb-3 flex items-center gap-2 text-base font-bold text-ink"><Icon name="bell" size={18} className="text-[#fbbf24]" /> <span>รออนุมัติ</span> <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{pending.length}</span></div>
         {pending.length === 0 ? <div className="py-3 text-[13px] text-ink-faint">ไม่มีสมาชิกรออนุมัติ 🎉</div> : (
           <div className="flex flex-col gap-2.5">
-            {pending.map((u) => (
-              <div key={u.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 p-3">
-                <Avatar u={u} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold">{u.display_name}</div>
-                  <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ไม่มีเบอร์'}</div>
-                  {u.fb_link
-                    ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11.5px] font-semibold text-[#60a5fa] hover:underline">🔗 FB: {u.fb_link}</a>
-                    : <div className="mt-0.5 text-[11px] font-semibold text-[#fbbf24]">⚠️ ไม่ได้ให้ FB — ตรวจสอบก่อนอนุมัติ</div>}
-                </div>
-                <button onClick={() => approve(u)} className="shrink-0 rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
-              </div>
-            ))}
+            {pending.map((u) => <PendingRow key={u.id} u={u} onApprove={() => approve(u)} />)}
           </div>
         )}
       </div>
@@ -219,6 +207,39 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
 }
 
 const STATUS_LABEL: Record<string, string> = { open: 'เปิดจอง', production: 'ผลิต', shipping: 'เดินทาง', arrived: 'ถึงไทย', delivered: 'ส่งมอบ' };
+
+// Pending-approval row. FB present → clickable verify link; FB missing → admin can paste the link
+// the customer sends (handles a stale cached signup build that didn't capture it).
+function PendingRow({ u, onApprove }: { u: User; onApprove: () => void }) {
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [fb, setFb] = useState('');
+  const saveFb = () => {
+    if (!fb.trim()) return flash('วางลิงก์ FB ก่อน');
+    dispatch(updateUser(u.id, { fb_link: fb.trim() }));
+    flash('บันทึก FB แล้ว');
+    setEditing(false); setFb('');
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-subtle bg-surface-3 p-3">
+      <Avatar u={u} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">{u.display_name}</div>
+        <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ไม่มีเบอร์'}</div>
+        {u.fb_link
+          ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11.5px] font-semibold text-[#60a5fa] hover:underline">🔗 FB: {u.fb_link}</a>
+          : editing
+            ? <div className="mt-1 flex items-center gap-1.5">
+                <input autoFocus value={fb} onChange={(e) => setFb(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveFb()} placeholder="วางลิงก์ FB ที่ลูกค้าส่งมา" className="w-56 max-w-full rounded-lg border border-accent bg-surface-2 px-2.5 py-1.5 text-[12px] text-ink outline-none" />
+                <button onClick={saveFb} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">บันทึก</button>
+              </div>
+            : <button onClick={() => setEditing(true)} className="mt-0.5 text-[11px] font-semibold text-[#fbbf24] hover:underline">⚠️ ไม่ได้ให้ FB — แตะเพื่อเพิ่ม/ตรวจสอบ</button>}
+      </div>
+      <button onClick={onApprove} className="shrink-0 rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
+    </div>
+  );
+}
 
 function Row({ label, value }: { label: string; value?: string }) {
   return (
