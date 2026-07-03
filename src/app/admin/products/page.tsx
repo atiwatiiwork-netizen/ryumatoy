@@ -485,6 +485,8 @@ function Products() {
   }, [draft]);
   const [imgBusy, setImgBusy] = useState(false);
   const [varImgIdx, setVarImgIdx] = useState<number | null>(null);
+  const [listQ, setListQ] = useState(''); // search the product list
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed ค่าย groups
   const addVariantImage = async (i: number, file?: File) => {
     if (!file) return;
     setVarImgIdx(i);
@@ -733,35 +735,67 @@ function Products() {
         )}
       </Panel>
 
-      <Panel>
-        <div className="mb-3 font-bold">สินค้าทั้งหมด ({db.products.length})</div>
-        {db.products.length === 0 ? (
-          <div className="py-8 text-center text-ink-faint">ยังไม่มีสินค้า</div>
-        ) : groupByMakerSeries(db, db.products).map((mk) => (
-          <div key={mk.makerId} className="mb-4">
-            <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-extrabold text-primary-soft">🏭 {mk.makerName}</div>
-            {mk.groups.map((g) => (
-              <div key={g.seriesId ?? '__none'} className="mb-2 rounded-xl border border-subtle bg-surface-3/40 p-2">
-                <div className="mb-1 pl-1 text-[11.5px] font-bold text-ink-muted2">{g.seriesName ?? 'อื่นๆ (ไม่มีซีรีย์)'} <span className="text-ink-faint">· {g.products.length}</span></div>
-                <div className="flex flex-col divide-y divide-hair">
-                  {g.products.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3 py-2.5">
-                      <div className="grid h-10 w-10 flex-shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{p.images[0] ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}</div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] font-semibold">{p.series_name}</div>
-                        <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {categoryOf(db, p)?.name ?? '—'} · {baht(p.price_total)}</div>
+      {(() => {
+        // search first (name/ตัวละคร/เรื่อง), then group by ค่าย → ซีรีย์. A search or a collapse
+        // toggle keeps the long list navigable when there are many products.
+        const query = listQ.trim().toLowerCase();
+        const shown = query
+          ? db.products.filter((p) => `${p.series_name} ${p.character_name ?? ''} ${franchiseOf(db, p)?.name ?? ''}`.toLowerCase().includes(query))
+          : db.products;
+        const makerGroups = groupByMakerSeries(db, shown);
+        const isOpen = (id: string) => Boolean(query) || !collapsed.has(id); // search forces everything open
+        const toggleMaker = (id: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+        const allCollapsed = makerGroups.length > 0 && makerGroups.every((mk) => collapsed.has(mk.makerId));
+        const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(makerGroups.map((mk) => mk.makerId)));
+        const makerCount = (mk: (typeof makerGroups)[number]) => mk.groups.reduce((n, g) => n + g.products.length, 0);
+        return (
+          <Panel>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="font-bold">สินค้าทั้งหมด ({db.products.length})</span>
+              {makerGroups.length > 1 && <button onClick={toggleAll} className="ml-auto rounded-lg border border-subtle bg-surface-3 px-2.5 py-1 text-[11.5px] font-semibold text-ink-muted2">{allCollapsed ? 'ขยายทั้งหมด' : 'ยุบทั้งหมด'}</button>}
+            </div>
+            <div className="relative mb-3">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint"><Icon name="search" size={15} /></span>
+              <input value={listQ} onChange={(e) => setListQ(e.target.value)} placeholder="ค้นหาชื่อ / ตัวละคร / เรื่อง" className={cx(inputCls, 'pl-9')} />
+              {listQ && <button onClick={() => setListQ('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-faint"><Icon name="x" size={14} /></button>}
+            </div>
+            {db.products.length === 0 ? (
+              <div className="py-8 text-center text-ink-faint">ยังไม่มีสินค้า</div>
+            ) : makerGroups.length === 0 ? (
+              <div className="py-8 text-center text-ink-faint">ไม่พบสินค้าตามคำค้น “{listQ}”</div>
+            ) : makerGroups.map((mk) => {
+              const open = isOpen(mk.makerId);
+              return (
+                <div key={mk.makerId} className="mb-3">
+                  <button onClick={() => toggleMaker(mk.makerId)} className="mb-1.5 flex w-full items-center gap-1.5 rounded-lg bg-surface-3/60 px-2 py-2 text-[13px] font-extrabold text-primary-soft">
+                    <span className={cx('text-ink-faint transition-transform', open ? 'rotate-90' : '')}><Icon name="chevronRight" size={15} /></span>
+                    🏭 {mk.makerName} <span className="font-semibold text-ink-faint">· {makerCount(mk)}</span>
+                  </button>
+                  {open && mk.groups.map((g) => (
+                    <div key={g.seriesId ?? '__none'} className="mb-2 rounded-xl border border-subtle bg-surface-3/40 p-2">
+                      <div className="mb-1 pl-1 text-[11.5px] font-bold text-ink-muted2">{g.seriesName ?? 'อื่นๆ (ไม่มีซีรีย์)'} <span className="text-ink-faint">· {g.products.length}</span></div>
+                      <div className="flex flex-col divide-y divide-hair">
+                        {g.products.map((p) => (
+                          <div key={p.id} className="flex items-center gap-3 py-2.5">
+                            <div className="grid h-10 w-10 flex-shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{p.images[0] ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}</div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[13px] font-semibold">{p.series_name}</div>
+                              <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {categoryOf(db, p)?.name ?? '—'} · {baht(p.price_total)}</div>
+                            </div>
+                            <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
+                            <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+                            <button onClick={() => del(p)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+                          </div>
+                        ))}
                       </div>
-                      <StatusBadge status={(p.is_stock ? 'open' : p.status) as StatusKey} />
-                      <button onClick={() => edit(p)} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
-                      <button onClick={() => del(p)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
                     </div>
                   ))}
                 </div>
-              </div>
-            ))}
-          </div>
-        ))}
-      </Panel>
+              );
+            })}
+          </Panel>
+        );
+      })()}
     </div>
   );
 }
