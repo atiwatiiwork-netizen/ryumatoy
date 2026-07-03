@@ -113,6 +113,17 @@ export interface PreorderBoard {
   closed_at?: string;
 }
 
+/** Immutable snapshot written when a board is closed + its round sent to production. History log:
+ *  what each product booked vs. how many were ordered final, frozen at close time. */
+export interface BoardCloseLog {
+  id: string;
+  board_id: string;
+  board_title: string;
+  maker_id: string;
+  closed_at: string;
+  lines: { product_id: string; name: string; booked: number; final: number; surplus: number }[];
+}
+
 /**
  * A re-opened sale of leftover/surplus stock on the SAME base product (SKU) — a
  * separate lot with its own price/deposit/qty. Existing pre-order buyers are
@@ -339,6 +350,7 @@ export interface Database {
   series: Series[];
   products: Product[];
   boards: PreorderBoard[];
+  boardLogs: BoardCloseLog[];
   batches: ProductBatch[];
   stockAdditions: StockAddition[];
   variants: ProductVariant[];

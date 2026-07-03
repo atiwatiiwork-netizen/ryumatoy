@@ -7,9 +7,9 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { franchiseOf } from '@/domain/services/catalog';
+import { franchiseOf, orderedQtyOf } from '@/domain/services/catalog';
 import { uploadImage } from '@/lib/upload';
-import { createBoard, updateBoard, setBoardProducts, closeBoard, removeBoard } from '@/data/mutations';
+import { createBoard, updateBoard, setBoardProducts, closeBoardWithProduction, removeBoard } from '@/data/mutations';
 import type { PreorderBoard } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -19,7 +19,6 @@ export default function AdminBoardPage() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const open = db.boards.filter((b) => b.status === 'open');
-  const closed = db.boards.filter((b) => b.status === 'closed');
 
   const [makerId, setMakerId] = useState(db.manufacturers[0]?.id ?? '');
   const [title, setTitle] = useState('');
@@ -57,22 +56,46 @@ export default function AdminBoardPage() {
         <div className="mb-6 rounded-2xl border border-dashed border-subtle py-8 text-center text-[13px] text-ink-faint">ยังไม่มีกระดานที่เปิดอยู่</div>
       ) : open.map((b) => <BoardCard key={b.id} board={b} />)}
 
-      {/* closed history */}
-      {closed.length > 0 && (
+      {/* closed rounds history (immutable snapshots) */}
+      {(db.boardLogs ?? []).length > 0 && (
         <div className="mt-8">
-          <div className="mb-3 text-base font-bold text-ink-muted2">ประวัติกระดานที่ปิดแล้ว ({closed.length})</div>
-          <div className="flex flex-col gap-2">
-            {closed.map((b) => {
-              const maker = db.manufacturers.find((m) => m.id === b.maker_id);
-              const count = db.products.filter((p) => p.board_id === b.id).length;
-              return (
-                <div key={b.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-2 p-3 text-[13px]">
-                  <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px] text-ink-muted2">ปิดแล้ว</span>
-                  <span className="font-semibold">{b.title}</span>
-                  <span className="text-ink-faint">{maker?.name} · {count} รายการ · ปิดเมื่อ {b.closed_at ? new Date(b.closed_at).toLocaleDateString('th-TH') : '—'}</span>
-                </div>
-              );
-            })}
+          <div className="mb-3 text-base font-bold text-ink-muted2">ประวัติปิดรอบสั่งผลิต ({(db.boardLogs ?? []).length})</div>
+          <div className="flex flex-col gap-3">
+            {(db.boardLogs ?? []).map((log) => <BoardLogCard key={log.id} log={log} makerName={db.manufacturers.find((m) => m.id === log.maker_id)?.name ?? '—'} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardLogCard({ log, makerName }: { log: import('@/domain/entities').BoardCloseLog; makerName: string }) {
+  const [open, setOpen] = useState(true);
+  const totBooked = log.lines.reduce((s, l) => s + l.booked, 0);
+  const totFinal = log.lines.reduce((s, l) => s + l.final, 0);
+  return (
+    <div className="rounded-xl border border-subtle bg-surface-2 p-4">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2.5 text-left">
+        <Icon name="chevronRight" size={15} className={cx('text-ink-faint transition-transform', open && 'rotate-90')} />
+        <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px] text-ink-muted2">ปิดรอบแล้ว</span>
+        <span className="text-[14px] font-bold">{log.board_title}</span>
+        <span className="text-[12px] text-ink-faint">{makerName} · {log.lines.length} รายการ · จอง {totBooked} → สั่ง {totFinal}</span>
+        <span className="ml-auto text-[12px] text-ink-faint">{new Date(log.closed_at).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+      </button>
+      {open && (
+        <div className="mt-3 overflow-hidden rounded-lg border border-hair">
+          <div className="grid grid-cols-[1fr_70px_70px_90px] gap-2 bg-surface-3 px-3 py-2 text-[11.5px] font-semibold text-ink-faint">
+            <span>รายการ</span><span className="text-center">ยอดจอง</span><span className="text-center">สั่งไฟนอล</span><span className="text-center">ส่วนเกิน→สต๊อก</span>
+          </div>
+          <div className="flex flex-col divide-y divide-hair">
+            {log.lines.map((l) => (
+              <div key={l.product_id} className="grid grid-cols-[1fr_70px_70px_90px] items-center gap-2 px-3 py-2 text-[13px]">
+                <span className="truncate font-semibold">{l.name}</span>
+                <span className="text-center">{l.booked}</span>
+                <span className="text-center font-bold text-primary-soft">{l.final}</span>
+                <span className="text-center text-[12px]">{l.surplus > 0 ? <span className="text-primary-soft">+{l.surplus}</span> : <span className="text-ink-faint">—</span>}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -86,6 +109,8 @@ function BoardCard({ board }: { board: PreorderBoard }) {
   const { flash } = useToast();
   const maker = db.manufacturers.find((m) => m.id === board.maker_id);
   const [busy, setBusy] = useState(false);
+  const [closing, setClosing] = useState(false); // final-qty dialog; board stays OPEN until confirmed
+  const [finalQ, setFinalQ] = useState<Record<string, string>>({});
 
   // this maker's open pre-orders that are free (no board) or already in THIS board
   const eligible = db.products.filter((p) => p.manufacturer_id === board.maker_id && !p.is_stock && p.status === 'open' && (!p.board_id || p.board_id === board.id));
@@ -108,10 +133,17 @@ function BoardCard({ board }: { board: PreorderBoard }) {
     finally { setBusy(false); }
   };
 
-  const close = () => {
-    if (!confirm(`ปิดกระดาน “${board.title}” ?\nสินค้า ${inBoard.size} รายการจะหยุดรับจองใหม่ แล้วไปโผล่ที่ "ปิดรอบสั่งผลิต" ให้ใส่จำนวนไฟนอล (ออเดอร์ที่จองไว้ไม่กระทบ)`)) return;
-    dispatch(closeBoard(board.id));
-    flash('ปิดกระดานแล้ว → ไปตั้งจำนวนผลิตที่ “ปิดรอบสั่งผลิต”');
+  // products in this board (the ones the close dialog will finalize)
+  const boardProducts = db.products.filter((p) => p.board_id === board.id);
+  const bookedOf = (pid: string) => orderedQtyOf(db, pid);
+  const finalOf = (pid: string) => Math.max(bookedOf(pid), Number(finalQ[pid] ?? String(bookedOf(pid))) || 0);
+
+  const confirmClose = () => {
+    // atomic: board closes + all its products go to production + a log is written, in one dispatch.
+    // Nothing runs until this button — cancelling / a dropped connection leaves the board OPEN.
+    dispatch(closeBoardWithProduction(board.id, boardProducts.map((p) => ({ productId: p.id, finalQty: finalOf(p.id) }))));
+    setClosing(false);
+    flash(`ปิดรอบแล้ว → ${boardProducts.length} รายการเข้าผลิต · บันทึกประวัติแล้ว`);
   };
   const del = () => {
     if (!confirm(`ลบกระดาน “${board.title}” ?\n(สินค้าจะถูกปลดออกจากกระดาน แต่ไม่ถูกลบ)`)) return;
@@ -127,7 +159,7 @@ function BoardCard({ board }: { board: PreorderBoard }) {
         <div className="text-[12.5px] text-ink-faint">{maker?.name} · เลือกแล้ว {inBoard.size} รายการ</div>
         <div className="ml-auto flex items-center gap-2">
           <Link href={`/board/${board.id}`} target="_blank" className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">ดูหน้าลูกค้า →</Link>
-          <button onClick={close} className="rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">ปิดกระดาน</button>
+          <button onClick={() => setClosing(true)} className="rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">ปิดกระดาน</button>
           <button onClick={del} className="grid h-8 w-8 place-items-center rounded-lg border border-[#f87171]/40 text-[#f87171]"><Icon name="x" size={15} /></button>
         </div>
       </div>
@@ -162,6 +194,43 @@ function BoardCard({ board }: { board: PreorderBoard }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* close dialog — enter final qty per product, then confirm. Board stays OPEN until confirmed. */}
+      {closing && (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/70 p-4" onClick={() => setClosing(false)}>
+          <div className="w-full max-w-[560px] rounded-2xl border border-subtle bg-surface-2 p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 text-lg font-extrabold">ปิดรอบ · {board.title}</div>
+            <div className="mb-4 text-[12.5px] text-ink-faint">ใส่จำนวนไฟนอลที่จะสั่งผลิตแต่ละรายการ (ส่วนที่เกินยอดจอง = สต๊อกร้าน) แล้วกดยืนยัน · ออเดอร์ที่ลูกค้าจองไว้ไม่กระทบ</div>
+            {boardProducts.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-subtle py-6 text-center text-[13px] text-ink-faint">กระดานนี้ยังไม่มีสินค้า — ปิดได้เลย (ไม่มีรายการเข้าผลิต)</div>
+            ) : (
+              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-hair">
+                <div className="grid grid-cols-[1fr_70px_90px_90px] gap-2 bg-surface-3 px-3 py-2 text-[11.5px] font-semibold text-ink-faint">
+                  <span>รายการ</span><span className="text-center">ยอดจอง</span><span className="text-center">สั่งไฟนอล</span><span className="text-center">ส่วนเกิน</span>
+                </div>
+                <div className="flex flex-col divide-y divide-hair">
+                  {boardProducts.map((p) => {
+                    const booked = bookedOf(p.id);
+                    const surplus = finalOf(p.id) - booked;
+                    return (
+                      <div key={p.id} className="grid grid-cols-[1fr_70px_90px_90px] items-center gap-2 px-3 py-2 text-[13px]">
+                        <span className="truncate font-semibold">{p.series_name}</span>
+                        <span className="text-center font-bold">{booked}</span>
+                        <input inputMode="numeric" value={finalQ[p.id] ?? String(booked)} onChange={(e) => setFinalQ((q) => ({ ...q, [p.id]: e.target.value.replace(/[^\d]/g, '') }))} className="rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none focus:border-accent" />
+                        <span className="text-center text-[12px]">{surplus > 0 ? <span className="text-primary-soft">+{surplus}</span> : <span className="text-ink-faint">—</span>}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex items-center gap-2">
+              <button onClick={() => setClosing(false)} className="rounded-lg border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-semibold text-ink-muted2">ยกเลิก</button>
+              <button onClick={confirmClose} className="ml-auto rounded-lg bg-cta px-6 py-2.5 text-[13px] font-bold text-white">ยืนยันปิดรอบ → ผลิต</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

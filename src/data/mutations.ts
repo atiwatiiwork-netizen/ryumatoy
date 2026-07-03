@@ -430,12 +430,35 @@ export const removeBoard = (boardId: string) => (db: Database): Database => ({
 
 /** Close a board: archive it + send every product in it to production (final qty =
  *  the booked amount), cascading ticket product_status like closeProduction. */
-/** Close a board = end its pre-order round. Products stay `status:'open'` but, because the board
- *  is now closed, they leave the shop (inClosedBoard) and become eligible for ปิดรอบสั่งผลิต
- *  (production) where the admin enters the final production qty. No product is finalized here —
- *  that keeps the flow single-track: an OPEN-board product never appears in the production queue,
- *  and a CLOSED-board product appears there exactly once until closeProduction sends it to 'production'. */
-export const closeBoard = (boardId: string) => (db: Database): Database => ({
-  ...db,
-  boards: db.boards.map((b) => (b.id === boardId ? { ...b, status: 'closed', closed_at: new Date().toISOString() } : b)),
-});
+/** Close a board AND finalize its whole production round in one atomic step (admin enters the final
+ *  qty per product in the close dialog, then confirms). Nothing happens until confirm, so a dropped
+ *  connection or a cancelled dialog leaves the board OPEN — no half-closed / double-counted state.
+ *  Writes an immutable BoardCloseLog snapshot (booked vs final per product) for the history. */
+export const closeBoardWithProduction = (boardId: string, entries: { productId: string; finalQty: number }[]) => (db: Database): Database => {
+  const board = db.boards.find((b) => b.id === boardId);
+  if (!board || board.status !== 'open') return db; // only an OPEN board can be closed (no double-close/log)
+  const now = new Date().toISOString();
+  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
+  const byId = new Map(entries.map((e) => [e.productId, e.finalQty]));
+  const lines = entries.map((e) => {
+    const p = db.products.find((pp) => pp.id === e.productId);
+    const booked = orderedOf(e.productId);
+    const final = Math.max(booked, e.finalQty); // can't order fewer than booked
+    return { product_id: e.productId, name: p?.series_name ?? '—', booked, final, surplus: Math.max(0, final - booked) };
+  });
+  return {
+    ...db,
+    boards: db.boards.map((b) => (b.id === boardId ? { ...b, status: 'closed', closed_at: now } : b)),
+    products: db.products.map((p) => {
+      if (!byId.has(p.id)) return p;
+      const booked = orderedOf(p.id);
+      const final = Math.max(booked, byId.get(p.id)!);
+      return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
+    }),
+    tickets: db.tickets.map((t) => (byId.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+    boardLogs: [
+      { id: id('bl'), board_id: boardId, board_title: board.title, maker_id: board.maker_id, closed_at: now, lines },
+      ...db.boardLogs,
+    ],
+  };
+};
