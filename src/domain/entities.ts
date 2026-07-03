@@ -113,12 +113,13 @@ export interface PreorderBoard {
   closed_at?: string;
 }
 
-/** Immutable snapshot written when a board is closed + its round sent to production. History log:
- *  what each product booked vs. how many were ordered final, frozen at close time. */
+/** Immutable snapshot of ONE production round — from either a board close OR a plain ปิดรอบสั่งผลิต
+ *  (no board). History log: what each product booked vs. how many were ordered final, at close time.
+ *  board_id/board_title are set only when the round came from a board. */
 export interface BoardCloseLog {
   id: string;
-  board_id: string;
-  board_title: string;
+  board_id?: string;
+  board_title: string; // board title, or "ปิดรอบสั่งผลิต" for a non-board round
   maker_id: string;
   closed_at: string;
   lines: { product_id: string; name: string; booked: number; final: number; surplus: number }[];

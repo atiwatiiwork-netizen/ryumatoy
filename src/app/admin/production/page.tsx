@@ -6,6 +6,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
+import { RoundLogCard } from '@/components/RoundLogCard';
 import { orderedQtyOf, franchiseOf, inOpenBoard } from '@/domain/services/catalog';
 import { closeProduction } from '@/data/mutations';
 
@@ -90,6 +91,21 @@ export default function ProductionPage() {
           </>
         )}
       </div>
+
+      {/* history of production rounds for this ค่าย (board closes + plain closes, immutable snapshots) */}
+      {(() => {
+        const logs = (db.boardLogs ?? []).filter((l) => l.maker_id === makerId);
+        if (logs.length === 0) return null;
+        const makerName = db.manufacturers.find((m) => m.id === makerId)?.name ?? '—';
+        return (
+          <div className="mt-8">
+            <div className="mb-3 text-base font-bold text-ink-muted2">ประวัติปิดรอบของค่ายนี้ ({logs.length})</div>
+            <div className="flex flex-col gap-3">
+              {logs.map((log) => <RoundLogCard key={log.id} log={log} makerName={makerName} />)}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

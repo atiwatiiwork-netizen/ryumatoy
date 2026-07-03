@@ -337,16 +337,30 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
  */
 export const closeProduction = (entries: { productId: string; finalQty: number }[]) => (db: Database): Database => {
   const ids = new Set(entries.map((e) => e.productId));
+  const now = new Date().toISOString();
+  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
+  // same round-log as a board close (booked vs final snapshot) — a plain ปิดรอบ is also 1 cycle
+  const lines = entries.map((e) => {
+    const p = db.products.find((pp) => pp.id === e.productId);
+    const booked = orderedOf(e.productId);
+    const final = Math.max(booked, e.finalQty);
+    return { product_id: e.productId, name: p?.series_name ?? '—', booked, final, surplus: Math.max(0, final - booked) };
+  });
+  const makerId = db.products.find((p) => p.id === entries[0]?.productId)?.manufacturer_id ?? '';
   return {
     ...db,
     products: db.products.map((p) => {
       const e = entries.find((x) => x.productId === p.id);
       if (!e) return p;
-      const ordered = db.tickets.filter((t) => t.product_id === p.id).reduce((s, t) => s + t.qty, 0);
-      return { ...p, status: 'production', production_qty: e.finalQty, surplus_qty: Math.max(0, e.finalQty - ordered) };
+      const booked = orderedOf(p.id);
+      const final = Math.max(booked, e.finalQty); // can't order fewer than booked
+      return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
     }),
     // ปิดใบพรี = เปิดจอง → ผลิต : ต้อง cascade สถานะลงทุกตั๋วเหมือน setProductStatus (ให้ 2 ฟีเจอร์ตรงกัน)
     tickets: db.tickets.map((t) => (ids.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+    boardLogs: entries.length
+      ? [{ id: id('bl'), board_title: 'ปิดรอบสั่งผลิต', maker_id: makerId, closed_at: now, lines }, ...db.boardLogs]
+      : db.boardLogs,
   };
 };
 export const removeProduct = (pid: string) => (db: Database): Database => ({
