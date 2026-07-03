@@ -25,6 +25,7 @@ const STATUSES: { v: ProductStatus; label: string }[] = [
 ];
 const LOT_STEPS: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered'];
 
+const DRAFT_KEY = 'ryuma_product_draft'; // sessionStorage key so a half-filled product survives a reload
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <label className="block"><span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">{label}</span>{children}</label>
@@ -471,7 +472,17 @@ function Products() {
   const { flash } = useToast();
   const st = db.settings;
   const fresh = () => emptyDraft(db.franchises[0]?.id ?? '', db.manufacturers[0]?.id ?? '', depositFor(st, 'wcf'));
-  const [draft, setDraft] = useState<Draft>(fresh);
+  // Persist the in-progress draft so it survives a reload/tab-eviction (esp. mobile: opening the
+  // image picker can drop the page from memory). Restored on mount, cleared on save/reset.
+  const [draft, setDraft] = useState<Draft>(() => {
+    if (typeof window !== 'undefined') {
+      try { const s = sessionStorage.getItem(DRAFT_KEY); if (s) return JSON.parse(s) as Draft; } catch { /* corrupt → fresh */ }
+    }
+    return fresh();
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* quota/full — non-fatal */ }
+  }, [draft]);
   const [imgBusy, setImgBusy] = useState(false);
   const [varImgIdx, setVarImgIdx] = useState<number | null>(null);
   const addVariantImage = async (i: number, file?: File) => {
@@ -502,7 +513,7 @@ function Products() {
     catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
     finally { setImgBusy(false); }
   };
-  const reset = () => setDraft(fresh());
+  const reset = () => { try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } setDraft(fresh()); };
 
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
   // variant-driven mode kicks in as soon as a variant ROW exists (before names are typed) — the
