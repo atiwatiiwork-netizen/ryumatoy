@@ -6,12 +6,13 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase } from '@/state/DataProvider';
-import { useCurrentUserId, useAuth } from '@/state/AuthProvider';
+import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
 import { RankCongrats } from './RankModals';
 import { ProfileGate } from './ProfileGate';
+import { PublicLanding } from './PublicLanding';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -30,10 +31,17 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   const { flash } = useToast();
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
-  const { needsApproval, isLoggedIn } = useAuth();
+  const { needsApproval, isLoggedIn, authReady } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   const isActive = (href: string) =>
     href === '/' ? path === '/' : path.startsWith(href);
+
+  // Members-only: anonymous visitors get the landing (first banner + login/signup) instead of the
+  // shop. Wait for the session to restore first so logged-in members never flash the login screen.
+  if (canLogin) {
+    if (!authReady) return <div className="grid min-h-screen place-items-center bg-base"><img src="/ryuma-logo.png" alt="" width={44} height={44} className="animate-pulse rounded-xl opacity-80" /></div>;
+    if (!isLoggedIn) return <PublicLanding />;
+  }
 
   return (
     <div className="min-h-screen bg-base">

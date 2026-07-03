@@ -30,10 +30,10 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
     const items: OrderItem[] = lines.map((l) => {
-      const isStock = db.products.find((p) => p.id === l.productId)?.is_stock;
+      const isStock = db.products.find((p) => p.id === l.productId)?.is_stock ?? false;
       // rank perk: pre-order deposit reduced by rank (snapshot); total unchanged (remaining grows).
-      // in-stock lines pay in full (no deposit concept) — the rank perk there is a price discount.
-      const unitDeposit = isStock ? l.depositEach : depositForRank(db.settings, l.depositEach, rank);
+      // full-pay lines (in-stock, or a pay-in-full "พร้อมส่ง" batch) collect in full — no perk. (DNA)
+      const unitDeposit = lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock }, rank);
       return {
         id: id('oi'),
         order_id: orderId,
@@ -185,7 +185,7 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
 };
 
 // ── Rank system ────────────────────────────────────────────────────────────
-import { rankIndex, rankPiecesOf, eligibleRank, depositForRank } from '../domain/services/ranks';
+import { rankIndex, rankPiecesOf, eligibleRank, lineDepositForRank } from '../domain/services/ranks';
 
 /** Raise a pending rank-change request (skips if one to the same rank is already pending). */
 export const requestRank = (userId: string, toRank: RankName, pieces: number) => (db: Database): Database => {

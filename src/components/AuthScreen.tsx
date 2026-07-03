@@ -67,7 +67,7 @@ export function AuthScreen() {
       <div className="mb-5 text-center">
         <img src="/ryuma-logo.png" alt="Ryuma" width={56} height={56} className="mx-auto mb-3 rounded-2xl" />
         <div className="text-xl font-extrabold text-ink">{mode === 'signup' ? 'สมัครสมาชิก Ryuma' : mode === 'forgot' ? 'ตั้ง PIN ใหม่' : 'เข้าสู่ระบบ Ryuma'}</div>
-        <div className="mt-1 text-[12.5px] text-ink-faint">ดูสินค้าได้โดยไม่ต้องเข้าสู่ระบบ · เข้าสู่ระบบเมื่อต้องการสั่งซื้อ</div>
+        <div className="mt-1 text-[12.5px] text-ink-faint">สมัครสมาชิก / เข้าสู่ระบบ เพื่อดูสินค้าและสั่งพรี</div>
       </div>
 
       {mode !== 'forgot' && (

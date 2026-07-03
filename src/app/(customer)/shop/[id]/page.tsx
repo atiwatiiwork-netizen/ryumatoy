@@ -43,11 +43,14 @@ export default function ProductDetailPage() {
   // in-stock rank discount (Gold+): reduce the buy-now price for the current member
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
   const price = product.is_stock ? instockPriceFor(db.settings, myRank, rawPrice) : rawPrice;
+  // full payment when in-stock, or a reopened batch priced pay-in-full (deposit ≥ price, i.e. a
+  // "พร้อมส่ง" round). Such lines never get the pre-order rank deposit perk (nothing to reduce).
+  const isFullPay = product.is_stock || rawDeposit >= rawPrice;
   // `deposit` = the BASE value stored on the cart line (submitOrder re-applies the rank perk).
-  const deposit = product.is_stock ? price : rawDeposit;
+  const deposit = isFullPay ? price : rawDeposit;
   // `shownDeposit` = what the member actually pays now (pre-orders get the rank deposit perk,
   // e.g. Gold 50%) — DNA rule: every deposit shown to a user must reflect their rank.
-  const shownDeposit = product.is_stock ? price : depositForRank(db.settings, rawDeposit, myRank);
+  const shownDeposit = isFullPay ? price : depositForRank(db.settings, rawDeposit, myRank);
   const memberSaved = product.is_stock && price < rawPrice;
   const fr = franchiseOf(db, product);
   // "อื่นๆ ในซีรีย์นี้" — other bookable/in-stock products sharing this series (arc)

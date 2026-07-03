@@ -12,7 +12,7 @@ import { reserveStock, payReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
-import { depositForRank } from '@/domain/services/ranks';
+import { lineDepositForRank } from '@/domain/services/ranks';
 import { useSmartBack } from '@/lib/nav';
 
 export default function CheckoutPage() {
@@ -31,7 +31,7 @@ export default function CheckoutPage() {
   // pre-orders get the member's rank deposit perk (Gold 50%) — same as submitOrder writes
   const unitDeposit = (l: (typeof cart.lines)[number]) => {
     const p = db.products.find((pp) => pp.id === l.productId);
-    return p && !p.is_stock ? depositForRank(db.settings, l.depositEach, myRank) : l.depositEach;
+    return lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock: p?.is_stock ?? true }, myRank);
   };
   const payNow = cart.lines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
   const noPayment = payNow <= 0; // e.g. Diamond rank (0% deposit) → nothing to transfer now

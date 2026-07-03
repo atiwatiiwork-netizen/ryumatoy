@@ -24,6 +24,7 @@ interface AuthState {
   isLoggedIn: boolean;
   isAdmin: boolean;
   isApproved: boolean;
+  authReady: boolean; // false until the first session restore completes (avoids login flash on refresh)
   needsApproval: boolean;
   needsProfile: boolean;
   signInFacebook: () => Promise<void>;
@@ -35,7 +36,7 @@ interface AuthState {
 
 const noop = async (): Promise<RpcResult> => ({ error: 'no_server' });
 const AuthContext = createContext<AuthState>({
-  currentUserId: CURRENT_USER_ID, isLoggedIn: false, isAdmin: false, isApproved: true,
+  currentUserId: CURRENT_USER_ID, isLoggedIn: false, isAdmin: false, isApproved: true, authReady: true,
   needsApproval: false, needsProfile: false,
   signInFacebook: async () => {}, signupPhone: noop, loginPhone: noop, setNewPin: noop, signOut: async () => {},
 });
@@ -45,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatch();
   const [authUser, setAuthUser] = useState<SupaUser | null>(null);
   const [appUserId, setAppUserId] = useState<string | null>(null);
+  const [ready, setReady] = useState(!hasSupabase); // demo (no backend) is ready at once
   const prevUid = useRef<string | null>(null);
 
   // Map a Supabase Auth session to the app users.id. FB admin: users.id = auth uid.
@@ -85,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (u) { const r2 = await resolveAppUser(u); if (r2) setAppUserId(r2); } // row may have just appeared
       }
     };
-    supabase.auth.getSession().then(({ data }) => adopt(data.session));
+    supabase.auth.getSession().then(({ data }) => adopt(data.session)).finally(() => setReady(true));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => adopt(s));
     return () => sub.subscription.unsubscribe();
   }, [dispatch, resolveAppUser]);
@@ -154,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ currentUserId, isLoggedIn, isAdmin, isApproved, needsApproval, needsProfile, signInFacebook, signupPhone, loginPhone, setNewPin, signOut }}>
+    <AuthContext.Provider value={{ currentUserId, isLoggedIn, isAdmin, isApproved, authReady: ready, needsApproval, needsProfile, signInFacebook, signupPhone, loginPhone, setNewPin, signOut }}>
       {children}
     </AuthContext.Provider>
   );

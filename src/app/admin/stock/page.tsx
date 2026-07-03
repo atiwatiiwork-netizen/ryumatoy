@@ -64,6 +64,8 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
   const surplus = p.surplus_qty ?? 0;
   const [price, setPrice] = useState(String(p.price_total));
   const [qty, setQty] = useState(String(remaining));
+  const [label, setLabel] = useState('รอบ 2');
+  const [full, setFull] = useState(false); // จ่ายเต็ม (ของถึงแล้ว/พร้อมส่ง) vs เก็บมัดจำ (ระหว่างทาง)
   const [addQty, setAddQty] = useState('');
   const buyers = stockBuyers(db, p.id);
   const additions = stockAdditionsOf(db, p.id);
@@ -74,8 +76,11 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
   const reopen = () => {
     const q = Math.min(Number(qty) || 0, remaining);
     if (q <= 0) return flash('จำนวนต้องมากกว่า 0 และไม่เกินสต๊อกที่เหลือ');
-    dispatch(reopenBatch(p.id, { price: Number(price) || p.price_total, deposit: p.deposit_amount, qty: q }));
-    flash(`เปิดขายสต๊อก ${q} ตัว @ ${baht(Number(price) || p.price_total)}`);
+    const pr = Number(price) || p.price_total;
+    // พร้อมส่ง (ของอยู่ในมือ) = จ่ายเต็ม ; ระหว่างทาง = เก็บมัดจำเดิม แล้วค่อยเก็บส่วนต่างตอนถึงไทย
+    const dep = full ? pr : p.deposit_amount;
+    dispatch(reopenBatch(p.id, { price: pr, deposit: dep, qty: q, label: label.trim() || undefined }));
+    flash(`เปิด${full ? 'ขายพร้อมส่ง' : 'จองรอบใหม่'} ${q} ตัว @ ${baht(pr)}${full ? ' (จ่ายเต็ม)' : ` · มัดจำ ${baht(dep)}`}`);
     setQty('');
   };
 
@@ -99,8 +104,10 @@ function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean
         </button>
         {!soldOut && (
           <>
+            <label className="text-[12px] text-ink-muted">ชื่อล็อต <input className="ml-1 w-28 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm text-ink outline-none" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="รอบ 2 / พร้อมส่ง" /></label>
             <label className="text-[12px] text-ink-muted">ราคา <input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm text-ink outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} /></label>
             <label className="text-[12px] text-ink-muted">จำนวน <input className="ml-1 w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" max={remaining} value={qty} onChange={(e) => setQtyClamped(e.target.value)} /></label>
+            <button type="button" onClick={() => setFull((v) => !v)} title="สลับระหว่าง เก็บมัดจำ (ระหว่างทาง) กับ จ่ายเต็ม (พร้อมส่ง)" className={cx('rounded-lg border px-2.5 py-1.5 text-[11.5px] font-bold', full ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}>{full ? 'พร้อมส่ง · จ่ายเต็ม' : `มัดจำ ${baht(p.deposit_amount)}`}</button>
             <button onClick={reopen} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดขาย</button>
           </>
         )}

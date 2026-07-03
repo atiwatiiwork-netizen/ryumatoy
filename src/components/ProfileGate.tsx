@@ -18,7 +18,6 @@ export function ProfileGate() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [line, setLine] = useState('');
-  const [browsing, setBrowsing] = useState(false);
 
   // logged in but the user's own row hasn't loaded yet → clean loading, never the
   // wrong gate. (Under RLS the row loads once the session-aware fetch completes.)
@@ -35,15 +34,16 @@ export function ProfileGate() {
     );
   }
 
-  // profile complete but not yet approved → waiting screen (dismissible to browse)
-  if (!needsProfile && needsApproval && !browsing) {
+  // profile complete but not yet approved → members-only waiting screen. No browsing until an
+  // admin approves (keeps the catalog hidden from anyone who just signed up). Signup lands here.
+  if (!needsProfile && needsApproval) {
     return (
       <div className="fixed inset-0 z-[110] grid place-items-center bg-black/75 p-5">
         <div className="w-full max-w-[380px] rounded-3xl border border-subtle bg-surface-2 p-7 text-center">
           <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-[#d97706]/[0.15]"><Icon name="bell" size={30} className="text-[#fbbf24]" /></div>
-          <div className="text-lg font-extrabold text-ink">ส่งข้อมูลเรียบร้อย</div>
-          <div className="mt-1.5 text-[13px] text-ink-muted2">บัญชีของคุณกำลัง<b className="text-[#fbbf24]">รอแอดมินอนุมัติ</b><br />เมื่ออนุมัติแล้วจะสั่งซื้อได้ทันที</div>
-          <button onClick={() => setBrowsing(true)} className="mt-5 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">ดูสินค้าไปก่อน</button>
+          <div className="text-lg font-extrabold text-ink">สมัครเรียบร้อย 🎉</div>
+          <div className="mt-1.5 text-[13px] text-ink-muted2">บัญชีของคุณกำลัง<b className="text-[#fbbf24]">รอแอดมินอนุมัติ</b><br />เมื่ออนุมัติแล้ว เข้าสู่ระบบเพื่อดูสินค้าและสั่งพรีได้เลย</div>
+          <button onClick={() => signOut()} className="mt-5 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">กลับหน้าเข้าสู่ระบบ</button>
         </div>
       </div>
     );

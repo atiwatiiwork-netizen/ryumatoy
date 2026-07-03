@@ -53,6 +53,16 @@ export function depositForRank(settings: ShopSettings, baseDeposit: number, rank
   return (baseDeposit * depositPctForRank(settings, rank)) / 100;
 }
 
+/** Deposit actually collected for ONE unit of a purchase line — THE single place that decides
+ *  whether the pre-order deposit perk applies. Full-payment lines (in-stock items, or a reopened
+ *  batch priced pay-in-full where deposit ≥ price) collect the full amount and get NO rank perk
+ *  (there is nothing to reduce). Pre-order lines get depositForRank. DNA: cart / checkout /
+ *  submitOrder must all call this so a "พร้อมส่ง จ่ายเต็ม" batch never gets its deposit halved. */
+export function lineDepositForRank(settings: ShopSettings, line: { deposit: number; price: number; isStock: boolean }, rank: RankName): number {
+  const fullPay = line.isStock || line.deposit >= line.price;
+  return fullPay ? line.deposit : depositForRank(settings, line.deposit, rank);
+}
+
 /** In-stock discount for a rank (Gold+ only this round). Returns null when none. */
 export function instockDiscount(settings: ShopSettings, rank: RankName): { type: 'percent' | 'baht'; value: number } | null {
   if (rank === 'gold' && settings.instock_disc_gold_value > 0) return { type: settings.instock_disc_gold_type, value: settings.instock_disc_gold_value };
