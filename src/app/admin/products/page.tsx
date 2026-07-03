@@ -505,12 +505,24 @@ function Products() {
   const reset = () => setDraft(fresh());
 
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
+  // variant products are variant-driven: price comes from each variant (product ราคาเต็ม/หยวน are
+  // hidden + unused); ONE shared มัดจำ applies to every variant. (DNA: no price duplication)
+  const namedVariants = draft.variants.filter((v) => v.name.trim());
+  const hasVariants = namedVariants.length > 0;
 
   const save = () => {
     if (!draft.franchise_id || !draft.manufacturer_id) return flash('เลือกเรื่อง + ค่าย');
     if (!draft.series_name.trim()) return flash('กรอกชื่อตัวละคร');
-    const price = Number(draft.price_total) || 0;
-    if (price <= 0) return flash('กรอกราคาเต็ม');
+    const isStock = hasVariants ? false : draft.is_stock; // variants = pre-order multi-choice
+    let price: number;
+    if (hasVariants) {
+      if (namedVariants.some((v) => !(Number(v.price) > 0))) return flash('กรอกราคาของทุกแบบ (variant)');
+      price = Math.min(...namedVariants.map((v) => Number(v.price))); // for list display; card reads variants
+    } else {
+      price = Number(draft.price_total) || 0;
+      if (price <= 0) return flash('กรอกราคาเต็ม');
+    }
+    const sharedDeposit = Number(draft.deposit_amount) || 0; // used by every variant via setProductVariants
     const existing = draft.id ? db.products.find((p) => p.id === draft.id) : undefined;
     // final title = "ชื่อตัวละคร - ซีรีย์" (ซีรีย์เป็น platform grouping); ETA = "Q3 2026"
     const character = draft.series_name.trim();
@@ -525,27 +537,27 @@ function Products() {
       series_name: finalName,
       character_name: character || undefined,
       wcf_type: draft.wcf_type,
-      cost_yuan: draft.cost_yuan ? Number(draft.cost_yuan) : undefined,
+      cost_yuan: hasVariants ? undefined : (draft.cost_yuan ? Number(draft.cost_yuan) : undefined),
       type: 'other',
       description: draft.description.trim(),
       images: draft.images,
       eta_note: etaNote,
       price_total: price,
-      deposit_amount: draft.is_stock ? price : (Number(draft.deposit_amount) || 0),
-      is_stock: draft.is_stock,
-      stock_qty: draft.is_stock ? Number(draft.stock_qty) || 0 : undefined,
+      deposit_amount: isStock ? price : sharedDeposit,
+      is_stock: isStock,
+      stock_qty: isStock ? Number(draft.stock_qty) || 0 : undefined,
       height_cm: draft.height_cm ? Number(draft.height_cm) : undefined,
       width_cm: draft.width_cm ? Number(draft.width_cm) : undefined,
       depth_cm: draft.depth_cm ? Number(draft.depth_cm) : undefined,
-      has_variants: draft.variants.some((v) => v.name.trim()),
+      has_variants: hasVariants,
       status: draft.status,
       tracking_no: draft.tracking_no.trim() || undefined,
       shipped_at: draft.shipped_at || undefined,
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
     dispatch(upsertProduct(product));
-    // variants: blank price = inherit the product price
-    dispatch(setProductVariants(product.id, draft.variants.filter((v) => v.name.trim()).map((v) => ({ id: v.id, name: v.name, price_total: v.price ? Number(v.price) : undefined, image_url: v.image }))));
+    // variant products: each variant carries its own price; ALL share product.deposit_amount (sharedDeposit)
+    dispatch(setProductVariants(product.id, namedVariants.map((v) => ({ id: v.id, name: v.name, price_total: Number(v.price), image_url: v.image }))));
     // cascade the lifecycle status to this product's tickets (customer wallet tracking)
     dispatch(setProductStatus(product.id, product.status));
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
@@ -599,18 +611,20 @@ function Products() {
                 return <span className="mt-1 block text-[11px] text-primary-soft">ชื่อสินค้า: {full}</span>;
               })()}
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="ชนิด (มัดจำ)">
-                <select className={inputCls} value={draft.wcf_type} onChange={(e) => setWcfType(e.target.value as WcfType)}>
-                  <option value="wcf">WCF (มัดจำ {baht(st.deposit_wcf)})</option>
-                  <option value="mega_wcf">Mega WCF (มัดจำ {baht(st.deposit_mega)})</option>
-                </select>
-              </Field>
-              <Field label="ต้นทุน (หยวน) — คิดราคาให้">
-                <input className={inputCls} inputMode="numeric" value={draft.cost_yuan} onChange={(e) => setYuan(e.target.value)} placeholder="เช่น 328" />
-                {draft.cost_yuan && <span className="mt-1 block text-[11px] text-primary-soft">= {baht(priceFromYuan(st, Number(draft.cost_yuan) || 0))}</span>}
-              </Field>
-            </div>
+            {!hasVariants && (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="ชนิด (มัดจำ)">
+                  <select className={inputCls} value={draft.wcf_type} onChange={(e) => setWcfType(e.target.value as WcfType)}>
+                    <option value="wcf">WCF (มัดจำ {baht(st.deposit_wcf)})</option>
+                    <option value="mega_wcf">Mega WCF (มัดจำ {baht(st.deposit_mega)})</option>
+                  </select>
+                </Field>
+                <Field label="ต้นทุน (หยวน) — คิดราคาให้">
+                  <input className={inputCls} inputMode="numeric" value={draft.cost_yuan} onChange={(e) => setYuan(e.target.value)} placeholder="เช่น 328" />
+                  {draft.cost_yuan && <span className="mt-1 block text-[11px] text-primary-soft">= {baht(priceFromYuan(st, Number(draft.cost_yuan) || 0))}</span>}
+                </Field>
+              </div>
+            )}
             <div>
               <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">รูปสินค้า</div>
               <div className="flex flex-wrap gap-2">
@@ -633,13 +647,22 @@ function Products() {
                 <Field label="วันที่ออกจากจีน (คิด ETA)"><input type="date" className={inputCls} value={draft.shipped_at} onChange={(e) => set('shipped_at', e.target.value)} /></Field>
               </div>
             )}
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="ราคาเต็ม (฿)"><input className={inputCls} inputMode="numeric" value={draft.price_total} onChange={(e) => set('price_total', e.target.value)} placeholder="1290" /></Field>
-              {draft.is_stock
-                ? <Field label="จำนวนสต็อก"><input className={inputCls} inputMode="numeric" value={draft.stock_qty} onChange={(e) => set('stock_qty', e.target.value)} placeholder="5" /></Field>
-                : <Field label="มัดจำ (฿)"><input className={inputCls} inputMode="numeric" value={draft.deposit_amount} onChange={(e) => set('deposit_amount', e.target.value)} placeholder="590" /></Field>}
-            </div>
+            {hasVariants ? (
+              <Field label="มัดจำ — ใช้กับทุกแบบ (฿)">
+                <input className={inputCls} inputMode="numeric" value={draft.deposit_amount} onChange={(e) => set('deposit_amount', e.target.value.replace(/[^\d]/g, ''))} placeholder="300" />
+                <span className="mt-1 block text-[11px] text-ink-faint">ราคาเต็มแยกตามแต่ละแบบด้านล่าง · มัดจำนี้ใช้กับทุกแบบเท่ากัน</span>
+              </Field>
+            ) : (
+              <>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.is_stock} onChange={(e) => set('is_stock', e.target.checked)} /> สินค้าพร้อมส่ง (in-stock)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="ราคาเต็ม (฿)"><input className={inputCls} inputMode="numeric" value={draft.price_total} onChange={(e) => set('price_total', e.target.value)} placeholder="1290" /></Field>
+                  {draft.is_stock
+                    ? <Field label="จำนวนสต็อก"><input className={inputCls} inputMode="numeric" value={draft.stock_qty} onChange={(e) => set('stock_qty', e.target.value)} placeholder="5" /></Field>
+                    : <Field label="มัดจำ (฿)"><input className={inputCls} inputMode="numeric" value={draft.deposit_amount} onChange={(e) => set('deposit_amount', e.target.value)} placeholder="590" /></Field>}
+                </div>
+              </>
+            )}
             <Field label="กำหนดการ (ETA)">
               <div className="grid grid-cols-2 gap-2">
                 <select className={inputCls} value={draft.eta_q} onChange={(e) => set('eta_q', e.target.value)}>
@@ -683,7 +706,7 @@ function Products() {
                       </label>
                       <div className="flex flex-1 flex-col gap-2">
                         <input className={inputCls} value={v.name} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) }))} placeholder="ชื่อแบบ เช่น สีแดง" />
-                        <input className={inputCls} inputMode="numeric" value={v.price} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, price: e.target.value.replace(/[^\d]/g, '') } : x)) }))} placeholder="ราคาแบบนี้ (เว้นว่าง = ราคาสินค้า)" />
+                        <input className={inputCls} inputMode="numeric" value={v.price} onChange={(e) => setDraft((d) => ({ ...d, variants: d.variants.map((x, j) => (j === i ? { ...x, price: e.target.value.replace(/[^\d]/g, '') } : x)) }))} placeholder="ราคาเต็มแบบนี้ (บาท) *" />
                       </div>
                       <button type="button" onClick={() => setDraft((d) => ({ ...d, variants: d.variants.filter((_, j) => j !== i) }))} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-[#f87171]/40 text-[#f87171]"><Icon name="x" size={14} /></button>
                     </div>
