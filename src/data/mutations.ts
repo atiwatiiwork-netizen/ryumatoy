@@ -384,6 +384,18 @@ export const setProductVariants = (productId: string, list: { id?: string; name:
   };
 };
 
+/** Create many products in one atomic write (bulk add). Each item brings its Product + optional
+ *  variants; a blank variant price inherits the product price, and variants share the product deposit. */
+export const bulkCreateProducts = (items: { product: Product; variants: { name: string; price_total?: number; image_url?: string }[] }[]) => (db: Database): Database => {
+  const newVariants = items.flatMap((it) =>
+    it.variants.filter((v) => v.name.trim()).map((v) => ({
+      id: id('v'), product_id: it.product.id, name: v.name.trim(),
+      price_total: v.price_total ?? it.product.price_total, deposit_amount: it.product.deposit_amount, image_url: v.image_url,
+    })),
+  );
+  return { ...db, products: [...items.map((it) => it.product), ...db.products], variants: [...newVariants, ...db.variants] };
+};
+
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
  *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */
