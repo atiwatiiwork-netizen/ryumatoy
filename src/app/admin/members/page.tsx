@@ -17,6 +17,8 @@ import type { User, PreorderTicket } from '@/domain/entities';
 // FB link/name the customer typed at signup → an openable URL. A pasted link opens directly;
 // a plain name opens a Facebook search so the admin can find the profile and verify the person.
 const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://www.facebook.com/search/top?q=${encodeURIComponent(s.trim())}`);
+const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
+const RANK_ORDER: RankKey[] = ['legend', 'diamond', 'gold', 'silver', 'bronze']; // members grouped high → low
 
 export default function AdminMembersPage() {
   const db = useDatabase();
@@ -105,46 +107,56 @@ export default function AdminMembersPage() {
 
       <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
         <div className="mb-3 text-base font-bold text-ink">สมาชิกทั้งหมด ({members.length})</div>
-        <div className="flex flex-col divide-y divide-hair">
-          {members.map((u) => {
-            const open = openId === u.id;
-            const pieces = rankPiecesOf(db, u.id);
-            const tickets = db.tickets.filter((t) => t.owner_id === u.id).length;
-            return (
-              <div key={u.id} className="py-2">
-                <div className="flex items-center gap-3">
-                  <Avatar u={u} />
-                  <button onClick={() => setOpenId(open ? null : u.id)} className="min-w-0 flex-1 text-left">
-                    <div className="flex items-center gap-1.5 text-sm font-semibold">{u.display_name} <span className={cx('text-[10px] text-ink-faint transition-transform', open && 'inline-block rotate-180')}>▾</span></div>
-                    <div className="text-[11.5px] text-ink-faint">{u.phone ?? 'ยังไม่มีเบอร์'}{u.shipping_address ? ' · มีที่อยู่' : ''} · {tickets} ใบพรี</div>
-                  </button>
-                  <span className={cx('rounded-full border px-2.5 py-1 text-[11.5px] font-bold', RANK[u.rank as RankKey].cls)}>{RANK[u.rank as RankKey].emoji} {RANK[u.rank as RankKey].label}</span>
-                  <button onClick={() => del(u)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint hover:text-[#f87171]"><Icon name="x" size={15} /></button>
-                </div>
-                {open && (
-                  <div className="ml-[52px] mt-2 grid gap-1.5 rounded-xl border border-subtle bg-surface-3 p-3 text-[12.5px]">
-                    <Row label="รหัสสมาชิก" value={u.member_code} />
-                    <Row label="เบอร์โทร" value={u.phone} />
-                    <Row label="ที่อยู่จัดส่ง" value={u.shipping_address} />
-                    <Row label="LINE ID" value={u.line_id} />
-                    <div className="flex gap-2">
-                      <span className="w-24 shrink-0 text-ink-faint">Facebook</span>
-                      {u.fb_link
-                        ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[#60a5fa] hover:underline">🔗 {u.fb_link}</a>
-                        : <span className="text-ink">{u.facebook_id ? 'เชื่อมต่อแล้ว' : '—'}</span>}
+        {members.length === 0 ? (
+          <div className="py-8 text-center text-ink-faint">ยังไม่มีสมาชิก</div>
+        ) : RANK_ORDER.map((rk) => {
+          const list = members.filter((m) => m.rank === rk);
+          if (list.length === 0) return null;
+          return (
+            <div key={rk} className="mb-2">
+              <div className={cx('mb-1 inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11.5px] font-bold', RANK[rk].cls)}>{RANK[rk].emoji} {RANK[rk].label} · {list.length}</div>
+              <div className="flex flex-col divide-y divide-hair">
+                {list.map((u) => {
+                  const open = openId === u.id;
+                  const pieces = rankPiecesOf(db, u.id);
+                  const tickets = db.tickets.filter((t) => t.owner_id === u.id).length;
+                  return (
+                    <div key={u.id} className="py-1.5">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar u={u} />
+                        <button onClick={() => setOpenId(open ? null : u.id)} className="min-w-0 flex-1 text-left">
+                          <div className="flex items-center gap-1.5 text-[13px] font-semibold">{u.display_name} <span className={cx('text-[10px] text-ink-faint transition-transform', open && 'inline-block rotate-180')}>▾</span></div>
+                          <div className="text-[11px] text-ink-faint">{u.phone ?? 'ไม่มีเบอร์'} · สมัคร {fmtDate(u.created_at)} · {tickets} ใบพรี</div>
+                        </button>
+                        <button onClick={() => del(u)} className="grid h-7 w-7 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint hover:text-[#f87171]"><Icon name="x" size={14} /></button>
+                      </div>
+                      {open && (
+                        <div className="ml-[42px] mt-2 grid gap-1.5 rounded-xl border border-subtle bg-surface-3 p-3 text-[12.5px]">
+                          <Row label="รหัสสมาชิก" value={u.member_code} />
+                          <Row label="วันที่สมัคร" value={u.created_at ? new Date(u.created_at).toLocaleString('th-TH', { dateStyle: 'long', timeStyle: 'short' }) : undefined} />
+                          <Row label="เบอร์โทร" value={u.phone} />
+                          <Row label="ที่อยู่จัดส่ง" value={u.shipping_address} />
+                          <Row label="LINE ID" value={u.line_id} />
+                          <div className="flex gap-2">
+                            <span className="w-24 shrink-0 text-ink-faint">Facebook</span>
+                            {u.fb_link
+                              ? <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[#60a5fa] hover:underline">🔗 {u.fb_link}</a>
+                              : <span className="text-ink">{u.facebook_id ? 'เชื่อมต่อแล้ว' : '—'}</span>}
+                          </div>
+                          <Row label="สะสม" value={`${pieces} ชิ้น · ${RANK[u.rank as RankKey].label}`} />
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            <button onClick={() => setManageId(u.id)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">จัดการตั๋วพรี ({tickets})</button>
+                            <button onClick={() => resetPin(u)} className="rounded-lg border border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">อนุญาตตั้ง PIN ใหม่</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <Row label="สะสม" value={`${pieces} ชิ้น · ${RANK[u.rank as RankKey].label}`} />
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      <button onClick={() => setManageId(u.id)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">จัดการตั๋วพรี ({tickets})</button>
-                      <button onClick={() => resetPin(u)} className="rounded-lg border border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">อนุญาตตั้ง PIN ใหม่</button>
-                    </div>
-                  </div>
-                )}
+                  );
+                })}
               </div>
-            );
-          })}
-          {members.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีสมาชิก</div>}
-        </div>
+            </div>
+          );
+        })}
       </div>
 
       {manageId && <TicketManagerModal userId={manageId} onClose={() => setManageId(null)} />}
@@ -202,11 +214,15 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
               return (
                 <div key={t.id} className="rounded-xl border border-subtle bg-surface-3 p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{product?.series_name ?? t.product_id}</div>
-                      <div className="font-mono text-[11px] text-ink-faint">{t.ticket_no} · ×{t.qty} · {STATUS_LABEL[t.product_status] ?? t.product_status}</div>
+                    <div className="flex min-w-0 gap-2.5">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{product?.images?.[0] ? <img src={product.images[0]} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}</div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">{product?.series_name ?? t.product_id}</div>
+                        <div className="font-mono text-[11px] text-ink-faint">{t.ticket_no} · ×{t.qty} · {STATUS_LABEL[t.product_status] ?? t.product_status}</div>
+                        <div className="text-[10.5px] text-ink-faint">ออกตั๋ว {new Date(t.created_at).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+                      </div>
                     </div>
-                    <div className="flex gap-1.5">
+                    <div className="flex shrink-0 gap-1.5">
                       {!editing && <button onClick={() => { setEditId(t.id); setDepStr(String(t.deposit_paid)); }} className="rounded-lg border border-subtle px-2.5 py-1 text-[12px] font-bold text-ink-muted2">แก้</button>}
                       <button onClick={() => del(t)} className="rounded-lg border border-[#f87171]/40 px-2.5 py-1 text-[12px] font-bold text-[#f87171]">ลบ</button>
                     </div>

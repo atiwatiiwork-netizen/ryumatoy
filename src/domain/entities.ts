@@ -282,6 +282,7 @@ export interface User {
   phone?: string;
   shipping_address?: string;
   line_id?: string;
+  created_at?: string; // signup time (from users.created_at, backfilled from the auth account)
 }
 
 /** A pending/approved request to promote a user's rank (auto-raised at thresholds or admin-forced). */
