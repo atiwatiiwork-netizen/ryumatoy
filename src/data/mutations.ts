@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf } from '../domain/services/catalog';
@@ -62,21 +62,74 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
 }
 
 /** Admin approves a slip: mark order approved + auto-issue one ticket per item (PRD §9 step 6). */
+/** One-shot repair for orders damaged by the old ticket_no collision bug. Idempotent + safe:
+ *  (1) renumbers any DUPLICATE ticket_no (keeps the first, gives later dups the next free number for
+ *      their prefix) so persistence stops failing on the UNIQUE constraint; existing good tickets keep
+ *      their numbers. (2) re-issues a ticket for any APPROVED-order item that has no matching ticket
+ *      (lost when the duplicate insert aborted the sync). Run again = no-op. */
+export const repairTickets = () => (db: Database): Database => {
+  const pad = (n: number) => String(n).padStart(4, '0');
+
+  const taken = new Set<string>();
+  const tickets = db.tickets.map((t) => {
+    if (!taken.has(t.ticket_no)) { taken.add(t.ticket_no); return t; }
+    const m = /^(.*-)(\d{4})$/.exec(t.ticket_no);
+    const prefix = m ? m[1] : `${t.ticket_no}-`;
+    let n = 1;
+    while (taken.has(prefix + pad(n))) n++;
+    const fresh = prefix + pad(n);
+    taken.add(fresh);
+    return { ...t, ticket_no: fresh };
+  });
+
+  const out: Database = { ...db, tickets };
+  const usedIds = new Set<string>();
+  const issued: PreorderTicket[] = [];
+  const key = (a?: string) => a ?? null;
+  for (const order of out.orders) {
+    if (order.status !== 'approved') continue;
+    for (const item of order.items) {
+      const match = out.tickets.find((t) =>
+        !usedIds.has(t.id) && t.owner_id === order.user_id && t.product_id === item.product_id &&
+        key(t.variant_id) === key(item.variant_id) && key(t.batch_id) === key(item.batch_id));
+      if (match) { usedIds.add(match.id); continue; }
+      const product = out.products.find((p) => p.id === item.product_id);
+      if (!product) continue;
+      const abbr = franchiseOf(out, product)?.abbr ?? 'xx';
+      const unitPrice = item.unit_price ?? product.price_total;
+      const unitDeposit = item.unit_deposit ?? product.deposit_amount;
+      const when = order.approved_at ?? order.created_at;
+      issued.push({
+        id: id('t'), ticket_no: nextTicketNo(out, abbr, new Date(), issued),
+        product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
+        owner_id: order.user_id, original_buyer_id: order.user_id, qty: item.qty,
+        deposit_paid: unitDeposit * item.qty, remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
+        remaining_paid: 0, status: 'active', product_status: product.status, qr_code_url: '',
+        created_at: when, approved_at: when,
+      });
+    }
+  }
+  return { ...out, tickets: [...issued, ...out.tickets] };
+};
+
 export function approveOrder(orderId: string) {
   return (db: Database): Database => {
     const order = db.orders.find((o) => o.id === orderId);
     if (!order || order.status !== 'pending_approval') return db;
 
-    const newTickets = order.items.map((item) => {
+    const now = new Date().toISOString();
+    // build in a loop (not .map) so each ticket's number accounts for its siblings issued in THIS order
+    const newTickets: PreorderTicket[] = [];
+    for (const item of order.items) {
       const product = db.products.find((p) => p.id === item.product_id)!;
       const variant = db.variants.find((v) => v.id === item.variant_id);
       const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
       // derive from the ORDER-TIME snapshot; fall back to current product for old rows
       const unitPrice = item.unit_price ?? variant?.price_total ?? product.price_total;
       const unitDeposit = item.unit_deposit ?? variant?.deposit_amount ?? product.deposit_amount;
-      return {
+      newTickets.push({
         id: id('t'),
-        ticket_no: nextTicketNo(db, abbr),
+        ticket_no: nextTicketNo(db, abbr, new Date(), newTickets),
         product_id: product.id,
         variant_id: item.variant_id,
         batch_id: item.batch_id,
@@ -86,13 +139,13 @@ export function approveOrder(orderId: string) {
         deposit_paid: unitDeposit * item.qty,
         remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
         remaining_paid: 0,
-        status: 'active' as const,
+        status: 'active',
         product_status: product.status,
         qr_code_url: '',
-        created_at: new Date().toISOString(),
-        approved_at: new Date().toISOString(),
-      };
-    });
+        created_at: now,
+        approved_at: now,
+      });
+    }
 
     const updated: Database = {
       ...db,

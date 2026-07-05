@@ -9,7 +9,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { rankPiecesOf } from '@/domain/services/ranks';
 import { baht } from '@/lib/theme';
-import { updateUser, removeUser, editTicketDeposit, deleteTicket } from '@/data/mutations';
+import { updateUser, removeUser, editTicketDeposit, deleteTicket, repairTickets } from '@/data/mutations';
 import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
 import type { User, PreorderTicket } from '@/domain/entities';
@@ -71,9 +71,27 @@ export default function AdminMembersPage() {
     if (openId === u.id) setOpenId(null);
   };
 
+  // health check for the old ticket_no-collision bug: duplicate numbers + approved-order items with no ticket
+  const dupCount = (() => { const seen = new Set<string>(); let d = 0; for (const t of db.tickets) { if (seen.has(t.ticket_no)) d++; else seen.add(t.ticket_no); } return d; })();
+  const missingCount = (() => {
+    const used = new Set<string>(); let m = 0; const k = (a?: string) => a ?? null;
+    for (const o of db.orders) { if (o.status !== 'approved') continue; for (const it of o.items) { const t = db.tickets.find((t) => !used.has(t.id) && t.owner_id === o.user_id && t.product_id === it.product_id && k(t.variant_id) === k(it.variant_id) && k(t.batch_id) === k(it.batch_id)); if (t) used.add(t.id); else m++; } }
+    return m;
+  })();
+  const repair = () => {
+    if (!confirm(`ซ่อมตั๋ว?\n· ออกเลขใหม่ให้ตั๋วที่เลขซ้ำ: ${dupCount}\n· ออกตั๋วที่หายไป (จากออเดอร์ที่อนุมัติแล้ว): ${missingCount}\nตั๋วที่ปกติอยู่แล้วไม่กระทบ`)) return;
+    dispatch(repairTickets());
+    flash(`ซ่อมแล้ว · แก้เลขซ้ำ ${dupCount} · ออกตั๋วที่ขาด ${missingCount}`);
+  };
+
   return (
     <div>
-      <div className="mb-1 text-2xl font-extrabold">สมาชิก</div>
+      <div className="mb-1 flex items-center gap-3">
+        <span className="text-2xl font-extrabold">สมาชิก</span>
+        <button onClick={repair} className={cx('ml-auto rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold', dupCount + missingCount > 0 ? 'border-[#fbbf24]/50 bg-[#d97706]/[0.12] text-[#fbbf24]' : 'border-subtle bg-surface-3 text-ink-muted2')}>
+          🔧 ซ่อมตั๋ว{dupCount + missingCount > 0 ? ` (${dupCount + missingCount})` : ''}
+        </button>
+      </div>
       <div className="mb-5 text-[13px] text-ink-faint">อนุมัติสมาชิกใหม่ (สมัครด้วยเบอร์ + PIN) · เช็คเบอร์/FB ก่อนอนุมัติ → ระบบออกรหัส RYU ให้</div>
 
       <div className="mb-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
