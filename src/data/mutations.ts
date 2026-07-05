@@ -24,8 +24,10 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
   return next;
 }
 
-/** Submit a cart as an order awaiting admin approval (PRD §9 step 5). */
-export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[]) {
+/** Submit a cart as an order. Normally it awaits admin approval (PRD §9 step 5). When `autoApprove`
+ *  is set — used for zero-payment orders, e.g. a Diamond member whose deposit is 0 — there is no slip
+ *  to verify, so the order is approved and the tickets are issued immediately (customer gets ตั๋วเลย). */
+export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false) {
   return (db: Database): Database => {
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
@@ -57,7 +59,9 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
       reservation_ids: reservationIds && reservationIds.length ? reservationIds : undefined,
       items,
     };
-    return { ...db, orders: [order, ...db.orders] };
+    const withOrder = { ...db, orders: [order, ...db.orders] };
+    // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step
+    return autoApprove ? approveOrder(orderId)(withOrder) : withOrder;
   };
 }
 
