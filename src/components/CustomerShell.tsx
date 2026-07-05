@@ -80,6 +80,24 @@ export function CustomerShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
+      {/* mobile top bar — the cart lives here on phones (desktop uses the top nav above) */}
+      <header className="sticky top-0 z-40 flex items-center gap-3 border-b border-subtle bg-surface px-4 py-2.5 lg:hidden">
+        <Link href="/" className="flex items-center gap-2">
+          <img src="/ryuma-logo.png" alt="Ryuma" width={30} height={30} className="rounded-[9px]" />
+          <span className="text-[16px] font-extrabold">Ryuma</span>
+        </Link>
+        <div className="ml-auto flex items-center gap-2">
+          <Link href="/cart" aria-label="ตะกร้า" className="relative grid h-9 w-9 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">
+            <Icon name="cart" size={19} />
+            {count > 0 && <span className="absolute -right-1 -top-1 grid h-[17px] min-w-[17px] place-items-center rounded-full bg-primary-bright px-1 text-[10px] font-bold text-white">{count}</span>}
+          </Link>
+          <button aria-label="การแจ้งเตือน" className="relative grid h-9 w-9 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">
+            <Icon name="bell" size={18} />
+            <span className="absolute right-2.5 top-2.5 h-[6px] w-[6px] rounded-full bg-primary-bright" />
+          </button>
+        </div>
+      </header>
+
       {needsApproval && (
         <div className="border-b border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-2 text-center text-[12.5px] font-semibold text-[#fbbf24]">
           บัญชีของคุณรอแอดมินอนุมัติ — ดูสินค้าได้ แต่ยังสั่งซื้อไม่ได้

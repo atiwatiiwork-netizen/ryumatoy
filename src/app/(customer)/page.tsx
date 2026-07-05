@@ -26,21 +26,6 @@ export default function HomePage() {
 
   return (
     <div>
-      {/* mobile app bar (hidden on desktop top-nav) */}
-      <div className="mb-4 flex items-center justify-between lg:hidden">
-        <div className="flex items-center gap-2.5">
-          <img src="/ryuma-logo.png" alt="Ryuma" width={38} height={38} className="rounded-[10px]" />
-          <div>
-            <div className="text-lg font-extrabold leading-none">Ryuma</div>
-            <div className="text-[10px] text-ink-faint">ริวมะ · พรีออเดอร์ฟิกเกอร์</div>
-          </div>
-        </div>
-        <button className="relative grid h-10 w-10 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">
-          <Icon name="bell" size={20} />
-          <span className="absolute right-2.5 top-2.5 h-[7px] w-[7px] rounded-full bg-primary-bright" />
-        </button>
-      </div>
-
       {/* promo / announcement carousel (admin-managed, top of home) */}
       {promos.length > 0 && <PromoCarousel promos={promos} />}
 
