@@ -12,6 +12,7 @@ import { reserveStock, payReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
+import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { useSmartBack } from '@/lib/nav';
 
@@ -90,6 +91,9 @@ export default function CheckoutPage() {
     // Diamond (payNow 0) → auto-approve so the ticket is issued immediately (no slip to check)
     dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment));
     cart.clear();
+    // make sure the order + (Diamond) tickets are actually saved before we navigate away —
+    // otherwise a fast route change / mobile backgrounding can drop the debounced write.
+    await store.flush();
     setBusy(false);
     flash(noPayment ? 'ยืนยันแล้ว · ได้ตั๋วเลย 🎉' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
