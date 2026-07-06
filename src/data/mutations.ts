@@ -453,6 +453,21 @@ export const bulkCreateProducts = (items: { product: Product; variants: { name: 
   return { ...db, products: [...items.map((it) => it.product), ...db.products], variants: [...newVariants, ...db.variants] };
 };
 
+/** Bulk-create in-stock (พร้อมส่ง) products + log each one's opening stock for the history. */
+export const bulkCreateStock = (products: Product[]) => (db: Database): Database => {
+  const now = new Date().toISOString();
+  const additions = products.map((p) => ({ id: id('sa'), product_id: p.id, qty: p.stock_qty ?? 0, note: 'สร้าง (สต๊อกเริ่มต้น)', created_at: now }));
+  return { ...db, products: [...products, ...db.products], stockAdditions: [...additions, ...db.stockAdditions] };
+};
+
+/** Top up an IN-STOCK product's on-hand quantity (stock_qty) + log the addition. (Distinct from
+ *  addStock, which tops up surplus_qty for reopened-batch products.) */
+export const addInStock = (productId: string, qty: number, note = 'เติมสต๊อก') => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => (p.id === productId ? { ...p, stock_qty: (p.stock_qty ?? 0) + qty } : p)),
+  stockAdditions: [{ id: id('sa'), product_id: productId, qty, note, created_at: new Date().toISOString() }, ...db.stockAdditions],
+});
+
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
  *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */

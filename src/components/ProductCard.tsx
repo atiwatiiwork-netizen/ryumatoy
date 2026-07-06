@@ -9,9 +9,10 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine, variantsOf } from '@/domain/services/catalog';
+import { availableFor } from '@/domain/services/reservations';
 import { instockPriceFor } from '@/domain/services/ranks';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { ProductThumb, StatusBadge } from './ui';
+import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
  *  `quickAdd` shows an add-to-cart button (used on board pages so customers can add
@@ -49,6 +50,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const splitSrc = teaser ? withImg[1].image_url : undefined;
 
   const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
+  const stockLeft = product.is_stock ? availableFor(db, product) : null; // reservation-aware "เหลือ N"
   const nVariants = variants.length;
   // pre-order simple products can be added straight to the cart; variant ones need a pick
   const canQuickAdd = quickAdd && !product.is_stock && !product.has_variants;
@@ -96,6 +98,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           {saved && <span className="text-[11px] text-ink-faint line-through">{baht(basePrice)}</span>}
         </div>
         {sel && <div className="truncate text-[10px] font-semibold text-ink-muted2">{sel.name}</div>}
+        {stockLeft != null && <div className={cx('text-[10.5px] font-bold', stockLeft <= 3 ? 'text-[#fbbf24]' : 'text-[#4ade80]')}>พร้อมส่ง · เหลือ {stockLeft} ชิ้น</div>}
         {saved && <div className="text-[10px] font-bold text-[#f1d27a]">ราคาสมาชิก ✦</div>}
         {quickAdd && (
           canQuickAdd

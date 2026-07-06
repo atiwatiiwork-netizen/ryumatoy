@@ -19,6 +19,7 @@ import {
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 import { BulkAdd } from './BulkAdd';
+import { StockBulkAdd } from './StockBulkAdd';
 
 type Tab = 'products' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
@@ -490,7 +491,7 @@ function Products() {
   const [varImgIdx, setVarImgIdx] = useState<number | null>(null);
   const [listQ, setListQ] = useState(''); // search the product list
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed ค่าย groups
-  const [mode, setMode] = useState<'single' | 'bulk'>('single');
+  const [mode, setMode] = useState<'single' | 'bulk' | 'stock'>('single');
   const addVariantImage = async (i: number, file?: File) => {
     if (!file) return;
     setVarImgIdx(i);
@@ -602,6 +603,7 @@ function Products() {
   const ready = db.franchises.length > 0 && db.manufacturers.length > 0;
 
   if (mode === 'bulk') return <BulkAdd onDone={() => setMode('single')} />;
+  if (mode === 'stock') return <StockBulkAdd onDone={() => setMode('single')} />;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[400px_1fr] lg:items-start">
@@ -609,7 +611,8 @@ function Products() {
         <div className="mb-3 flex items-center justify-between">
           <span className="font-bold">{editing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</span>
           <div className="flex items-center gap-3">
-            {!editing && ready && <button onClick={() => setMode('bulk')} className="text-xs font-semibold text-primary-soft">＋ เพิ่มหลายรายการ</button>}
+            {!editing && ready && <button onClick={() => setMode('bulk')} className="text-xs font-semibold text-primary-soft">＋ พรีหลายรายการ</button>}
+            {!editing && ready && <button onClick={() => setMode('stock')} className="text-xs font-semibold text-[#4ade80]">＋ พร้อมส่ง</button>}
             {editing && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}
           </div>
         </div>

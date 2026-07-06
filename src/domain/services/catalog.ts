@@ -1,4 +1,5 @@
 import type { Database, Product, Franchise, Manufacturer, Category, Series, ProductVariant } from '../entities';
+import { availableFor } from './reservations';
 
 /** Catalog read helpers — derive views over the products graph. No mutation. */
 
@@ -114,6 +115,8 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
     if (!p.is_stock && p.status !== 'open') return false;
     // a closed board ends its round → its products leave the shop even though still 'open'
     if (inClosedBoard(db, p)) return false;
+    // in-stock (พร้อมส่ง) sold out (available ≤ 0, reservation-aware) → removed from the shop
+    if (p.is_stock && availableFor(db, p) <= 0) return false;
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;
     if (f.categoryId && categoryOf(db, p)?.id !== f.categoryId) return false;
