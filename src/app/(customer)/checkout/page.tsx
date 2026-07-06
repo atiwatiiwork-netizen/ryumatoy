@@ -11,6 +11,7 @@ import { uploadImage } from '@/lib/upload';
 import { reserveStock, payReservation, confirmReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
+import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder } from '@/data/mutations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
@@ -167,6 +168,7 @@ export default function CheckoutPage() {
             <option value="">ไม่ใช้คูปอง</option>
             {eligibleCoupons.map((x) => <option key={x.grant.id} value={x.grant.id}>{x.coupon.label} · ลด {baht(x.coupon.value)}</option>)}
           </select>
+          {selected && <div className="mt-2.5"><CouponTicket coupon={selected.coupon} size="sm" /></div>}
         </div>
       )}
 

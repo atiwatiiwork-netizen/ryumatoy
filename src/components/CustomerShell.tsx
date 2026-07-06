@@ -11,6 +11,7 @@ import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
 import { RankCongrats } from './RankModals';
+import { CouponReceived } from './CouponTicket';
 import { ProfileGate } from './ProfileGate';
 import { PublicLanding } from './PublicLanding';
 
@@ -121,6 +122,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
 
       <PreviewSwitcher />
       <RankCongrats />
+      <CouponReceived />
       <ProfileGate />
     </div>
   );

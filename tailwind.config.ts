@@ -59,9 +59,31 @@ const config: Config = {
           '0%,100%': { boxShadow: '0 0 0 0 rgba(220,38,38,.45)' },
           '50%': { boxShadow: '0 0 0 8px rgba(220,38,38,0)' },
         },
+        // coupon "อลังการ" effects
+        couponShine: {
+          '0%': { transform: 'translateX(-140%) skewX(-18deg)' },
+          '100%': { transform: 'translateX(260%) skewX(-18deg)' },
+        },
+        twinkle: {
+          '0%,100%': { opacity: '0', transform: 'scale(.4)' },
+          '50%': { opacity: '1', transform: 'scale(1)' },
+        },
+        couponPop: {
+          '0%': { opacity: '0', transform: 'scale(.7) translateY(14px)' },
+          '60%': { opacity: '1', transform: 'scale(1.04)' },
+          '100%': { opacity: '1', transform: 'scale(1)' },
+        },
+        floatY: {
+          '0%,100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-5px)' },
+        },
       },
       animation: {
         pulseRed: 'pulseRed 2.2s infinite',
+        couponShine: 'couponShine 2.6s ease-in-out infinite',
+        twinkle: 'twinkle 1.9s ease-in-out infinite',
+        couponPop: 'couponPop .55s cubic-bezier(.2,.9,.3,1.25)',
+        floatY: 'floatY 3.2s ease-in-out infinite',
       },
     },
   },

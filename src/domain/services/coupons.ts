@@ -6,6 +6,15 @@ import type { Coupon, CouponGrant, CouponScope, Database, Product } from '../ent
  * (ryuma-coupon-spec)
  */
 
+/** Visual tier by baht value — Ultimate (>=200, diamond) / Premium (>=100, red) / Basic (bronze).
+ *  The whole coupon look (color, label, sparkle) is driven off this. (ryuma-coupon-spec) */
+export type CouponTier = 'basic' | 'premium' | 'ultimate';
+export function couponTier(value: number): CouponTier {
+  if (value >= 200) return 'ultimate';
+  if (value >= 100) return 'premium';
+  return 'basic';
+}
+
 /** A coupon is expired when it has an expires_at strictly before `now` (end-of-day inclusive). */
 export function couponExpired(coupon: Coupon, now: Date = new Date()): boolean {
   if (!coupon.expires_at) return false;

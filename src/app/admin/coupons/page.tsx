@@ -10,6 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { RANK_ORDER } from '@/domain/services/ranks';
 import { grantStats } from '@/domain/services/coupons';
+import { CouponTierPill } from '@/components/CouponTicket';
 import { createCoupon, updateCoupon, deleteCoupon, grantCoupon, grantCouponToRank, revokeGrant } from '@/data/mutations';
 import type { Coupon, CouponScope, RankName } from '@/domain/entities';
 
@@ -149,6 +150,7 @@ export default function AdminCouponsPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[15px] font-bold">{coupon.label}</span>
               <span className="rounded-md bg-primary/20 px-2 py-0.5 text-[12px] font-extrabold text-primary-soft">−{baht(coupon.value)}</span>
+              <CouponTierPill value={coupon.value} />
               <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-semibold', scopeCls[coupon.scope])}>{scopeLabel(coupon.scope)}</span>
               {!coupon.active && <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10.5px] text-ink-faint">ปิดใช้</span>}
             </div>

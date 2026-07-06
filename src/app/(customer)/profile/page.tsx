@@ -8,6 +8,7 @@ import { RANK } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge } from '@/components/ui';
 import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
+import { usableGrantsFor } from '@/domain/services/coupons';
 import { RankPerksButton } from '@/components/RankModals';
 import { AuthScreen } from '@/components/AuthScreen';
 
@@ -24,11 +25,13 @@ export default function ProfilePage() {
   const pieces = rankPiecesOf(db, me.id);
   const next = nextRankInfo(db.settings, me.rank, pieces);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).length;
+  const myCoupons = usableGrantsFor(db, CURRENT_USER_ID).length;
   const progress = next ? Math.min(100, (pieces / next.target) * 100) : 100;
 
-  // Only ใบพรีของฉัน is live this phase; the rest are coming soon.
+  // Only ใบพรีของฉัน + คูปอง are live this phase; the rest are coming soon.
   const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode }[] = [
     { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
+    { icon: 'tag', label: 'คูปองของฉัน', href: '/coupons', right: myCoupons ? <Pill>{myCoupons}</Pill> : undefined },
     { icon: 'swap', label: 'รายการขาย P2P' },
     { icon: 'bell', label: 'การแจ้งเตือน' },
     { icon: 'store', label: 'ภาษา' },

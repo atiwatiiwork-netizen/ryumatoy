@@ -14,6 +14,7 @@ import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { listForResale, submitRemainingPayment } from '@/data/mutations';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
+import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import type { ProductStatus } from '@/domain/entities';
 
@@ -165,6 +166,7 @@ export default function TicketDetailPage() {
                 <option value="">ไม่ใช้คูปอง</option>
                 {eligibleCoupons.map((x) => <option key={x.grant.id} value={x.grant.id}>{x.coupon.label} · ลด {baht(x.coupon.value)}</option>)}
               </select>
+              {selectedCoupon && <div className="mt-2.5"><CouponTicket coupon={selectedCoupon.coupon} size="sm" /></div>}
               {couponOff > 0 && <div className="mt-1.5 flex justify-between text-[12.5px] text-[#4ade80]"><span>ส่วนลด</span><span className="font-semibold">−{baht(couponOff)}</span></div>}
             </div>
           )}
