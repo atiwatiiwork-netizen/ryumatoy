@@ -12,7 +12,7 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining, dimensionLabel } from '@/domain/services/catalog';
-import { instockPriceFor, depositForRank } from '@/domain/services/ranks';
+import { depositForRank } from '@/domain/services/ranks';
 import { useSmartBack } from '@/lib/nav';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
@@ -40,9 +40,8 @@ export default function ProductDetailPage() {
   const variant = variants.find((v) => v.id === variantId);
   const rawPrice = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
   const rawDeposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);
-  // in-stock rank discount (Gold+): reduce the buy-now price for the current member
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
-  const price = product.is_stock ? instockPriceFor(db.settings, myRank, rawPrice) : rawPrice;
+  const price = rawPrice; // one price for every rank (no in-stock rank discount)
   // full payment when in-stock, or a reopened batch priced pay-in-full (deposit ≥ price, i.e. a
   // "พร้อมส่ง" round). Such lines never get the pre-order rank deposit perk (nothing to reduce).
   const isFullPay = product.is_stock || rawDeposit >= rawPrice;
@@ -51,7 +50,7 @@ export default function ProductDetailPage() {
   // `shownDeposit` = what the member actually pays now (pre-orders get the rank deposit perk,
   // e.g. Gold 50%) — DNA rule: every deposit shown to a user must reflect their rank.
   const shownDeposit = isFullPay ? price : depositForRank(db.settings, rawDeposit, myRank);
-  const memberSaved = product.is_stock && price < rawPrice;
+  const memberSaved = false; // in-stock has no rank discount → one price for all
   const fr = franchiseOf(db, product);
   // "อื่นๆ ในซีรีย์นี้" — other bookable/in-stock products sharing this series (arc)
   const series = seriesOf(db, product);

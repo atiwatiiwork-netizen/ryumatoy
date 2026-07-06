@@ -453,20 +453,64 @@ export const bulkCreateProducts = (items: { product: Product; variants: { name: 
   return { ...db, products: [...items.map((it) => it.product), ...db.products], variants: [...newVariants, ...db.variants] };
 };
 
-/** Bulk-create in-stock (พร้อมส่ง) products + log each one's opening stock for the history. */
+// same character + maker already sold in-stock? (used to merge stock instead of duplicating a SKU)
+const sameInStock = (products: Product[], p: Product, excludeId?: string) =>
+  products.find((x) => x.is_stock && x.id !== excludeId && x.manufacturer_id === p.manufacturer_id && (x.character_name ?? x.series_name) === (p.character_name ?? p.series_name));
+
+/** Bulk-create in-stock (พร้อมส่ง) products. If a character already has an in-stock SKU (same ค่าย),
+ *  its qty is MERGED into that SKU instead of creating a duplicate. Logs each stock change. */
 export const bulkCreateStock = (products: Product[]) => (db: Database): Database => {
+  let out: Database = { ...db, products: [...db.products], stockAdditions: [...db.stockAdditions] };
   const now = new Date().toISOString();
-  const additions = products.map((p) => ({ id: id('sa'), product_id: p.id, qty: p.stock_qty ?? 0, note: 'สร้าง (สต๊อกเริ่มต้น)', created_at: now }));
-  return { ...db, products: [...products, ...db.products], stockAdditions: [...additions, ...db.stockAdditions] };
+  for (const np of products) {
+    const merge = sameInStock(out.products, np);
+    if (merge) {
+      out.products = out.products.map((x) => (x.id === merge.id ? { ...x, stock_qty: (x.stock_qty ?? 0) + (np.stock_qty ?? 0) } : x));
+      out.stockAdditions = [{ id: id('sa'), product_id: merge.id, qty: np.stock_qty ?? 0, note: `รวมสต๊อก (${np.series_name})`, created_at: now }, ...out.stockAdditions];
+    } else {
+      out.products = [np, ...out.products];
+      out.stockAdditions = [{ id: id('sa'), product_id: np.id, qty: np.stock_qty ?? 0, note: 'สร้าง (สต๊อกเริ่มต้น)', created_at: now }, ...out.stockAdditions];
+    }
+  }
+  return out;
 };
 
-/** Top up an IN-STOCK product's on-hand quantity (stock_qty) + log the addition. (Distinct from
- *  addStock, which tops up surplus_qty for reopened-batch products.) */
-export const addInStock = (productId: string, qty: number, note = 'เติมสต๊อก') => (db: Database): Database => ({
+/** Top up an IN-STOCK product's on-hand quantity + optionally set a new price + log the addition. */
+export const restockInStock = (productId: string, qty: number, newPrice?: number) => (db: Database): Database => ({
   ...db,
-  products: db.products.map((p) => (p.id === productId ? { ...p, stock_qty: (p.stock_qty ?? 0) + qty } : p)),
-  stockAdditions: [{ id: id('sa'), product_id: productId, qty, note, created_at: new Date().toISOString() }, ...db.stockAdditions],
+  products: db.products.map((p) => (p.id === productId ? { ...p, stock_qty: (p.stock_qty ?? 0) + qty, ...(newPrice != null ? { price_total: newPrice, deposit_amount: newPrice } : {}) } : p)),
+  stockAdditions: [{ id: id('sa'), product_id: productId, qty, note: newPrice != null ? `เติม +${qty} · ราคาใหม่ ${newPrice}` : `เติม +${qty}`, created_at: new Date().toISOString() }, ...db.stockAdditions],
 });
+export const addInStock = restockInStock; // alias (qty only)
+
+/** Flip a finished pre-order → in-stock (พร้อมส่ง). Opening stock = its leftover surplus, at the given
+ *  price. If a same-character in-stock SKU exists, the surplus is MERGED into it (this SKU stays as-is,
+ *  surplus cleared). Caller (UI) enforces the arrived/settled gate via canConvertToInStock. */
+export const convertToInStock = (productId: string, price: number) => (db: Database): Database => {
+  const p = db.products.find((x) => x.id === productId);
+  if (!p) return db;
+  const surplus = p.surplus_qty ?? 0;
+  const now = new Date().toISOString();
+  const merge = sameInStock(db.products, p, productId);
+  if (merge) {
+    return {
+      ...db,
+      products: db.products.map((x) => {
+        if (x.id === merge.id) return { ...x, stock_qty: (x.stock_qty ?? 0) + surplus };
+        if (x.id === productId) return { ...x, surplus_qty: 0 };
+        return x;
+      }),
+      stockAdditions: [{ id: id('sa'), product_id: merge.id, qty: surplus, note: `รวมจากพรี (${p.series_name})`, created_at: now }, ...db.stockAdditions],
+    };
+  }
+  return {
+    ...db,
+    products: db.products.map((x) => (x.id === productId
+      ? { ...x, is_stock: true, stock_qty: surplus, surplus_qty: 0, price_total: price, deposit_amount: price, status: 'open', eta_note: 'พร้อมส่ง', stock_origin: 'preorder' as const }
+      : x)),
+    stockAdditions: [{ id: id('sa'), product_id: productId, qty: surplus, note: 'แปลงจากพรี (ส่วนเกิน)', created_at: now }, ...db.stockAdditions],
+  };
+};
 
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →

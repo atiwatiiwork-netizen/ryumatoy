@@ -19,9 +19,9 @@ import {
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 import { BulkAdd } from './BulkAdd';
-import { StockBulkAdd } from './StockBulkAdd';
+import { InStockTab } from './InStockTab';
 
-type Tab = 'products' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
+type Tab = 'products' | 'instock' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
   { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'delivered', label: 'ส่งมอบแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
@@ -44,11 +44,13 @@ export default function AdminProductsPage() {
         {([['products', 'สินค้า'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
+        <button onClick={() => setTab('instock')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'instock' ? 'border-primary bg-primary text-white' : 'border-[#16a34a]/40 bg-[#16a34a]/[0.1] text-[#4ade80]')}>พร้อมส่ง</button>
         {/* คั่น — สถานะล็อตแยกกลุ่ม */}
         <span className="mx-1.5 h-7 w-px bg-subtle" />
         <button onClick={() => setTab('status')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'status' ? 'border-primary bg-primary text-white' : 'border-[#2563eb]/40 bg-[#2563eb]/[0.1] text-[#60a5fa]')}>Status</button>
       </div>
       {tab === 'products' && <Products />}
+      {tab === 'instock' && <InStockTab />}
       {tab === 'status' && <LotStatus />}
       {tab === 'categories' && <Categories />}
       {tab === 'franchises' && <Franchises />}
@@ -491,7 +493,7 @@ function Products() {
   const [varImgIdx, setVarImgIdx] = useState<number | null>(null);
   const [listQ, setListQ] = useState(''); // search the product list
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed ค่าย groups
-  const [mode, setMode] = useState<'single' | 'bulk' | 'stock'>('single');
+  const [mode, setMode] = useState<'single' | 'bulk'>('single');
   const addVariantImage = async (i: number, file?: File) => {
     if (!file) return;
     setVarImgIdx(i);
@@ -603,7 +605,6 @@ function Products() {
   const ready = db.franchises.length > 0 && db.manufacturers.length > 0;
 
   if (mode === 'bulk') return <BulkAdd onDone={() => setMode('single')} />;
-  if (mode === 'stock') return <StockBulkAdd onDone={() => setMode('single')} />;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[400px_1fr] lg:items-start">
@@ -612,7 +613,6 @@ function Products() {
           <span className="font-bold">{editing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</span>
           <div className="flex items-center gap-3">
             {!editing && ready && <button onClick={() => setMode('bulk')} className="text-xs font-semibold text-primary-soft">＋ พรีหลายรายการ</button>}
-            {!editing && ready && <button onClick={() => setMode('stock')} className="text-xs font-semibold text-[#4ade80]">＋ พร้อมส่ง</button>}
             {editing && <button onClick={reset} className="text-xs text-primary-soft">+ เพิ่มใหม่</button>}
           </div>
         </div>

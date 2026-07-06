@@ -7,23 +7,21 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { franchiseOf, stockRemaining, stockSoldQty, stockBuyers, stockAdditionsOf } from '@/domain/services/catalog';
-import { availableFor, reservedHeld } from '@/domain/services/reservations';
-import { reopenBatch, addStock, addInStock } from '@/data/mutations';
+import { reopenBatch, addStock } from '@/data/mutations';
 import type { Product } from '@/domain/entities';
 
 export default function StockPage() {
   const db = useDatabase();
   const [makerId, setMakerId] = useState('');
 
-  const inStock = db.products.filter((p) => p.is_stock && (!makerId || p.manufacturer_id === makerId));
   const withSurplus = db.products.filter((p) => (p.surplus_qty ?? 0) > 0 && (!makerId || p.manufacturer_id === makerId));
   const available = withSurplus.filter((p) => stockRemaining(db, p) > 0);
   const soldOut = withSurplus.filter((p) => stockRemaining(db, p) <= 0);
 
   return (
     <div>
-      <div className="mb-2 text-2xl font-extrabold">สต๊อก & พร้อมส่ง</div>
-      <div className="mb-5 text-[13px] text-ink-faint">สินค้าพร้อมส่ง (In-Stock) + สต๊อกส่วนเกินจากการปิดรอบ · เติมสต๊อก + ดูประวัติได้</div>
+      <div className="mb-2 text-2xl font-extrabold">ขายสต๊อกส่วนเกิน</div>
+      <div className="mb-5 text-[13px] text-ink-faint">สต๊อกที่เหลือจากการปิดรอบ เปิดขายเป็นล็อตใหม่บน SKU เดิมได้ — สินค้าพร้อมส่งจัดการที่แท็บ “พร้อมส่ง” ใน จัดการสินค้า</div>
 
       <div className="mb-5 flex items-center gap-3">
         <span className="text-[12.5px] font-semibold text-ink-muted">ค่าย</span>
@@ -33,11 +31,7 @@ export default function StockPage() {
         </select>
       </div>
 
-      <Section title={`สินค้าพร้อมส่ง · In-Stock (${inStock.length})`}>
-        {inStock.length === 0 ? <Empty text="ยังไม่มีสินค้าพร้อมส่ง — เพิ่มที่ จัดการสินค้า → ＋ พร้อมส่ง" /> : inStock.map((p) => <InStockRow key={p.id} product={p} />)}
-      </Section>
-
-      <Section title={`สต๊อกส่วนเกิน (จากพรี) · เหลือ (${available.length})`}>
+      <Section title={`สต๊อกที่เหลือ (${available.length})`}>
         {available.length === 0 ? <Empty text="ไม่มีสต๊อกเหลือให้ขาย" /> : available.map((p) => <StockRow key={p.id} product={p} />)}
       </Section>
 
@@ -59,55 +53,6 @@ function Section({ title, children, muted }: { title: string; children: React.Re
   );
 }
 const Empty = ({ text }: { text: string }) => <div className="py-6 text-center text-[13px] text-ink-faint">{text}</div>;
-
-// direct in-stock (พร้อมส่ง) product: available / total / held + top-up + stock history
-function InStockRow({ product: p }: { product: Product }) {
-  const db = useDatabase();
-  const dispatch = useDispatch();
-  const { flash } = useToast();
-  const [open, setOpen] = useState(false);
-  const [addQty, setAddQty] = useState('');
-  const total = p.stock_qty ?? 0;
-  const held = reservedHeld(db, p.id);
-  const avail = availableFor(db, p);
-  const sold = db.stockReservations.filter((r) => r.product_id === p.id && !r.batch_id && r.status === 'confirmed').reduce((s, r) => s + r.qty, 0);
-  const additions = stockAdditionsOf(db, p.id);
-  const topUp = () => { const q = Number(addQty) || 0; if (q <= 0) return flash('ใส่จำนวนที่จะเติม'); dispatch(addInStock(p.id, q)); flash(`เติมสต๊อก +${q}`); setAddQty(''); };
-
-  return (
-    <div className="px-2 py-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <button onClick={() => setOpen((o) => !o)} className="flex min-w-[160px] flex-1 items-center gap-2 text-left">
-          <Icon name="chevronRight" size={16} className={cx('text-ink-faint transition-transform', open && 'rotate-90')} />
-          <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{p.images?.[0] ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={15} className="text-primary-soft/25" />}</div>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold">{p.series_name}</span>
-            <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {baht(p.price_total)} · เหลือ <b className={avail <= 0 ? 'text-[#f87171]' : avail <= 3 ? 'text-[#fbbf24]' : 'text-[#4ade80]'}>{avail}</b>/{total}{held > 0 ? ` · จองอยู่ ${held}` : ''}{sold > 0 ? ` · ขายแล้ว ${sold}` : ''}</span>
-          </span>
-        </button>
-        <label className="text-[12px] text-ink-muted">เติม <input className="ml-1 w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm text-ink outline-none" inputMode="numeric" value={addQty} onChange={(e) => setAddQty(e.target.value.replace(/[^\d]/g, ''))} placeholder="+" /></label>
-        <button onClick={topUp} className="rounded-lg bg-cta px-3 py-2 text-[12.5px] font-bold text-white">เติมสต๊อก</button>
-      </div>
-      {open && (
-        <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
-          <div className="mb-2 text-[12px] font-semibold text-ink-muted">ประวัติสต๊อก ({additions.length})</div>
-          {additions.length === 0 ? (
-            <div className="text-[12.5px] text-ink-faint">ยังไม่มีประวัติ</div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {additions.map((a) => (
-                <div key={a.id} className="flex items-center justify-between text-[13px]">
-                  <span className="font-semibold text-[#4ade80]">+{a.qty} <span className="font-normal text-ink-muted2">· {a.note ?? 'เติม'}</span></span>
-                  <span className="font-mono text-[11px] text-ink-faint">{new Date(a.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function StockRow({ product: p, soldOut }: { product: Product; soldOut?: boolean }) {
   const db = useDatabase();

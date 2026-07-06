@@ -10,8 +10,6 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine, variantsOf } from '@/domain/services/catalog';
 import { availableFor } from '@/domain/services/reservations';
-import { instockPriceFor } from '@/domain/services/ranks';
-import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
@@ -26,8 +24,6 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
-  const CURRENT_USER_ID = useCurrentUserId();
-  const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
 
   const variants = product.has_variants ? variantsOf(db, product.id) : [];
   const withImg = variants.filter((v) => v.image_url); // variants that carry their own photo
@@ -41,8 +37,8 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
     ? (sel ? sel.price_total : (varPrices.length ? Math.min(...varPrices) : product.price_total))
     : product.price_total;
   const fromPrice = product.has_variants && !sel && priceSpread; // show "เริ่ม" only when prices differ
-  const memberPrice = product.is_stock ? instockPriceFor(db.settings, myRank, basePrice) : basePrice;
-  const saved = memberPrice < basePrice;
+  const memberPrice = basePrice; // in-stock is one price for every rank (no rank discount)
+  const saved = false;
 
   // Image — chosen variant wins; otherwise a diagonal split of the first two variant images.
   const teaser = !sel && withImg.length >= 2;
@@ -66,11 +62,13 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
     setSelId((cur) => (cur === id ? null : id)); // tap again to go back to the teaser
   };
 
+  const soldOut = stockLeft != null && stockLeft <= 0;
   return (
-    <Link href={`/shop/${product.id}`} className="block overflow-hidden rounded-card border border-subtle bg-surface-2">
+    <Link href={`/shop/${product.id}`} className={cx('block overflow-hidden rounded-card border border-subtle bg-surface-2', soldOut && 'opacity-60')}>
       <div className="relative">
         <ProductThumb isStock={product.is_stock} radius="rounded-none" src={mainSrc} srcB={splitSrc} />
         {inClosingBoard && <span className="absolute left-2 top-2 rounded-md bg-[#16a34a] px-1.5 py-0.5 text-[9px] font-extrabold text-white">ใกล้ปิดพรี</span>}
+        {soldOut && <span className="absolute inset-0 grid place-items-center bg-black/45 text-[13px] font-extrabold text-white">สินค้าหมด</span>}
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>
       <div className="px-[11px] pb-3 pt-2.5">
@@ -98,7 +96,11 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           {saved && <span className="text-[11px] text-ink-faint line-through">{baht(basePrice)}</span>}
         </div>
         {sel && <div className="truncate text-[10px] font-semibold text-ink-muted2">{sel.name}</div>}
-        {stockLeft != null && <div className={cx('text-[10.5px] font-bold', stockLeft <= 3 ? 'text-[#fbbf24]' : 'text-[#4ade80]')}>พร้อมส่ง · เหลือ {stockLeft} ชิ้น</div>}
+        {stockLeft != null && (stockLeft <= 0
+          ? <div className="text-[10.5px] font-bold text-ink-faint">สินค้าหมด</div>
+          : stockLeft <= 3
+            ? <div className="text-[10.5px] font-bold text-[#fbbf24]">พร้อมส่ง · เหลือน้อย</div>
+            : <div className="text-[10.5px] font-bold text-[#4ade80]">พร้อมส่ง</div>)}
         {saved && <div className="text-[10px] font-bold text-[#f1d27a]">ราคาสมาชิก ✦</div>}
         {quickAdd && (
           canQuickAdd

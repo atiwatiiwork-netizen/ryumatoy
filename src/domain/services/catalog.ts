@@ -1,5 +1,4 @@
 import type { Database, Product, Franchise, Manufacturer, Category, Series, ProductVariant } from '../entities';
-import { availableFor } from './reservations';
 
 /** Catalog read helpers — derive views over the products graph. No mutation. */
 
@@ -53,6 +52,16 @@ export function inOpenBoard(db: Database, p: Product): boolean {
  *  hidden from the shop, and now eligible for ปิดรอบสั่งผลิต to set the final production qty. */
 export function inClosedBoard(db: Database, p: Product): boolean {
   return !!p.board_id && db.boards.some((b) => b.id === p.board_id && b.status !== 'open');
+}
+
+/** Tickets that still owe money (unfinished pre-orders) for a product. */
+export function outstandingTickets(db: Database, productId: string): number {
+  return db.tickets.filter((t) => t.product_id === productId && (t.remaining_amount - t.remaining_paid) > 0).length;
+}
+/** A finished pre-order that can be flipped to in-stock: still a pre-order, ถึงไทยแล้ว/ส่งมอบ, has
+ *  leftover surplus, and NO ticket is still unpaid (the whole round is settled). */
+export function canConvertToInStock(db: Database, p: Product): boolean {
+  return !p.is_stock && (p.status === 'arrived' || p.status === 'delivered') && (p.surplus_qty ?? 0) > 0 && outstandingTickets(db, p.id) === 0;
 }
 
 /** Series under a franchise (optionally further limited to those a maker carries). */
@@ -115,8 +124,7 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
     if (!p.is_stock && p.status !== 'open') return false;
     // a closed board ends its round → its products leave the shop even though still 'open'
     if (inClosedBoard(db, p)) return false;
-    // in-stock (พร้อมส่ง) sold out (available ≤ 0, reservation-aware) → removed from the shop
-    if (p.is_stock && availableFor(db, p) <= 0) return false;
+    // NOTE: sold-out in-stock (available ≤ 0) stays in the shop — shown greyed as "สินค้าหมด" (not removed)
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;
     if (f.categoryId && categoryOf(db, p)?.id !== f.categoryId) return false;

@@ -83,6 +83,7 @@ export interface Product {
   width_cm?: number;
   depth_cm?: number;
   has_variants: boolean;
+  stock_origin?: 'preorder' | 'manual'; // admin-only: in-stock came from a pre-order conversion vs. created new
   status: ProductStatus;
   // Shipping (set when the lot leaves China → status 'shipping'):
   tracking_no?: string;

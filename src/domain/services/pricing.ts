@@ -14,3 +14,9 @@ export function priceFromYuan(settings: ShopSettings, yuan: number): number {
 export function depositFor(settings: ShopSettings, wcfType?: WcfType): number {
   return wcfType === 'mega_wcf' ? settings.deposit_mega : settings.deposit_wcf;
 }
+
+/** Round a price UP to the nearest 50 (…50 or …00) — used for in-stock resale pricing.
+ *  e.g. 1623 → 1650, 2715 → 2750, 1650 → 1650. */
+export function roundTo50(n: number): number {
+  return Math.ceil(Math.max(0, n) / 50) * 50;
+}
