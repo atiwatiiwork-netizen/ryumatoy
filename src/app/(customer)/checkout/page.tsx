@@ -8,13 +8,13 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
-import { reserveStock, payReservation } from '@/lib/reserve';
+import { reserveStock, payReservation, confirmReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
-import { instockCouponsFor, couponDiscount } from '@/domain/services/coupons';
+import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
 
 export default function CheckoutPage() {
@@ -38,14 +38,20 @@ export default function CheckoutPage() {
   // only lines whose product still exists (a persisted cart may reference a since-removed product)
   const validLines = cart.lines.filter((l) => db.products.some((p) => p.id === l.productId));
   const grossPay = validLines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
-  // in-stock portion — the only part an in-stock coupon may discount (pre-order coupons wait for the final payment)
-  const instockPay = validLines.reduce((s, l) => (db.products.find((p) => p.id === l.productId)?.is_stock ? s + unitDeposit(l) * l.qty : s), 0);
 
   // ── coupon (in-stock only, applied immediately) ──────────────────────────
   const eligibleCoupons = instockCouponsFor(db, currentUserId, validLines.map((l) => l.productId));
   const [couponGrantId, setCouponGrantId] = useState<string>('');
   const selected = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
-  const discount = selected ? couponDiscount(selected.coupon, instockPay) : 0;
+  // discount base = ONLY the in-stock lines this coupon actually targets — must match how
+  // approveOrder knocks the discount off tickets, or the total would drop more than the tickets do.
+  const couponBase = selected
+    ? validLines.reduce((s, l) => {
+        const p = db.products.find((pp) => pp.id === l.productId);
+        return p?.is_stock && couponMatchesProduct(selected.coupon, p) ? s + unitDeposit(l) * l.qty : s;
+      }, 0)
+    : 0;
+  const discount = selected ? couponDiscount(selected.coupon, couponBase) : 0;
 
   const payNow = Math.max(0, grossPay - discount);
   const diamondFree = grossPay <= 0; // rank perk (Diamond) → nothing to transfer
@@ -101,6 +107,10 @@ export default function CheckoutPage() {
     setBusy(true);
     // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
     await Promise.all(resIds.map((rid) => payReservation(rid)));
+    // coupon fully covered an in-stock order → we auto-approve here with no admin step, so the stock
+    // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
+    // stay 'paid' and the stock would be held forever.
+    if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
     // Diamond / coupon-covered (payNow 0) → auto-approve so the ticket is issued immediately (no slip to check)
     dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined));
     cart.clear();

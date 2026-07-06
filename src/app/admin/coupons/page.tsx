@@ -63,6 +63,8 @@ export default function AdminCouponsPage() {
     const submit = () => {
       const v = Number(value) || 0;
       if (!label.trim() || v <= 0) { flash('กรอกชื่อคูปอง + จำนวนเงิน'); return; }
+      if (targetKind === 'product' && !targetProduct) { flash('เลือกสินค้าที่จะเจาะจง หรือเปลี่ยนเป็น "ทุกสินค้า"'); return; }
+      if (targetKind === 'maker' && !targetMaker) { flash('เลือกค่ายที่จะเจาะจง หรือเปลี่ยนเป็น "ทุกสินค้า"'); return; }
       dispatch(createCoupon({
         label: label.trim(),
         value: v,

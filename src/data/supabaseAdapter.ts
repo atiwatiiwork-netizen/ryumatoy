@@ -76,7 +76,10 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('shop_settings').select('*'),
       ]);
 
-    const results = [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, rankTiers, paymentAccounts, settings];
+    // coupon_grants is intentionally NOT in this fatal list: before migration v38 runs the table
+    // doesn't exist, and a missing/errored coupon table must degrade to "no coupons" — never break
+    // the whole app load (the coupon UI just no-ops until the migration is applied).
+    const results = [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 
