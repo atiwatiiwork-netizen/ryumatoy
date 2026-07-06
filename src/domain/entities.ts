@@ -190,6 +190,8 @@ export interface Order {
   created_at: string;
   approved_at?: string;
   reservation_ids?: string[]; // stock holds to confirm on approve / release on reject
+  coupon_grant_id?: string; // an in-stock coupon applied at checkout (returned if the order is rejected)
+  coupon_discount?: number; // baht discounted by that coupon (already subtracted from total_deposit)
   items: OrderItem[];
 }
 
@@ -228,6 +230,8 @@ export interface RemainingPayment {
   status: RemainingPaymentStatus;
   created_at: string;
   approved_at?: string;
+  coupon_grant_id?: string; // a pre-order coupon applied on this final payment
+  coupon_discount?: number; // baht discounted (already removed from the ticket's remaining_amount)
 }
 
 export interface TicketTransfer {
@@ -242,16 +246,45 @@ export interface TicketTransfer {
   approved_at?: string;
 }
 
+/**
+ * A discount coupon TEMPLATE (admin-created). Fixed baht off. `scope` decides where it
+ * applies: 'preorder' → the final/remaining payment only; 'instock' → at checkout on พร้อมส่ง
+ * lines; 'both' → either. Optional `target_*` narrows it to one product or one maker (ค่าย).
+ * Coupons are handed to specific customers via CouponGrant rows — there is no public code.
+ * Legacy code/type/min_order/used_count kept nullable for column back-compat only. (ryuma-coupon-spec)
+ */
+export type CouponScope = 'preorder' | 'instock' | 'both';
 export interface Coupon {
   id: string;
-  code: string;
-  type: 'percent' | 'fixed';
-  value: number;
-  min_order: number;
+  label: string; // display name e.g. "ส่วนลด 200 สงกรานต์"
+  value: number; // fixed baht off
+  scope: CouponScope;
+  target_product_id?: string; // restrict to one product (optional)
+  target_maker_id?: string; // restrict to one ค่าย (optional)
+  expires_at?: string; // ISO date; empty = never expires
+  active: boolean; // admin can pause a coupon without deleting it
+  created_at: string;
+  // legacy columns (unused by the new system, kept so the coupons table stays compatible)
+  code?: string;
+  type?: 'percent' | 'fixed';
+  min_order?: number;
   max_uses?: number;
-  used_count: number;
+  used_count?: number;
   rank_required?: RankName;
-  expires_at?: string;
+}
+
+/** One customer's single-use instance of a coupon (admin granted it to them). */
+export type CouponGrantStatus = 'active' | 'used' | 'revoked';
+export interface CouponGrant {
+  id: string;
+  coupon_id: string;
+  user_id: string;
+  status: CouponGrantStatus;
+  granted_at: string;
+  used_at?: string;
+  order_id?: string; // set when redeemed on an in-stock checkout
+  ticket_id?: string; // set when redeemed on a pre-order remaining payment
+  discount_amount?: number; // baht actually discounted (snapshot)
 }
 
 export interface RankTier {
@@ -364,6 +397,7 @@ export interface Database {
   stockReservations: StockReservation[];
   transfers: TicketTransfer[];
   coupons: Coupon[];
+  couponGrants: CouponGrant[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];
   settings: ShopSettings;

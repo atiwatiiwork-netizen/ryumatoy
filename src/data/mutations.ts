@@ -1,7 +1,11 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf } from '../domain/services/catalog';
+import { couponMatchesProduct } from '../domain/services/coupons';
+
+/** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
+export type CouponApply = { grantId: string; discount: number };
 
 /**
  * Pure mutations — `(db) => db`. Each returns a new Database; the store applies
@@ -27,7 +31,7 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
 /** Submit a cart as an order. Normally it awaits admin approval (PRD §9 step 5). When `autoApprove`
  *  is set — used for zero-payment orders, e.g. a Diamond member whose deposit is 0 — there is no slip
  *  to verify, so the order is approved and the tickets are issued immediately (customer gets ตั๋วเลย). */
-export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false) {
+export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply) {
   return (db: Database): Database => {
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
@@ -49,17 +53,28 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
         batch_id: l.batchId,
       };
     });
+    // an in-stock coupon reduces what's transferred now (capped so total never goes below 0)
+    const grossDeposit = items.reduce((s, i) => s + i.deposit_amount, 0);
+    const validGrant = coupon && db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active');
+    const discount = validGrant ? Math.max(0, Math.min(coupon!.discount, grossDeposit)) : 0;
+    const now = new Date().toISOString();
     const order: Order = {
       id: orderId,
       user_id: userId,
-      total_deposit: items.reduce((s, i) => s + i.deposit_amount, 0),
+      total_deposit: grossDeposit - discount,
       slip_url: slipUrl,
       status: 'pending_approval',
-      created_at: new Date().toISOString(),
+      created_at: now,
       reservation_ids: reservationIds && reservationIds.length ? reservationIds : undefined,
+      coupon_grant_id: validGrant ? validGrant.id : undefined,
+      coupon_discount: validGrant ? discount : undefined,
       items,
     };
-    const withOrder = { ...db, orders: [order, ...db.orders] };
+    // consume the coupon now (single use); rejectOrder returns it if the slip is refused
+    const couponGrants = validGrant
+      ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, order_id: orderId, discount_amount: discount } : g))
+      : db.couponGrants;
+    const withOrder = { ...db, orders: [order, ...db.orders], couponGrants };
     // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step
     return autoApprove ? approveOrder(orderId)(withOrder) : withOrder;
   };
@@ -151,6 +166,22 @@ export function approveOrder(orderId: string) {
       });
     }
 
+    // in-stock coupon applied at checkout → knock the discount off the qualifying พร้อมส่ง ticket's
+    // recorded paid amount (in-stock lines carry no remaining, so this is where it lands)
+    if (order.coupon_discount && order.coupon_grant_id) {
+      const grant = db.couponGrants.find((g) => g.id === order.coupon_grant_id);
+      const coupon = grant && db.coupons.find((c) => c.id === grant.coupon_id);
+      let left = order.coupon_discount;
+      for (const t of newTickets) {
+        if (left <= 0) break;
+        const product = db.products.find((p) => p.id === t.product_id);
+        if (!product?.is_stock || (coupon && !couponMatchesProduct(coupon, product))) continue;
+        const off = Math.min(left, t.deposit_paid);
+        t.deposit_paid -= off;
+        left -= off;
+      }
+    }
+
     const updated: Database = {
       ...db,
       orders: db.orders.map((o) =>
@@ -168,11 +199,18 @@ export function approveOrder(orderId: string) {
   };
 }
 
-/** Reject a pending order (slip not valid). Stock holds are released separately via RPC. */
-export const rejectOrder = (orderId: string) => (db: Database): Database => ({
-  ...db,
-  orders: db.orders.map((o) => (o.id === orderId ? { ...o, status: 'rejected' as const } : o)),
-});
+/** Reject a pending order (slip not valid). Stock holds are released separately via RPC.
+ *  Any coupon spent on the order is returned to the customer (grant back to active). */
+export const rejectOrder = (orderId: string) => (db: Database): Database => {
+  const order = db.orders.find((o) => o.id === orderId);
+  return {
+    ...db,
+    orders: db.orders.map((o) => (o.id === orderId ? { ...o, status: 'rejected' as const } : o)),
+    couponGrants: order?.coupon_grant_id
+      ? db.couponGrants.map((g) => (g.id === order.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, discount_amount: undefined } : g))
+      : db.couponGrants,
+  };
+};
 
 /**
  * Reopen leftover/surplus stock as a new batch on the same product (SKU). The
@@ -217,14 +255,28 @@ export const removeBatch = (batchId: string) => (db: Database): Database => ({
   batches: db.batches.filter((b) => b.id !== batchId),
 });
 
-/** Customer submits a remaining-balance payment (slip) awaiting admin approval. */
-export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string) => (db: Database): Database => ({
-  ...db,
-  remainingPayments: [
-    { id: id('rp'), ticket_id: ticketId, user_id: userId, amount, slip_url: slipUrl, status: 'pending', created_at: new Date().toISOString() },
-    ...db.remainingPayments,
-  ],
-});
+/** Customer submits a remaining-balance payment (slip) awaiting admin approval. A pre-order coupon
+ *  applied here permanently reduces the ticket's remaining_amount (so `amount` = the discounted due)
+ *  and consumes the grant (single use). */
+export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply) => (db: Database): Database => {
+  const now = new Date().toISOString();
+  const ticket = db.tickets.find((t) => t.id === ticketId);
+  const validGrant = coupon && ticket && db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active');
+  const due = ticket ? ticket.remaining_amount - ticket.remaining_paid : 0;
+  const discount = validGrant ? Math.max(0, Math.min(coupon!.discount, due)) : 0;
+  return {
+    ...db,
+    // drop the discount off the ticket's remaining_amount so the (already reduced) slip settles it in full
+    tickets: discount > 0 ? db.tickets.map((t) => (t.id === ticketId ? { ...t, remaining_amount: t.remaining_amount - discount } : t)) : db.tickets,
+    couponGrants: validGrant
+      ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, ticket_id: ticketId, discount_amount: discount } : g))
+      : db.couponGrants,
+    remainingPayments: [
+      { id: id('rp'), ticket_id: ticketId, user_id: userId, amount, slip_url: slipUrl, status: 'pending', created_at: now, coupon_grant_id: validGrant ? validGrant.id : undefined, coupon_discount: validGrant ? discount : undefined },
+      ...db.remainingPayments,
+    ],
+  };
+};
 
 /** Admin approves a remaining payment → add to the ticket's remaining_paid; mark paid_full when settled. */
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
@@ -322,6 +374,50 @@ export const approveMember = (userId: string) => (db: Database): Database => ({
 export const removeUser = (userId: string) => (db: Database): Database => ({
   ...db,
   users: db.users.filter((u) => u.id !== userId),
+});
+
+// ── Coupons ──────────────────────────────────────────────────────────────────
+/** Create a discount coupon template (admin). */
+export const createCoupon = (data: { label: string; value: number; scope: CouponScope; target_product_id?: string; target_maker_id?: string; expires_at?: string }) => (db: Database): Database => ({
+  ...db,
+  coupons: [
+    { id: id('c'), label: data.label, value: data.value, scope: data.scope, target_product_id: data.target_product_id || undefined, target_maker_id: data.target_maker_id || undefined, expires_at: data.expires_at || undefined, active: true, created_at: new Date().toISOString() },
+    ...db.coupons,
+  ],
+});
+
+/** Patch a coupon template (label / value / scope / target / expiry / active). */
+export const updateCoupon = (couponId: string, patch: Partial<Coupon>) => (db: Database): Database => ({
+  ...db,
+  coupons: db.coupons.map((c) => (c.id === couponId ? { ...c, ...patch } : c)),
+});
+
+/** Delete a coupon template + all its grants (used ones are historical but go too — admin choice). */
+export const deleteCoupon = (couponId: string) => (db: Database): Database => ({
+  ...db,
+  coupons: db.coupons.filter((c) => c.id !== couponId),
+  couponGrants: db.couponGrants.filter((g) => g.coupon_id !== couponId),
+});
+
+/** Grant a coupon to a set of users (skips anyone who already holds an active copy). */
+export const grantCoupon = (couponId: string, userIds: string[]) => (db: Database): Database => {
+  const now = new Date().toISOString();
+  const fresh: CouponGrant[] = [];
+  for (const uid of userIds) {
+    if (db.couponGrants.some((g) => g.coupon_id === couponId && g.user_id === uid && g.status === 'active')) continue;
+    fresh.push({ id: id('cg'), coupon_id: couponId, user_id: uid, status: 'active', granted_at: now });
+  }
+  return { ...db, couponGrants: [...fresh, ...db.couponGrants] };
+};
+
+/** Grant a coupon to every non-admin member of a rank. */
+export const grantCouponToRank = (couponId: string, rank: RankName) => (db: Database): Database =>
+  grantCoupon(couponId, db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank).map((u) => u.id))(db);
+
+/** Revoke an unused granted coupon (used ones stay for history). */
+export const revokeGrant = (grantId: string) => (db: Database): Database => ({
+  ...db,
+  couponGrants: db.couponGrants.map((g) => (g.id === grantId && g.status === 'active' ? { ...g, status: 'revoked' as const } : g)),
 });
 
 /** List one of my tickets on the P2P marketplace (PRD §12). */

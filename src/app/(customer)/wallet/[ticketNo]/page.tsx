@@ -13,6 +13,7 @@ import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { listForResale, submitRemainingPayment } from '@/data/mutations';
+import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
 import type { ProductStatus } from '@/domain/entities';
 
@@ -52,6 +53,13 @@ export default function TicketDetailPage() {
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // pre-order coupon: reduces this final payment (only usable coupons that match this product)
+  const eligibleCoupons = preorderCouponsForTicket(db, CURRENT_USER_ID, product);
+  const [couponGrantId, setCouponGrantId] = useState<string>('');
+  const selectedCoupon = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
+  const couponOff = selectedCoupon ? couponDiscount(selectedCoupon.coupon, due) : 0;
+  const payable = Math.max(0, due - couponOff);
+
   const onSlip = async (file?: File) => {
     if (!file) return;
     setBusy(true);
@@ -61,9 +69,9 @@ export default function TicketDetailPage() {
   };
   const payRemaining = () => {
     if (!slip) return;
-    dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, due, slip));
+    dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, payable, slip, selectedCoupon ? { grantId: selectedCoupon.grant.id, discount: couponOff } : undefined));
     flash('ส่งสลิปส่วนต่างแล้ว · รอ Admin ตรวจสอบ');
-    setPaying(false); setSlip(null);
+    setPaying(false); setSlip(null); setCouponGrantId('');
   };
 
   const resell = () => {
@@ -148,8 +156,18 @@ export default function TicketDetailPage() {
         </div>
       ) : canPay && paying ? (
         <div className="mb-4 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">
-          <div className="mb-1 text-sm font-bold">ชำระส่วนต่าง {baht(due)}</div>
+          <div className="mb-1 text-sm font-bold">ชำระส่วนต่าง {baht(payable)}{couponOff > 0 && <span className="ml-1.5 text-[12px] font-normal text-ink-faint line-through">{baht(due)}</span>}</div>
           <div className="mb-3.5 text-[12px] text-ink-faint">สแกน PromptPay → แนบสลิป → รอ Admin อนุมัติ</div>
+          {eligibleCoupons.length > 0 && (
+            <div className="mb-3.5 text-left">
+              <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-bold text-[#c4b5fd]"><Icon name="tag" size={15} /> ใช้คูปองส่วนลด</div>
+              <select value={couponGrantId} onChange={(e) => setCouponGrantId(e.target.value)} className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent">
+                <option value="">ไม่ใช้คูปอง</option>
+                {eligibleCoupons.map((x) => <option key={x.grant.id} value={x.grant.id}>{x.coupon.label} · ลด {baht(x.coupon.value)}</option>)}
+              </select>
+              {couponOff > 0 && <div className="mt-1.5 flex justify-between text-[12.5px] text-[#4ade80]"><span>ส่วนลด</span><span className="font-semibold">−{baht(couponOff)}</span></div>}
+            </div>
+          )}
           <div className="mb-3.5 flex justify-center">
             {account?.qr_url ? <img src={account.qr_url} alt="QR" className="h-[160px] w-[160px] rounded-2xl bg-white object-contain p-2" /> : <QrPanel size={160} />}
           </div>

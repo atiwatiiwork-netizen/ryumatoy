@@ -43,6 +43,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     { title: 'สมาชิก', items: [
       it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false && !u.is_admin).length),
       it('/admin/ranks', 'verified', 'Ranks', db.rankRequests.filter((r) => r.status === 'pending').length),
+      it('/admin/coupons', 'tag', 'คูปอง'),
     ] },
     { title: 'ออเดอร์', items: [
       it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP + awaitingParcel),

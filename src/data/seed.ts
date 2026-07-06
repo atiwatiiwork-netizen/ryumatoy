@@ -140,9 +140,12 @@ export const SEED_DATABASE: Database = {
   ],
 
   coupons: [
-    { id: 'c-1', code: 'RYUMA50', type: 'fixed', value: 50, min_order: 500, used_count: 12, max_uses: 100 },
-    { id: 'c-2', code: 'GOLD5', type: 'percent', value: 5, min_order: 0, used_count: 3, rank_required: 'gold' },
+    { id: 'c-1', label: 'ส่วนลด 100 พร้อมส่ง', value: 100, scope: 'instock', active: true, created_at: '2026-07-01' },
+    { id: 'c-2', label: 'ส่วนลด 200 พรีออเดอร์', value: 200, scope: 'preorder', active: true, created_at: '2026-07-01' },
+    { id: 'c-3', label: 'ส่วนลด 300 ใช้ได้ทุกแบบ', value: 300, scope: 'both', active: true, created_at: '2026-07-01' },
   ],
+
+  couponGrants: [],
 
   rankTiers: [
     { name: 'bronze', min_spend: 0, discount_percent: 0, free_shipping_per_month: 0, early_access_hours: 0 },

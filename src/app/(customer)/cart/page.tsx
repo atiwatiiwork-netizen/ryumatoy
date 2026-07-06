@@ -1,10 +1,8 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
-import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { useSmartBack } from '@/lib/nav';
@@ -16,8 +14,6 @@ export default function CartPage() {
   const router = useRouter();
   const db = useDatabase();
   const cart = useCart();
-  const { flash } = useToast();
-  const [code, setCode] = useState('');
   const CURRENT_USER_ID = useCurrentUserId();
   const myRank = db.users.find((u) => u.id === CURRENT_USER_ID)?.rank ?? 'bronze';
 
@@ -75,12 +71,8 @@ export default function CartPage() {
         })}
       </div>
 
-      <div className="mb-4 flex gap-2">
-        <div className="flex flex-1 items-center gap-2 rounded-xl border-[1.5px] border-dashed border-accent px-[13px] py-2.5">
-          <Icon name="tag" size={17} className="text-primary-soft" />
-          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="โค้ดส่วนลด" className="flex-1 bg-transparent text-[13px] outline-none placeholder:text-ink-faint" />
-        </div>
-        <button onClick={() => { cart.applyCoupon(code || null); flash(code ? `ใส่โค้ด ${code}` : 'ล้างโค้ด'); }} className="rounded-xl border border-subtle bg-surface-3 px-[18px] text-[13px] font-bold text-ink">ใช้</button>
+      <div className="mb-4 flex items-center gap-2 rounded-xl border border-[#8b5cf6]/25 bg-[#8b5cf6]/[0.06] px-[13px] py-2.5 text-[12.5px] text-[#c4b5fd]">
+        <Icon name="tag" size={16} /> มีคูปองส่วนลด? เลือกใช้ได้ที่หน้าชำระเงิน
       </div>
 
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4">

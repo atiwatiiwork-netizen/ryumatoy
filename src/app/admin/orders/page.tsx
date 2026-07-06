@@ -57,7 +57,7 @@ export default function OrdersHubPage() {
                 <div className="grid h-[52px] w-[42px] place-items-center rounded-lg bg-stripe"><Icon name="copy" size={17} className="text-ink-faint" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{userName(o.user_id)}</div>
-                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}</div>
+                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}</div>
                 </div>
                 <button onClick={() => router.push(`/admin/orders/${o.id}`)} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">ตรวจสลิป</button>
               </div>
@@ -78,7 +78,7 @@ export default function OrdersHubPage() {
                     ? <a href={r.slip_url} target="_blank" rel="noreferrer"><img src={r.slip_url} alt="สลิป" className="h-12 w-12 rounded-lg object-cover" /></a>
                     : <div className="grid h-12 w-12 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold">{userName(r.user_id)} · {baht(r.amount)}</div>
+                    <div className="text-sm font-semibold">{userName(r.user_id)} · {baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(r.coupon_discount)}</span> : null}</div>
                     <div className="font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</div>
                   </div>
                   <button onClick={() => { dispatch(approveRemainingPayment(r.id)); flash('อนุมัติส่วนต่างแล้ว'); }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>

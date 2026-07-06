@@ -14,6 +14,7 @@ import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { submitOrder } from '@/data/mutations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
+import { instockCouponsFor, couponDiscount } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
 
 export default function CheckoutPage() {
@@ -36,8 +37,20 @@ export default function CheckoutPage() {
   };
   // only lines whose product still exists (a persisted cart may reference a since-removed product)
   const validLines = cart.lines.filter((l) => db.products.some((p) => p.id === l.productId));
-  const payNow = validLines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
-  const noPayment = payNow <= 0; // e.g. Diamond rank (0% deposit) → nothing to transfer now
+  const grossPay = validLines.reduce((s, l) => s + unitDeposit(l) * l.qty, 0);
+  // in-stock portion — the only part an in-stock coupon may discount (pre-order coupons wait for the final payment)
+  const instockPay = validLines.reduce((s, l) => (db.products.find((p) => p.id === l.productId)?.is_stock ? s + unitDeposit(l) * l.qty : s), 0);
+
+  // ── coupon (in-stock only, applied immediately) ──────────────────────────
+  const eligibleCoupons = instockCouponsFor(db, currentUserId, validLines.map((l) => l.productId));
+  const [couponGrantId, setCouponGrantId] = useState<string>('');
+  const selected = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
+  const discount = selected ? couponDiscount(selected.coupon, instockPay) : 0;
+
+  const payNow = Math.max(0, grossPay - discount);
+  const diamondFree = grossPay <= 0; // rank perk (Diamond) → nothing to transfer
+  const couponFree = grossPay > 0 && payNow <= 0; // a coupon fully covered the amount
+  const noPayment = payNow <= 0; // no slip needed → auto-approve + issue ticket now
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
@@ -88,8 +101,8 @@ export default function CheckoutPage() {
     setBusy(true);
     // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
     await Promise.all(resIds.map((rid) => payReservation(rid)));
-    // Diamond (payNow 0) → auto-approve so the ticket is issued immediately (no slip to check)
-    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment));
+    // Diamond / coupon-covered (payNow 0) → auto-approve so the ticket is issued immediately (no slip to check)
+    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined));
     cart.clear();
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.
@@ -124,6 +137,12 @@ export default function CheckoutPage() {
             </div>
           );
         })}
+        {discount > 0 && (
+          <div className="mt-1 flex justify-between gap-2.5 py-1 text-[13px] text-[#4ade80]">
+            <span>ส่วนลดคูปอง{selected ? ` · ${selected.coupon.label}` : ''}</span>
+            <span className="font-semibold">−{baht(discount)}</span>
+          </div>
+        )}
         <div className="my-2.5 border-t border-subtle" />
         <div className="flex items-center justify-between">
           <span className="font-bold">{noPayment ? 'ชำระตอนนี้' : 'ยอดโอน'}</span>
@@ -131,11 +150,21 @@ export default function CheckoutPage() {
         </div>
       </div>
 
+      {eligibleCoupons.length > 0 && (
+        <div className="mb-3.5 rounded-card border border-[#8b5cf6]/30 bg-[#8b5cf6]/[0.06] p-[14px]">
+          <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[#c4b5fd]"><Icon name="tag" size={16} /> คูปองส่วนลด (พร้อมส่ง)</div>
+          <select value={couponGrantId} onChange={(e) => setCouponGrantId(e.target.value)} className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent">
+            <option value="">ไม่ใช้คูปอง</option>
+            {eligibleCoupons.map((x) => <option key={x.grant.id} value={x.grant.id}>{x.coupon.label} · ลด {baht(x.coupon.value)}</option>)}
+          </select>
+        </div>
+      )}
+
       {noPayment ? (
         <div className="mb-4 rounded-card border border-[#8b5cf6]/40 bg-[#8b5cf6]/[0.10] p-[18px] text-center">
           <Icon name="verified" size={26} className="mx-auto mb-1.5 text-[#c4b5fd]" />
-          <div className="text-sm font-bold text-[#c4b5fd]">สิทธิ์ Diamond · ไม่ต้องมัดจำ</div>
-          <div className="mt-1 text-[12.5px] text-ink-muted2">กดยืนยันรับตั๋วได้เลย — จ่ายเต็มจำนวนตอนของถึงไทย</div>
+          <div className="text-sm font-bold text-[#c4b5fd]">{couponFree ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · ไม่ต้องมัดจำ'}</div>
+          <div className="mt-1 text-[12.5px] text-ink-muted2">{couponFree ? 'กดยืนยันรับตั๋วได้เลย — ไม่ต้องโอน' : diamondFree ? 'กดยืนยันรับตั๋วได้เลย — จ่ายเต็มจำนวนตอนของถึงไทย' : 'กดยืนยันรับตั๋วได้เลย'}</div>
         </div>
       ) : (
         <>
