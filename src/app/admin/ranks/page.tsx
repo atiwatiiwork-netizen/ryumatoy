@@ -24,10 +24,13 @@ export default function AdminRanksPage() {
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? uid;
 
   // grant form
-  const [grantUser, setGrantUser] = useState(db.users[0]?.id ?? '');
+  const [grantUser, setGrantUser] = useState('');
   const [grantTo, setGrantTo] = useState<RankName>('gold');
-  // the seeded default user id won't exist after the real data loads → snap to a valid one
-  useEffect(() => { if (db.users.length && !db.users.some((u) => u.id === grantUser)) setGrantUser(db.users[0].id); }, [db.users, grantUser]);
+  // default to the newest-signup non-admin customer (matches the dropdown order); snap if it drops out
+  useEffect(() => {
+    const opts = [...db.users].filter((u) => u.id !== 'u-admin' && !u.is_admin).sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
+    if (opts.length && !opts.some((u) => u.id === grantUser)) setGrantUser(opts[0].id);
+  }, [db.users, grantUser]);
 
   return (
     <div>
@@ -61,7 +64,9 @@ export default function AdminRanksPage() {
           <label className="block flex-1">
             <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">ลูกค้า</span>
             <select className={inputCls} value={grantUser} onChange={(e) => setGrantUser(e.target.value)}>
-              {db.users.filter((u) => u.id !== 'u-admin').map((u) => <option key={u.id} value={u.id}>{u.display_name} · {RANK[u.rank as RankKey].label} · {rankPiecesOf(db, u.id)} ชิ้น</option>)}
+              {[...db.users].filter((u) => u.id !== 'u-admin' && !u.is_admin)
+                .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')) // newest signup first
+                .map((u) => <option key={u.id} value={u.id}>{u.display_name} · {RANK[u.rank as RankKey].label}{u.created_at ? ` · สมัคร ${new Date(u.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })}` : ''}</option>)}
             </select>
           </label>
           <label className="block w-[160px]">

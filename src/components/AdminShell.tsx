@@ -34,10 +34,11 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const groups: { title?: string; items: NavItem[] }[] = [
     { items: [it('/admin', 'dashboard', 'Dashboard')] },
     { title: 'สินค้า', items: [
-      it('/admin/products', 'box', 'จัดการสินค้า'),
+      it('/admin/products', 'box', 'Pre-Order'),
+      it('/admin/instock', 'store', 'In-Stock'),
       it('/admin/production', 'swap', 'ปิดรอบสั่งผลิต'),
       it('/admin/board', 'tag', 'กระดานปิดพรี'),
-      it('/admin/stock', 'bolt', 'ขายสต๊อกส่วนเกิน'),
+      it('/admin/stock', 'bolt', 'สต๊อกใบพรี'),
     ] },
     { title: 'สมาชิก', items: [
       it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false && !u.is_admin).length),

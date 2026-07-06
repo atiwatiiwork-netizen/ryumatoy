@@ -19,9 +19,8 @@ import {
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 import { BulkAdd } from './BulkAdd';
-import { InStockTab } from './InStockTab';
 
-type Tab = 'products' | 'instock' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
+type Tab = 'products' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
 const STATUSES: { v: ProductStatus; label: string }[] = [
   { v: 'open', label: 'เปิดจอง' }, { v: 'production', label: 'กำลังผลิต' }, { v: 'shipping', label: 'กำลังเดินทาง' }, { v: 'arrived', label: 'ถึงไทยแล้ว' }, { v: 'delivered', label: 'ส่งมอบแล้ว' }, { v: 'closed', label: 'ปิด' },
 ];
@@ -38,19 +37,17 @@ export default function AdminProductsPage() {
   const [tab, setTab] = useState<Tab>('products');
   return (
     <div>
-      <div className="mb-5 text-2xl font-extrabold">จัดการสินค้า</div>
+      <div className="mb-5 text-2xl font-extrabold">Pre-Order · จัดการสินค้า</div>
       <div className="mb-6 flex flex-wrap items-center gap-2">
         {/* กลุ่มจัดการแคตตาล็อก */}
         {([['products', 'สินค้า'], ['categories', 'ประเภท'], ['franchises', 'เรื่อง'], ['manufacturers', 'ค่าย'], ['series', 'ซีรีย์']] as [Tab, string][]).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
         ))}
-        <button onClick={() => setTab('instock')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'instock' ? 'border-primary bg-primary text-white' : 'border-[#16a34a]/40 bg-[#16a34a]/[0.1] text-[#4ade80]')}>พร้อมส่ง</button>
         {/* คั่น — สถานะล็อตแยกกลุ่ม */}
         <span className="mx-1.5 h-7 w-px bg-subtle" />
         <button onClick={() => setTab('status')} className={cx('rounded-full border px-4 py-2 text-sm font-bold', tab === 'status' ? 'border-primary bg-primary text-white' : 'border-[#2563eb]/40 bg-[#2563eb]/[0.1] text-[#60a5fa]')}>Status</button>
       </div>
       {tab === 'products' && <Products />}
-      {tab === 'instock' && <InStockTab />}
       {tab === 'status' && <LotStatus />}
       {tab === 'categories' && <Categories />}
       {tab === 'franchises' && <Franchises />}
