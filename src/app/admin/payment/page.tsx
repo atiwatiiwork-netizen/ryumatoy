@@ -6,8 +6,8 @@ import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
-import { genId, upsertPaymentAccount, removePaymentAccount, updateSettings } from '@/data/mutations';
-import { priceFromYuan } from '@/domain/services/pricing';
+import { genId, upsertPaymentAccount, removePaymentAccount, updateSettings, repriceOpenPreorders } from '@/data/mutations';
+import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { baht } from '@/lib/theme';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -111,6 +111,13 @@ function PricingConfig() {
 
   const preview = { ...s, yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0 };
 
+  // open pre-orders whose stored price/deposit no longer match the CURRENT saved formula (created under an
+  // older formula) — the "อัปเดตราคาทั้งหมด" button re-applies the formula to them.
+  const stale = db.products.filter((p) => !p.is_stock && p.status === 'open' && (
+    (p.cost_yuan != null && priceFromYuan(s, p.cost_yuan) !== p.price_total) ||
+    (p.wcf_type != null && depositFor(s, p.wcf_type) !== p.deposit_amount)
+  ));
+
   const save = () => {
     dispatch(updateSettings({
       yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0,
@@ -133,8 +140,14 @@ function PricingConfig() {
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <span className="text-[12.5px] text-ink-muted">ตัวอย่าง: 288¥ = {baht(priceFromYuan(preview, 288))} · 328¥ = {baht(priceFromYuan(preview, 328))}</span>
-        <button onClick={save} className="ml-auto rounded-btn bg-cta px-5 py-2.5 text-sm font-bold text-white">บันทึกสูตร</button>
+        <button onClick={() => { dispatch(repriceOpenPreorders()); flash(`อัปเดตราคาพรีที่เปิดจองตามสูตรแล้ว`); }} className="ml-auto rounded-btn border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-bold text-ink-muted2">อัปเดตราคาพรีทั้งหมด{stale.length ? ` (${stale.length})` : ''}</button>
+        <button onClick={save} className="rounded-btn bg-cta px-5 py-2.5 text-sm font-bold text-white">บันทึกสูตร</button>
       </div>
+      {stale.length > 0 && (
+        <div className="mt-2 rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.1] px-3 py-2 text-[12px] text-[#fbbf24]">
+          มี {stale.length} รายการพรีที่เปิดจอง ราคายังไม่ตรงสูตรปัจจุบัน — กด “อัปเดตราคาพรีทั้งหมด” เพื่อปรับให้ตรง (ตั๋วที่ออกแล้วไม่กระทบ)
+        </div>
+      )}
     </div>
   );
 }

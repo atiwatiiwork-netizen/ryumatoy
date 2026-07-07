@@ -516,19 +516,28 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
  *  new price but bill the old one. Already-issued tickets keep their snapshot (never touched here); closed/
  *  shipping rounds and in-stock keep their price too. Variant products (no per-variant yuan stored) are
  *  left as-is. (user request 2026-07-07) */
+/** Re-price ONE product from the formula IF it's still an open pre-order (else leave it). */
+const repricedFromFormula = (settings: Database['settings'], p: Product): Product => {
+  if (p.is_stock || p.status !== 'open') return p; // only products still taking bookings re-price
+  const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
+  const deposit_amount = p.wcf_type ? depositFor(settings, p.wcf_type) : p.deposit_amount;
+  return price_total === p.price_total && deposit_amount === p.deposit_amount ? p : { ...p, price_total, deposit_amount };
+};
+
 export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => {
   const settings = { ...db.settings, ...patch };
   const priceKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'deposit_wcf', 'deposit_mega'] as const;
   const pricingChanged = priceKeys.some((k) => patch[k] != null && patch[k] !== db.settings[k]);
   if (!pricingChanged) return { ...db, settings };
-  const products = db.products.map((p) => {
-    if (p.is_stock || p.status !== 'open') return p; // only products still taking bookings re-price
-    const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
-    const deposit_amount = p.wcf_type ? depositFor(settings, p.wcf_type) : p.deposit_amount;
-    return price_total === p.price_total && deposit_amount === p.deposit_amount ? p : { ...p, price_total, deposit_amount };
-  });
-  return { ...db, settings, products };
+  return { ...db, settings, products: db.products.map((p) => repricedFromFormula(settings, p)) };
 };
+
+/** Force re-apply the CURRENT formula to every open pre-order (for products created under an older
+ *  formula, where no value "changed" to trigger the auto re-price). */
+export const repriceOpenPreorders = () => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => repricedFromFormula(db.settings, p)),
+});
 
 export const upsertPaymentAccount = (a: PaymentAccount) => (db: Database): Database => ({ ...db, paymentAccounts: upsertById(db.paymentAccounts, a) });
 export const removePaymentAccount = (aid: string) => (db: Database): Database => ({ ...db, paymentAccounts: db.paymentAccounts.filter((a) => a.id !== aid) });
