@@ -3,7 +3,7 @@
 import { Suspense, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
-import { Icon } from '@/components/Icon';
+import { Icon, type IconName } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
@@ -33,15 +33,19 @@ function ShopInner() {
   const [status, setStatus] = useState<ProductStatus | null>(null);
   const [query, setQuery] = useState('');
 
-  const results = useMemo(
+  const filtered = useMemo(
     () => filterProducts(db, { category, categoryId, franchiseId, manufacturerId, seriesId, status, query }),
     [db, category, categoryId, franchiseId, manufacturerId, seriesId, status, query],
   );
+  // "พรีรอบพิเศษ" is its own category → hide normal products there; batches are the only cards.
+  const results = category === 'special' ? [] : filtered;
 
-  // reopened stock batches matching the same filters (shown as extra "รอบใหม่" cards)
-  const openBatches = category === 'instock' ? [] : db.batches.filter((b) => {
+  // special-round batches (สต๊อกใบพรี) shown as their own cards — in the "พรีรอบพิเศษ" category and the "all" view
+  const showBatches = category === null || category === 'special';
+  const openBatches = !showBatches ? [] : db.batches.filter((b) => {
     if (b.status !== 'open') return false;
-    if (batchRemaining(db, b.id, b.stock_qty) <= 0) return false; // sold out
+    // sold-out rounds are hidden from the mixed "all" view but STAY (greyed "หมด") in the dedicated category
+    if (category !== 'special' && batchRemaining(db, b.id, b.stock_qty) <= 0) return false;
     const p = db.products.find((x) => x.id === b.product_id);
     if (!p) return false;
     if (categoryId && categoryOf(db, p)?.id !== categoryId) return false;
@@ -55,6 +59,7 @@ function ShopInner() {
   // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
   const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
+  const specialCount = db.batches.filter((b) => b.status === 'open' && batchRemaining(db, b.id, b.stock_qty) > 0).length;
   // ประเภท offered on the storefront = active categories only
   const activeCategories = db.categories.filter((c) => c.active);
   // ค่าย list narrows to makers under the selected ประเภท
@@ -74,8 +79,9 @@ function ShopInner() {
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ค้นหาฟิกเกอร์ / เรื่อง / ค่าย" className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink-faint" />
       </div>
 
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:mb-6 lg:gap-4">
+      <div className="mb-5 grid grid-cols-3 gap-2.5 lg:mb-6 lg:gap-4">
         <CategoryBanner active={category === 'preorder'} onClick={() => setCategory(category === 'preorder' ? null : 'preorder')} title="Pre-Order" count={preorderCount} icon="box" grad="linear-gradient(120deg, rgba(185,28,28,.34), #1a0f0e)" border="border-primary" />
+        <CategoryBanner active={category === 'special'} onClick={() => setCategory(category === 'special' ? null : 'special')} title="พรีรอบพิเศษ" count={specialCount} icon="tag" grad="linear-gradient(120deg, rgba(217,119,6,.28), #17110b)" border="border-[#f59e0b]/60" />
         <CategoryBanner active={category === 'instock'} onClick={() => setCategory(category === 'instock' ? null : 'instock')} title="In-Stock" count={stockCount} icon="bolt" grad="linear-gradient(120deg, rgba(22,163,74,.18), #0e1310)" border="border-[#16a34a]/50" />
       </div>
 
@@ -133,7 +139,7 @@ function ShopInner() {
 
         <div>
           <div className="mb-3 text-[12.5px] text-ink-faint lg:mb-4 lg:text-lg lg:font-extrabold lg:text-ink">
-            {category === 'instock' ? 'พร้อมส่ง' : category === 'preorder' ? 'พรีออเดอร์' : 'สินค้าทั้งหมด'}
+            {category === 'instock' ? 'พร้อมส่ง' : category === 'preorder' ? 'พรีออเดอร์' : category === 'special' ? 'พรีรอบพิเศษ' : 'สินค้าทั้งหมด'}
             <span className="font-normal text-ink-faint lg:text-sm"> · {results.length + openBatches.length} รายการ</span>
           </div>
           {openBatches.length > 0 && (
@@ -166,11 +172,11 @@ function ChipRail({ children, last }: { children: React.ReactNode; last?: boolea
   return <div className={cx('flex gap-2 overflow-x-auto pb-1 no-scrollbar', last ? 'mb-[18px]' : 'mb-2.5')}>{children}</div>;
 }
 
-function CategoryBanner({ active, onClick, title, count, icon, grad, border }: { active?: boolean; onClick: () => void; title: string; count: number; icon: 'box' | 'bolt'; grad: string; border: string }) {
+function CategoryBanner({ active, onClick, title, count, icon, grad, border }: { active?: boolean; onClick: () => void; title: string; count: number; icon: IconName; grad: string; border: string }) {
   return (
-    <button onClick={onClick} className={cx('relative h-24 overflow-hidden rounded-card border-[1.5px] p-4 text-left text-ink lg:h-[110px] lg:rounded-2xl lg:p-6', active ? border : 'border-transparent')} style={{ background: grad }}>
-      <Icon name={icon} size={24} className="text-white" />
-      <div className="mt-2 text-base font-extrabold lg:text-xl">{title}</div>
+    <button onClick={onClick} className={cx('relative h-24 overflow-hidden rounded-card border-[1.5px] p-3 text-left text-ink lg:h-[110px] lg:rounded-2xl lg:p-6', active ? border : 'border-transparent')} style={{ background: grad }}>
+      <Icon name={icon} size={22} className="text-white" />
+      <div className="mt-2 text-[15px] font-extrabold leading-tight lg:text-xl">{title}</div>
       <div className="text-[11.5px] text-ink-muted2 lg:text-[13px]">{count} รายการ</div>
       <Icon name={icon} size={80} className="absolute -bottom-3 -right-1.5 text-white/5" />
     </button>

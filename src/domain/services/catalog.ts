@@ -109,7 +109,7 @@ export function metaLine(db: Database, product: Product): string {
 }
 
 export interface ProductFilter {
-  category?: 'preorder' | 'instock' | null;
+  category?: 'preorder' | 'instock' | 'special' | null;
   categoryId?: string | null; // ประเภท/Type (via maker)
   franchiseId?: string | null;
   manufacturerId?: string | null;
@@ -160,6 +160,25 @@ export function batchSoldQty(db: Database, batchId: string): number {
 /** Remaining unsold qty of a single batch. */
 export function batchRemaining(db: Database, batchId: string, stockQty: number): number {
   return Math.max(0, stockQty - batchSoldQty(db, batchId));
+}
+
+/** Does a product have an OPEN special round (สต๊อกใบพรี) right now? */
+export function hasOpenBatch(db: Database, productId: string): boolean {
+  return db.batches.some((b) => b.product_id === productId && b.status === 'open');
+}
+export function openBatchOf(db: Database, productId: string) {
+  return db.batches.find((b) => b.product_id === productId && b.status === 'open');
+}
+/** Batches currently on a special round (open) — the "พรีรอบพิเศษ" storefront category. */
+export function openRoundBatches(db: Database) {
+  return db.batches.filter((b) => b.status === 'open');
+}
+
+/** Detailed buyers of a single round (batch): name + qty + price paid (snapshot total) + ticket + date. */
+export function batchBuyers(db: Database, batchId: string): { name: string; qty: number; paid: number; ticket_no: string; created_at: string }[] {
+  return db.tickets
+    .filter((t) => t.batch_id === batchId)
+    .map((t) => ({ name: db.users.find((u) => u.id === t.owner_id)?.display_name ?? '—', qty: t.qty, paid: t.deposit_paid + t.remaining_amount, ticket_no: t.ticket_no, created_at: t.created_at }));
 }
 
 /** Total surplus stock of a product still unsold (surplus_qty − sold across its batches). */

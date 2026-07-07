@@ -1,7 +1,8 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
-import { franchiseOf } from '../domain/services/catalog';
+import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
+import { depositFor } from '../domain/services/pricing';
 import { couponMatchesProduct } from '../domain/services/coupons';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -252,8 +253,74 @@ export const closeBatch = (batchId: string) => (db: Database): Database => ({
 
 export const removeBatch = (batchId: string) => (db: Database): Database => ({
   ...db,
-  batches: db.batches.filter((b) => b.id !== batchId),
+  // never delete a round that has buyers — it would orphan their tickets (batch_id → nothing)
+  batches: db.tickets.some((t) => t.batch_id === batchId) ? db.batches : db.batches.filter((b) => b.id !== batchId),
 });
+
+// ── สต๊อกใบพรี / พรีรอบพิเศษ (special pre-order round) ─────────────────────────
+/** Open ONE special pre-order round (สต๊อกใบพรี) on an existing product. Guarded to a single OPEN
+ *  round per SKU. `addSurplus` (legacy: physical stock we already hold) bumps surplus first; without it
+ *  the round sells existing surplus (from a production close). Deposit = the SKU's deposit unless
+ *  `fullPay` (จ่ายเต็ม/พร้อมส่ง → deposit = price). Existing buyers keep their snapshot (ryuma-preorder-stock-spec). */
+export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean }) => (db: Database): Database => {
+  const p = db.products.find((x) => x.id === productId);
+  if (!p) return db;
+  if (db.batches.some((b) => b.product_id === productId && b.status === 'open')) return db; // one round at a time
+  const qty = Math.max(0, Math.floor(opts.qty));
+  if (qty <= 0) return db;
+  const price = opts.price > 0 ? opts.price : p.price_total;
+  const deposit = opts.fullPay ? price : p.deposit_amount;
+  const now = new Date().toISOString();
+  const products = opts.addSurplus ? db.products.map((x) => (x.id === productId ? { ...x, surplus_qty: (x.surplus_qty ?? 0) + qty } : x)) : db.products;
+  const stockAdditions = opts.addSurplus
+    ? [{ id: id('sa'), product_id: productId, qty, note: `สต๊อกใบพรี (legacy) +${qty}`, created_at: now }, ...db.stockAdditions]
+    : db.stockAdditions;
+  const batch = { id: id('b'), product_id: productId, label: opts.label?.trim() || (opts.fullPay ? 'พร้อมส่ง' : 'รอบพิเศษ'), price_total: price, deposit_amount: deposit, stock_qty: qty, status: 'open' as const, created_at: now };
+  return { ...db, products, stockAdditions, batches: [batch, ...db.batches] };
+};
+
+/** Create a brand-new legacy SKU (stock we already hold) + open its first special round in one step.
+ *  full-pay → status 'arrived' (in hand); deposit → 'shipping' (in transit, so the remaining is payable). */
+export const createLegacyStockProduct = (data: {
+  franchise_id: string; manufacturer_id: string; series_id?: string; character_name: string; series_name: string;
+  height_cm?: number; wcf_type?: WcfType; images?: string[];
+  qty: number; price: number; fullPay: boolean; label?: string;
+}) => (db: Database): Database => {
+  const pid = id('p');
+  const now = new Date().toISOString();
+  const product: Product = {
+    id: pid, franchise_id: data.franchise_id, manufacturer_id: data.manufacturer_id,
+    series_id: data.series_id || undefined, series_name: data.series_name, character_name: data.character_name || undefined,
+    wcf_type: data.wcf_type, type: 'other', description: '', images: data.images ?? [],
+    eta_note: data.fullPay ? 'พร้อมส่ง' : 'ระหว่างทาง',
+    price_total: data.price, deposit_amount: data.fullPay ? data.price : depositFor(db.settings, data.wcf_type ?? 'wcf'),
+    is_stock: false, height_cm: data.height_cm, has_variants: false,
+    status: data.fullPay ? 'arrived' : 'shipping', shipped_at: data.fullPay ? undefined : now,
+    surplus_qty: 0, stock_origin: 'manual', created_at: now,
+  };
+  const withProduct = { ...db, products: [product, ...db.products] };
+  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true })(withProduct);
+};
+
+/** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
+export const editBatch = (batchId: string, patch: { price?: number; qty?: number; label?: string }) => (db: Database): Database => {
+  if (db.tickets.some((t) => t.batch_id === batchId)) return db; // locked once a ticket references it
+  return {
+    ...db,
+    batches: db.batches.map((b) => {
+      if (b.id !== batchId) return b;
+      const fullPay = b.deposit_amount >= b.price_total;
+      const price = patch.price != null && patch.price > 0 ? patch.price : b.price_total;
+      return {
+        ...b,
+        price_total: price,
+        deposit_amount: fullPay ? price : b.deposit_amount,
+        stock_qty: patch.qty != null && patch.qty > 0 ? Math.floor(patch.qty) : b.stock_qty,
+        label: patch.label != null ? (patch.label.trim() || b.label) : b.label,
+      };
+    }),
+  };
+};
 
 /** Customer submits a remaining-balance payment (slip) awaiting admin approval. A pre-order coupon
  *  applied here permanently reduces the ticket's remaining_amount (so `amount` = the discounted due)
@@ -464,11 +531,25 @@ export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...d
  * to every ticket of that product, so customers' wallets track the lifecycle.
  * `extra` carries tracking_no/shipped_at when the lot starts shipping.
  */
-export const setProductStatus = (productId: string, status: ProductStatus, extra?: { tracking_no?: string; shipped_at?: string }) => (db: Database): Database => ({
-  ...db,
-  products: db.products.map((p) => (p.id === productId ? { ...p, status, ...(extra ?? {}) } : p)),
-  tickets: db.tickets.map((t) => (t.product_id === productId ? { ...t, product_status: status } : t)),
-});
+export const setProductStatus = (productId: string, status: ProductStatus, extra?: { tracking_no?: string; shipped_at?: string }) => (db: Database): Database => {
+  const base: Database = {
+    ...db,
+    products: db.products.map((p) => (p.id === productId ? { ...p, status, ...(extra ?? {}) } : p)),
+    tickets: db.tickets.map((t) => (t.product_id === productId ? { ...t, product_status: status } : t)),
+  };
+  // สต๊อกใบพรี auto-finish: when a special-round product is DELIVERED, archive its open round(s) and
+  // auto-flip any leftover surplus → in-stock (only if the round is settled — no unpaid tickets). (ryuma-preorder-stock-spec)
+  if (status === 'delivered' && base.batches.some((b) => b.product_id === productId)) {
+    const closed: Database = { ...base, batches: base.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)) };
+    const p = closed.products.find((x) => x.id === productId);
+    if (p && canConvertToInStock(closed, p)) {
+      const lastBatch = [...closed.batches].filter((b) => b.product_id === productId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+      return convertToInStock(productId, lastBatch?.price_total ?? p.price_total)(closed);
+    }
+    return closed;
+  }
+  return base;
+};
 
 /**
  * Record the in-Thailand parcel (carrier + tracking no + optional photo) for a single
@@ -585,7 +666,9 @@ export const addInStock = restockInStock; // alias (qty only)
 export const convertToInStock = (productId: string, price: number) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p) return db;
-  const surplus = p.surplus_qty ?? 0;
+  // only the UNSOLD leftover becomes in-stock — surplus already sold via a special round is now
+  // customer tickets, so using surplus_qty (raw) would double-count and oversell. (found by test T6)
+  const surplus = stockRemaining(db, p);
   const now = new Date().toISOString();
   const merge = sameInStock(db.products, p, productId);
   if (merge) {

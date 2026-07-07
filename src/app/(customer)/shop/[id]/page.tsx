@@ -98,7 +98,7 @@ export default function ProductDetailPage() {
       )}
 
       {batch
-        ? <span className="inline-flex items-center rounded-[7px] bg-cta px-2.5 py-1 text-[11px] font-bold text-white">รอบใหม่ · {batch.label} · เหลือ {batch.stock_qty}</span>
+        ? <span className="inline-flex items-center rounded-[7px] bg-cta px-2.5 py-1 text-[11px] font-bold text-white">พรีรอบพิเศษ · {batch.label}{(avail ?? 0) > 0 ? '' : ' · หมด'}</span>
         : <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} />}
       <div className="mb-0.5 mt-2 font-mono text-[11px] text-ink-faint">{manufacturerNameOf(db, product)} · {fr?.name}{categoryOf(db, product) ? ` · ${categoryOf(db, product)!.name}` : ''}{seriesOf(db, product) ? ` · ${seriesOf(db, product)!.name}` : ''}</div>
       <div className="text-[22px] font-extrabold leading-tight">{product.series_name}</div>
