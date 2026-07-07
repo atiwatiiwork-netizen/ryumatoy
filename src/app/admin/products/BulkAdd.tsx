@@ -237,9 +237,9 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
                                 {v.image && <span className="pointer-events-none absolute inset-0 hidden place-items-center bg-black/45 text-white group-hover:grid"><Icon name="search" size={13} /></span>}
                               </button>
                               <span className="w-5 shrink-0 text-center text-[11px] font-bold text-ink-faint">#{i + 1}</span>
-                              <input className={cx(inputCls, 'flex-1')} value={v.vname} onChange={(e) => setV(r.key, v.key, { vname: e.target.value })} placeholder={`ตั้งชื่อแบบที่ ${i + 1} เช่น สีแดง`} />
-                              <input className={cx(inputCls, 'w-20 text-center')} inputMode="numeric" value={v.cost_yuan} onChange={(e) => setV(r.key, v.key, { cost_yuan: e.target.value.replace(/[^\d]/g, '') })} placeholder="หยวน" />
-                              <span className="w-16 text-right text-[11px] text-primary-soft">{v.cost_yuan ? baht(priceFromYuan(st, Number(v.cost_yuan) || 0)) : ''}</span>
+                              <input className={cx(inputCls, 'min-w-0 flex-1')} value={v.vname} onChange={(e) => setV(r.key, v.key, { vname: e.target.value })} placeholder={`ตั้งชื่อแบบที่ ${i + 1} เช่น สีแดง`} />
+                              <input className={cx(inputCls, '!w-20 shrink-0 text-center')} inputMode="numeric" value={v.cost_yuan} onChange={(e) => setV(r.key, v.key, { cost_yuan: e.target.value.replace(/[^\d]/g, '') })} placeholder="หยวน" />
+                              <span className="w-14 shrink-0 text-right text-[11px] text-primary-soft">{v.cost_yuan ? baht(priceFromYuan(st, Number(v.cost_yuan) || 0)) : ''}</span>
                             </div>
                           ))}
                         </div>
