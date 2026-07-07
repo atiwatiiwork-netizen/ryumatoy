@@ -9,9 +9,11 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, cx } from '@/components/ui';
 import { manufacturerOf } from '@/domain/services/catalog';
+import { usableGrantsFor } from '@/domain/services/coupons';
+import { MyCoupons } from '@/components/CouponTicket';
 import type { PreorderTicket } from '@/domain/entities';
 
-type Tab = 'all' | 'preorder' | 'shipping' | 'done';
+type Tab = 'all' | 'preorder' | 'shipping' | 'done' | 'coupon';
 
 // ทั้งหมด / ใบพรี (จอง+ผลิต) / กำลังเดินทาง / เรียบร้อย (ถึงไทย/จ่ายครบ)
 function matchTab(tab: Tab, ps: string, status: string): boolean {
@@ -29,6 +31,7 @@ export default function WalletPage() {
 
   const mine = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID);
   const totalDue = mine.reduce((s, t) => s + (t.remaining_amount - t.remaining_paid), 0);
+  const couponCount = usableGrantsFor(db, CURRENT_USER_ID).length;
 
   const filtered = mine
     .filter((t) => matchTab(tab, t.product_status, t.status))
@@ -53,15 +56,20 @@ export default function WalletPage() {
 
       <div className="mb-[18px] flex items-center gap-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">
-          {([['all', 'ทั้งหมด'], ['preorder', 'ใบพรี'], ['shipping', 'กำลังเดินทาง'], ['done', 'เรียบร้อย']] as [Tab, string][]).map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)} className={cx('whitespace-nowrap rounded-full border px-3.5 py-2 text-[13px] font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{label}</button>
+          {([['all', 'ทั้งหมด'], ['preorder', 'ใบพรี'], ['shipping', 'กำลังเดินทาง'], ['done', 'เรียบร้อย'], ['coupon', 'คูปอง']] as [Tab, string][]).map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)} className={cx('flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-2 text-[13px] font-bold', tab === k ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>
+              {label}{k === 'coupon' && couponCount > 0 && <span className={cx('rounded-full px-1.5 text-[10px] font-extrabold', tab === k ? 'bg-white/25 text-white' : 'bg-primary-bright text-white')}>{couponCount}</span>}
+            </button>
           ))}
         </div>
-        <button onClick={() => setNewest((v) => !v)} className="ml-auto flex flex-shrink-0 items-center gap-1.5 rounded-full border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-semibold text-ink-muted2">
-          <Icon name="swap" size={15} /> {newest ? 'ใหม่→เก่า' : 'เก่า→ใหม่'}
-        </button>
+        {tab !== 'coupon' && (
+          <button onClick={() => setNewest((v) => !v)} className="ml-auto flex flex-shrink-0 items-center gap-1.5 rounded-full border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-semibold text-ink-muted2">
+            <Icon name="swap" size={15} /> {newest ? 'ใหม่→เก่า' : 'เก่า→ใหม่'}
+          </button>
+        )}
       </div>
 
+      {tab === 'coupon' ? <MyCoupons uid={CURRENT_USER_ID} /> : (<>
       {groups.map((g) => (
         <div key={g.makerId} className="mb-5">
           <div className="mb-2 flex items-center gap-2 text-[12.5px] font-bold text-ink-muted">
@@ -101,6 +109,7 @@ export default function WalletPage() {
         </div>
       ))}
       {filtered.length === 0 && <div className="py-12 text-center text-ink-faint">ยังไม่มีใบพรีในหมวดนี้</div>}
+      </>)}
     </div>
   );
 }

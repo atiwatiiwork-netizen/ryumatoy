@@ -4,9 +4,10 @@ import { useEffect, useState } from 'react';
 import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
-import { couponTier, usableGrantsFor } from '@/domain/services/coupons';
+import { couponTier, usableGrantsFor, couponExpired } from '@/domain/services/coupons';
 import type { CouponTier } from '@/domain/services/coupons';
 import type { Coupon } from '@/domain/entities';
+import { Icon } from './Icon';
 import { cx } from './ui';
 
 const SCOPE_LABEL: Record<string, string> = { preorder: 'พรีออเดอร์', instock: 'พร้อมส่ง', both: 'พรี & พร้อมส่ง' };
@@ -141,4 +142,86 @@ export function CouponReceived() {
 export function CouponTierPill({ value }: { value: number }) {
   const m = TIER_META[couponTier(value)];
   return <span className="rounded-md px-2 py-0.5 text-[10.5px] font-extrabold" style={{ background: m.grad, color: m.ink, boxShadow: `inset 0 0 0 1px ${m.ring}` }}>{m.label}</span>;
+}
+
+/** Live expiry countdown — "เหลือ N วัน" while far off, ticking "HH:MM:SS" in the final day. */
+export function CouponCountdown({ expiresAt, className }: { expiresAt?: string; className?: string }) {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  if (!expiresAt) return null;
+  const end = new Date(expiresAt); end.setHours(23, 59, 59, 999);
+  const ms = end.getTime() - now;
+  const days = Math.floor(ms / 86400000);
+  const urgent = ms > 0 && days < 1;
+  const label = ms <= 0 ? 'หมดอายุ'
+    : days >= 1 ? `เหลือ ${days} วัน`
+    : `⏳ ${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+  return (
+    <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-bold tabular-nums', urgent ? 'animate-pulseRed bg-[#b91c1c] text-white' : 'bg-black/45 text-white', className)}>{label}</span>
+  );
+}
+
+/** The customer's coupon wallet — usable (biggest value first) + history. Shared by /coupons
+ *  and the wallet "คูปอง" tab. Nicely grouped so the coupons feel valuable. */
+export function MyCoupons({ uid }: { uid: string }) {
+  const db = useDatabase();
+  const usable = usableGrantsFor(db, uid).sort((a, b) => b.coupon.value - a.coupon.value); // most valuable on top
+  const usableIds = new Set(usable.map((x) => x.grant.id));
+  const totalValue = usable.reduce((s, x) => s + x.coupon.value, 0);
+  const past = db.couponGrants
+    .filter((g) => g.user_id === uid && !usableIds.has(g.id))
+    .map((g) => ({ grant: g, coupon: db.coupons.find((c) => c.id === g.coupon_id) }))
+    .filter((x): x is { grant: typeof x.grant; coupon: NonNullable<typeof x.coupon> } => !!x.coupon)
+    .sort((a, b) => (b.grant.granted_at ?? '').localeCompare(a.grant.granted_at ?? ''));
+  const pastLabel = (g: (typeof past)[number]) =>
+    g.grant.status === 'used' ? 'ใช้ไปแล้ว' : g.grant.status === 'revoked' ? 'ถูกยกเลิก' : couponExpired(g.coupon) ? 'หมดอายุ' : 'ใช้ไม่ได้';
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center gap-2 rounded-xl border border-[#8b5cf6]/25 bg-[#8b5cf6]/[0.06] px-3.5 py-2.5 text-[12px] text-[#c4b5fd]">
+        <Icon name="tag" size={16} /> พรีออเดอร์ → ใช้ตอนจ่ายยอดสุดท้าย · พร้อมส่ง → ใช้ตอนสั่งซื้อ
+      </div>
+
+      {usable.length > 0 ? (
+        <div className="mb-6">
+          <div className="mb-2.5 flex items-baseline justify-between">
+            <span className="text-[13px] font-bold text-ink-muted2">ใช้ได้ ({usable.length})</span>
+            <span className="text-[12px] text-ink-faint">มูลค่ารวม <b className="text-primary-soft">{baht(totalValue)}</b></span>
+          </div>
+          <div className="flex flex-col gap-3">
+            {usable.map((x) => (
+              <div key={x.grant.id} className="relative animate-floatY [animation-duration:5s]">
+                <CouponTicket coupon={x.coupon} size="md" />
+                {x.coupon.expires_at && <div className="absolute right-2.5 top-2.5"><CouponCountdown expiresAt={x.coupon.expires_at} /></div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mb-6 rounded-2xl border border-subtle bg-surface-2 py-14 text-center text-ink-faint">
+          <Icon name="tag" size={40} className="mx-auto mb-3 text-ink-faint" />
+          <div className="text-[15px]">ยังไม่มีคูปองที่ใช้ได้</div>
+          <div className="mt-1 text-[12.5px]">แอดมินจะมอบคูปองส่วนลดให้เป็นพิเศษ ✨</div>
+        </div>
+      )}
+
+      {past.length > 0 && (
+        <div>
+          <div className="mb-2.5 text-[13px] font-bold text-ink-faint">ประวัติ ({past.length})</div>
+          <div className="flex flex-col gap-2.5">
+            {past.map((x) => (
+              <div key={x.grant.id} className="relative">
+                <CouponTicket coupon={x.coupon} size="sm" muted />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-black/55 px-2 py-1 text-[10.5px] font-bold text-white">{pastLabel(x)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
