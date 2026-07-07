@@ -49,6 +49,7 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
   });
   const [uploading, setUploading] = useState(false);
   const [assign, setAssign] = useState('');
+  const [preview, setPreview] = useState<string | null>(null); // click a thumbnail → enlarge
 
   useEffect(() => { try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ sd, rows })); } catch { /* */ } }, [sd, rows]);
   // keep shared ids valid once real data loads
@@ -194,7 +195,12 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
               <div key={r.key} className={cx('rounded-xl border bg-surface-2 p-2', ok ? 'border-subtle' : 'border-[#f87171]/40')}>
                 <div className="flex items-start gap-2">
                   <button onClick={() => set(r.key, { sel: !r.sel })} className={cx('mt-1 grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border-[1.5px]', r.sel ? 'border-primary bg-primary' : 'border-subtle')}>{r.sel && <Icon name="check" size={12} className="text-white" />}</button>
-                  {!r.variants && <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">{r.image ? <img src={r.image} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}</div>}
+                  {!r.variants && (
+                    <button type="button" onClick={() => r.image && setPreview(r.image)} title={r.image ? 'กดเพื่อดูรูปใหญ่' : undefined} className="group relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-stripe">
+                      {r.image ? <img src={r.image} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={18} className="text-primary-soft/25" />}
+                      {r.image && <span className="pointer-events-none absolute inset-0 hidden place-items-center bg-black/45 text-white group-hover:grid"><Icon name="search" size={16} /></span>}
+                    </button>
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="grid grid-cols-[1fr_110px] gap-1.5">
                       <input className={inputCls} value={r.name} onChange={(e) => set(r.key, { name: e.target.value })} placeholder={r.variants ? 'ชื่อสินค้า (ตัวหลัก)' : 'ชื่อตัวละคร'} />
@@ -224,12 +230,16 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
                           <button onClick={() => splitVariant(r.key)} className="ml-auto text-[11px] text-primary-soft">แยกกลับ</button>
                         </div>
                         <div className="flex flex-col gap-1">
-                          {r.variants.map((v) => (
-                            <div key={v.key} className="flex items-center gap-1.5">
-                              <div className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded bg-stripe">{v.image ? <img src={v.image} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={13} className="text-primary-soft/25" />}</div>
-                              <input className={cx(inputCls, 'flex-1')} value={v.vname} onChange={(e) => setV(r.key, v.key, { vname: e.target.value })} placeholder="ชื่อแบบ เช่น สีแดง" />
+                          {r.variants.map((v, i) => (
+                            <div key={v.key} className="flex items-center gap-1.5 rounded-lg bg-surface-3/40 p-1">
+                              <button type="button" onClick={() => v.image && setPreview(v.image)} title={v.image ? 'กดเพื่อดูรูปใหญ่' : undefined} className="group relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded bg-stripe">
+                                {v.image ? <img src={v.image} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={14} className="text-primary-soft/25" />}
+                                {v.image && <span className="pointer-events-none absolute inset-0 hidden place-items-center bg-black/45 text-white group-hover:grid"><Icon name="search" size={13} /></span>}
+                              </button>
+                              <span className="w-5 shrink-0 text-center text-[11px] font-bold text-ink-faint">#{i + 1}</span>
+                              <input className={cx(inputCls, 'flex-1')} value={v.vname} onChange={(e) => setV(r.key, v.key, { vname: e.target.value })} placeholder={`ตั้งชื่อแบบที่ ${i + 1} เช่น สีแดง`} />
                               <input className={cx(inputCls, 'w-20 text-center')} inputMode="numeric" value={v.cost_yuan} onChange={(e) => setV(r.key, v.key, { cost_yuan: e.target.value.replace(/[^\d]/g, '') })} placeholder="หยวน" />
-                              <span className="w-16 text-[11px] text-primary-soft">{v.cost_yuan ? baht(priceFromYuan(st, Number(v.cost_yuan) || 0)) : ''}</span>
+                              <span className="w-16 text-right text-[11px] text-primary-soft">{v.cost_yuan ? baht(priceFromYuan(st, Number(v.cost_yuan) || 0)) : ''}</span>
                             </div>
                           ))}
                         </div>
@@ -252,6 +262,15 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
         <span className="text-[13px] text-ink-muted">พร้อมสร้าง <b className="text-ink">{validRows.length}</b>{rows.length > validRows.length ? ` · ยังไม่ครบ ${rows.length - validRows.length}` : ''} · {maker?.name}</span>
         <button onClick={create} disabled={validRows.length === 0} className="ml-auto rounded-lg bg-cta px-6 py-2.5 text-[13px] font-bold text-white disabled:opacity-50">สร้างทั้งหมด ({validRows.length})</button>
       </div>
+
+      {/* image lightbox — click any thumbnail to see the full picture */}
+      {preview && (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/85 p-6" onClick={() => setPreview(null)}>
+          <img src={preview} alt="" className="max-h-[85vh] max-w-[90vw] rounded-2xl object-contain shadow-2xl" onClick={(e) => e.stopPropagation()} />
+          <button onClick={() => setPreview(null)} className="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white"><Icon name="x" size={20} /></button>
+          <div className="absolute bottom-6 text-[12px] text-white/70">แตะที่ว่างเพื่อปิด</div>
+        </div>
+      )}
     </div>
   );
 }
