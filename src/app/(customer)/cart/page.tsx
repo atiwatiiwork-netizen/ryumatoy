@@ -5,6 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
+import { livePrice } from '@/domain/services/pricing';
 import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -21,7 +22,8 @@ export default function CartPage() {
   // (e.g. Gold pays 50%), matching exactly what submitOrder writes to the order.
   const unitDeposit = (l: (typeof cart.lines)[number]) => {
     const p = db.products.find((pp) => pp.id === l.productId);
-    return lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock: p?.is_stock ?? true }, myRank);
+    const { price, deposit } = livePrice(db, l); // live price — reflects any admin re-price immediately
+    return lineDepositForRank(db.settings, { deposit, price, isStock: p?.is_stock ?? true }, myRank);
   };
   const depositSum = cart.lines.reduce((s, l) => (db.products.some((p) => p.id === l.productId) ? s + unitDeposit(l) * l.qty : s), 0);
   const payNow = depositSum;

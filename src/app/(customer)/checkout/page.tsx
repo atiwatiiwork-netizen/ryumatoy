@@ -15,6 +15,7 @@ import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder } from '@/data/mutations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
+import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
 
@@ -31,10 +32,12 @@ export default function CheckoutPage() {
   const [busy, setBusy] = useState(false);
 
   const myRank = db.users.find((u) => u.id === currentUserId)?.rank ?? 'bronze';
-  // pre-orders get the member's rank deposit perk (Gold 50%) — same as submitOrder writes
+  // pre-orders get the member's rank deposit perk (Gold 50%) — same as submitOrder writes.
+  // price/deposit read LIVE (livePrice) so the amount shown == the amount billed at submit.
   const unitDeposit = (l: (typeof cart.lines)[number]) => {
     const p = db.products.find((pp) => pp.id === l.productId);
-    return lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock: p?.is_stock ?? true }, myRank);
+    const { price, deposit } = livePrice(db, l);
+    return lineDepositForRank(db.settings, { deposit, price, isStock: p?.is_stock ?? true }, myRank);
   };
   // only lines whose product still exists (a persisted cart may reference a since-removed product)
   const validLines = cart.lines.filter((l) => db.products.some((p) => p.id === l.productId));

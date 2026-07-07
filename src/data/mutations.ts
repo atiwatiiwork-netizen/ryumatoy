@@ -2,7 +2,7 @@ import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Ser
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
-import { depositFor } from '../domain/services/pricing';
+import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct } from '../domain/services/coupons';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -38,9 +38,12 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
     const items: OrderItem[] = lines.map((l) => {
       const isStock = db.products.find((p) => p.id === l.productId)?.is_stock ?? false;
+      // price/deposit lock HERE at order submit — read LIVE from the product/variant/batch, not the
+      // (possibly stale) cart snapshot — so a formula re-price can't bill an old price. (livePrice)
+      const { price, deposit } = livePrice(db, l);
       // rank perk: pre-order deposit reduced by rank (snapshot); total unchanged (remaining grows).
       // full-pay lines (in-stock, or a pay-in-full "พร้อมส่ง" batch) collect in full — no perk. (DNA)
-      const unitDeposit = lineDepositForRank(db.settings, { deposit: l.depositEach, price: l.priceEach, isStock }, rank);
+      const unitDeposit = lineDepositForRank(db.settings, { deposit, price, isStock }, rank);
       return {
         id: id('oi'),
         order_id: orderId,
@@ -48,8 +51,8 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
         variant_id: l.variantId,
         qty: l.qty,
         deposit_amount: unitDeposit * l.qty,
-        // snapshot the price/deposit at order time — never re-read the product later
-        unit_price: l.priceEach,
+        // snapshot the just-locked price/deposit onto the order — never re-read the product later
+        unit_price: price,
         unit_deposit: unitDeposit,
         batch_id: l.batchId,
       };
@@ -507,7 +510,25 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
 
 // ---- Admin catalog CRUD (PRD §16 จัดการสินค้า) ------------------------------
 
-export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => ({ ...db, settings: { ...db.settings, ...patch } });
+/** Patch shop settings. When the PRICE FORMULA / deposit tiers change, re-price every OPEN pre-order
+ *  from its saved yuan/tier so the whole system stays in lockstep — the card, the cart, checkout, and the
+ *  ticket issued at order time all read product.price_total/deposit_amount, so there's no way to show a
+ *  new price but bill the old one. Already-issued tickets keep their snapshot (never touched here); closed/
+ *  shipping rounds and in-stock keep their price too. Variant products (no per-variant yuan stored) are
+ *  left as-is. (user request 2026-07-07) */
+export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => {
+  const settings = { ...db.settings, ...patch };
+  const priceKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'deposit_wcf', 'deposit_mega'] as const;
+  const pricingChanged = priceKeys.some((k) => patch[k] != null && patch[k] !== db.settings[k]);
+  if (!pricingChanged) return { ...db, settings };
+  const products = db.products.map((p) => {
+    if (p.is_stock || p.status !== 'open') return p; // only products still taking bookings re-price
+    const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
+    const deposit_amount = p.wcf_type ? depositFor(settings, p.wcf_type) : p.deposit_amount;
+    return price_total === p.price_total && deposit_amount === p.deposit_amount ? p : { ...p, price_total, deposit_amount };
+  });
+  return { ...db, settings, products };
+};
 
 export const upsertPaymentAccount = (a: PaymentAccount) => (db: Database): Database => ({ ...db, paymentAccounts: upsertById(db.paymentAccounts, a) });
 export const removePaymentAccount = (aid: string) => (db: Database): Database => ({ ...db, paymentAccounts: db.paymentAccounts.filter((a) => a.id !== aid) });
