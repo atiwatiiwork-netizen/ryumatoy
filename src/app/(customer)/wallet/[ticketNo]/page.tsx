@@ -17,6 +17,7 @@ import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coup
 import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
+import { copyText, digitsOnly } from '@/lib/clipboard';
 import type { ProductStatus } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
@@ -160,7 +161,7 @@ export default function TicketDetailPage() {
       ) : canPay && paying ? (
         <div className="mb-4 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">
           <div className="mb-1 text-sm font-bold">ชำระส่วนต่าง {baht(payable)}{couponOff > 0 && <span className="ml-1.5 text-[12px] font-normal text-ink-faint line-through">{baht(due)}</span>}</div>
-          <div className="mb-3.5 text-[12px] text-ink-faint">สแกน PromptPay → แนบสลิป → รอ Admin อนุมัติ</div>
+          <div className="mb-3.5 text-[12px] text-ink-faint">โอนผ่านบัญชีธนาคาร / สแกนจ่าย → แนบสลิป → รอ Admin อนุมัติ</div>
           {eligibleCoupons.length > 0 && (
             <div className="mb-3.5 text-left">
               <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-bold text-[#c4b5fd]"><Icon name="tag" size={15} /> ใช้คูปองส่วนลด</div>
@@ -175,7 +176,14 @@ export default function TicketDetailPage() {
           <div className="mb-3.5 flex justify-center">
             {account?.qr_url ? <img src={account.qr_url} alt="QR" className="h-[160px] w-[160px] rounded-2xl bg-white object-contain p-2" /> : <QrPanel size={160} />}
           </div>
-          {account && <div className="mb-3.5 text-[13px] text-ink-muted2">{account.name} · <span className="font-mono">{account.number}</span></div>}
+          {account && (
+            <button
+              onClick={async () => flash((await copyText(digitsOnly(account.number))) ? 'คัดลอกเลขบัญชีแล้ว ✓' : 'คัดลอกไม่สำเร็จ')}
+              className="mb-3.5 inline-flex items-center gap-1.5 text-[13px] text-ink-muted2"
+            >
+              {account.name} · <span className="font-mono text-ink">{account.number}</span> <Icon name="copy" size={14} className="text-ink-faint" />
+            </button>
+          )}
           <label className={cx('mb-3 block cursor-pointer rounded-xl border-[1.5px] border-dashed p-4 text-center', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.06]' : 'border-accent')}>
             <input type="file" accept="image/*" className="hidden" onChange={(e) => onSlip(e.target.files?.[0])} />
             {slip ? <img src={slip} alt="สลิป" className="mx-auto max-h-40 rounded-lg object-contain" /> : <div className="text-[13px] font-semibold text-primary-soft">{busy ? 'กำลังอัปโหลด…' : 'แตะแนบรูปสลิป'}</div>}

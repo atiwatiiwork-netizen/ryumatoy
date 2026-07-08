@@ -19,6 +19,7 @@ import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
+import { copyText, digitsOnly } from '@/lib/clipboard';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -190,16 +191,17 @@ export default function CheckoutPage() {
       ) : (
         <>
           <div className="mb-3.5 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">
-            <div className="mb-3.5 text-sm font-bold">สแกนจ่ายผ่าน PromptPay</div>
+            <div className="mb-3.5 text-sm font-bold">โอนผ่านบัญชีธนาคาร / พร้อมเพย์</div>
             <div className="mb-3.5 flex justify-center">
               {account?.qr_url
-                ? <img src={account.qr_url} alt="PromptPay QR" className="h-[172px] w-[172px] rounded-2xl bg-white object-contain p-2" />
+                ? <img src={account.qr_url} alt="บัญชีรับเงิน" className="h-[172px] w-[172px] rounded-2xl bg-white object-contain p-2" />
                 : <QrPanel size={172} />}
             </div>
             {account ? (
               <>
-                <CopyRow label="ชื่อบัญชี" value={account.name} onCopy={() => flash('คัดลอกแล้ว')} />
-                <CopyRow label="พร้อมเพย์" value={account.number} onCopy={() => flash('คัดลอกเบอร์แล้ว')} />
+                <CopyRow label="ชื่อบัญชี" value={account.name} onCopy={async () => flash((await copyText(account.name)) ? 'คัดลอกชื่อบัญชีแล้ว ✓' : 'คัดลอกไม่สำเร็จ')} />
+                <CopyRow label="เลขบัญชี / พร้อมเพย์" value={account.number} onCopy={async () => flash((await copyText(digitsOnly(account.number))) ? 'คัดลอกเลขบัญชีแล้ว ✓' : 'คัดลอกไม่สำเร็จ')} />
+                <div className="mt-1 text-[11px] text-ink-faint">แตะที่เลขเพื่อคัดลอก แล้วไปวางในแอปธนาคารได้เลย</div>
               </>
             ) : (
               <div className="text-[13px] text-ink-faint">ยังไม่ได้ตั้งค่าบัญชีรับเงิน (Admin → ตั้งค่าการเงิน)</div>
