@@ -50,7 +50,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด'),
       it('/admin/payment', 'payments', 'ตั้งค่าการเงิน'),
     ] },
-    { title: 'แบนเนอร์', items: [it('/admin/home', 'home', 'หน้าแรก / โปรโมชั่น')] },
+    { title: 'แบนเนอร์', items: [
+      it('/admin/home', 'home', 'หน้าแรก / โปรโมชั่น'),
+      it('/admin/poster', 'camera', 'สร้างรูปโปรโมท'),
+    ] },
   ];
 
   return (
