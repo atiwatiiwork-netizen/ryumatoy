@@ -446,6 +446,13 @@ export const removeUser = (userId: string) => (db: Database): Database => ({
   users: db.users.filter((u) => u.id !== userId),
 });
 
+/** Suspend / unsuspend a member (กันสปาย) — reversible; RLS is_app_approved() hides the catalog
+ *  from suspended accounts (migration v40). Their tickets/orders are untouched. */
+export const setSuspended = (userId: string, suspended: boolean) => (db: Database): Database => ({
+  ...db,
+  users: db.users.map((u) => (u.id === userId ? { ...u, suspended } : u)),
+});
+
 // ── Coupons ──────────────────────────────────────────────────────────────────
 /** Create a discount coupon template (admin). */
 export const createCoupon = (data: { label: string; value: number; scope: CouponScope; target_product_id?: string; target_maker_id?: string; expires_at?: string }) => (db: Database): Database => ({

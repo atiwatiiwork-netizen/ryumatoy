@@ -18,6 +18,7 @@ import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
 import { useSmartBack } from '@/lib/nav';
+import { notifyAdminLine } from '@/lib/notify';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -121,6 +122,11 @@ export default function CheckoutPage() {
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.
     await store.flush();
+    // ping the shop owner's LINE (fire-and-forget; no-op if LINE env isn't set)
+    const buyerName = db.users.find((x) => x.id === currentUserId)?.display_name ?? 'ลูกค้า';
+    notifyAdminLine(noPayment
+      ? `🎫 ออเดอร์อนุมัติอัตโนมัติ: ${buyerName} · ${validLines.length} รายการ (ไม่ต้องโอน)`
+      : `🧾 สลิปใหม่รอตรวจ: ${buyerName} · ${validLines.length} รายการ · ยอด ${payNow.toLocaleString()} บาท`);
     setBusy(false);
     flash(noPayment ? 'ยืนยันแล้ว · ได้ตั๋วเลย 🎉' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');

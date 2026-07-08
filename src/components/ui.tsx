@@ -116,12 +116,12 @@ export function ProductThumb({ isStock, size, radius = 'rounded-xl', showRibbon 
     >
       {split ? (
         <>
-          <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }} />
-          <img src={srcB} alt="" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }} />
+          <img src={src} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }} />
+          <img src={srcB} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-contain" style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }} />
           <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(45deg, transparent calc(50% - 1px), rgba(255,255,255,.4) 50%, transparent calc(50% + 1px))' }} />
         </>
       ) : src
-        ? <img src={src} alt="" className="h-full w-full object-contain" />
+        ? <img src={src} alt="" loading="lazy" decoding="async" className="h-full w-full object-contain" />
         : <Icon name="box" size={size ? Math.min(46, size * 0.42) : 44} strokeWidth={1.4} className="text-primary-soft/25" />}
       {showRibbon && (
         <div className={cx('absolute -rotate-45 font-extrabold tracking-wide text-white', big ? '-left-[52px] top-5 px-16 py-1 text-[15px]' : '-left-[34px] top-3 px-10 py-[3px] text-[9px]', isStock ? 'bg-success' : 'bg-cta')}>

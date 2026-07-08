@@ -42,6 +42,18 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   if (canLogin) {
     if (!authReady) return <div className="grid min-h-screen place-items-center bg-base"><img src="/ryuma-logo.png" alt="" width={44} height={44} className="animate-pulse rounded-xl opacity-80" /></div>;
     if (!isLoggedIn) return <PublicLanding />;
+    // suspended (กันสปาย): the catalog RLS already hides everything — show a clear notice instead of an empty shop
+    if (me?.suspended) {
+      return (
+        <div className="grid min-h-screen place-items-center bg-base px-6 text-center font-sans text-ink">
+          <div className="w-full max-w-[380px] rounded-3xl border border-subtle bg-surface-2 p-8">
+            <div className="mb-2 text-4xl">⏸️</div>
+            <div className="text-lg font-extrabold">บัญชีถูกระงับชั่วคราว</div>
+            <div className="mt-1.5 text-[13px] leading-relaxed text-ink-muted2">บัญชีของคุณถูกพักการใช้งานชั่วคราว<br />ติดต่อแอดมินทาง Facebook เพื่อเปิดใช้งานอีกครั้ง</div>
+          </div>
+        </div>
+      );
+    }
   }
 
   return (

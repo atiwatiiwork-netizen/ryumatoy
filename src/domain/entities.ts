@@ -307,6 +307,9 @@ export interface User {
   // new signups start unapproved; admin approves before they can order.
   // undefined = legacy/seed user (treated as approved).
   approved?: boolean;
+  // ระงับชั่วคราว (กันสปาย): admin suspends a dormant new member — catalog RLS (is_app_approved)
+  // hides everything from them until unsuspended. Reversible, unlike delete/reject.
+  suspended?: boolean;
   member_code?: string; // RYU-000x, assigned by admin on approval (reference only, not a login secret)
   fb_link?: string; // Facebook profile link/name given at signup (admin cross-checks)
   pin_reset?: boolean; // admin allowed this user to set a new PIN (forgot-PIN flow)

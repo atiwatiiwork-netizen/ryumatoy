@@ -1,7 +1,7 @@
 'use client';
 
-import { Suspense, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { Icon, type IconName } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
@@ -21,17 +21,41 @@ export default function ShopPage() {
   return <Suspense fallback={null}><ShopInner /></Suspense>;
 }
 
+const PAGE_SIZE = 24; // products rendered per "โหลดเพิ่ม" step (keeps big catalogs snappy)
+
 function ShopInner() {
   const db = useDatabase();
+  const router = useRouter();
+  const pathname = usePathname();
   const params = useSearchParams();
-  const [category, setCategory] = useState<ProductFilter['category']>(null);
-  const [categoryId, setCategoryId] = useState<string | null>(null); // ประเภท/Type
-  // deep-linkable from a product's series chip: /shop?franchise=..&series=..
+  // EVERY filter lives in the URL → any filtered view is shareable (e.g. a FB post linking
+  // straight to "WCF ของค่าย Power") and survives refresh/back.
+  const [category, setCategory] = useState<ProductFilter['category']>(() => {
+    const c = params.get('cat');
+    return c === 'preorder' || c === 'instock' || c === 'special' ? c : null;
+  });
+  const [categoryId, setCategoryId] = useState<string | null>(() => params.get('type')); // ประเภท/Type
   const [franchiseId, setFranchiseId] = useState<string | null>(() => params.get('franchise'));
-  const [manufacturerId, setManufacturerId] = useState<string | null>(null);
+  const [manufacturerId, setManufacturerId] = useState<string | null>(() => params.get('maker'));
   const [seriesId, setSeriesId] = useState<string | null>(() => params.get('series'));
-  const [status, setStatus] = useState<ProductStatus | null>(null);
-  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<ProductStatus | null>(() => (params.get('status') as ProductStatus) || null);
+  const [query, setQuery] = useState(() => params.get('q') ?? '');
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  // mirror the filters into the URL (replace — no history spam) + reset paging on any change
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    if (category) qs.set('cat', category);
+    if (categoryId) qs.set('type', categoryId);
+    if (franchiseId) qs.set('franchise', franchiseId);
+    if (manufacturerId) qs.set('maker', manufacturerId);
+    if (seriesId) qs.set('series', seriesId);
+    if (status) qs.set('status', status);
+    if (query) qs.set('q', query);
+    const s = qs.toString();
+    router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
+    setLimit(PAGE_SIZE);
+  }, [category, categoryId, franchiseId, manufacturerId, seriesId, status, query, pathname, router]);
 
   const filtered = useMemo(
     () => filterProducts(db, { category, categoryId, franchiseId, manufacturerId, seriesId, status, query }),
@@ -147,20 +171,41 @@ function ShopInner() {
               {openBatches.map((b) => <BatchCard key={b.id} batch={b} />)}
             </div>
           )}
-          {/* grouped by ค่าย → ซีรีย์, newest-first within each group */}
-          {groupByMakerSeries(db, results).map((mk) => (
-            <div key={mk.makerId} className="mb-6">
-              <div className="mb-2.5 flex items-center gap-2 text-[15px] font-extrabold lg:text-base"><span className="h-4 w-1 rounded-full bg-primary-bright" /> {mk.makerName}</div>
-              {mk.groups.map((g) => (
-                <div key={g.seriesId ?? '__none'} className="mb-4">
-                  {g.seriesName && <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {g.seriesName}</div>}
-                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-                    {g.products.map((p) => <ProductCard key={p.id} product={p} />)}
+          {/* grouped by ค่าย → ซีรีย์, newest-first within each group — capped at `limit` items
+              across all groups; "โหลดเพิ่ม" raises the cap (big catalogs stay snappy) */}
+          {(() => {
+            let left = limit;
+            const shown: ReturnType<typeof groupByMakerSeries> = [];
+            for (const mk of groupByMakerSeries(db, results)) {
+              if (left <= 0) break;
+              const groups: typeof mk.groups = [];
+              for (const g of mk.groups) {
+                if (left <= 0) break;
+                const products = g.products.slice(0, left);
+                left -= products.length;
+                groups.push({ ...g, products });
+              }
+              shown.push({ ...mk, groups });
+            }
+            return shown.map((mk) => (
+              <div key={mk.makerId} className="mb-6">
+                <div className="mb-2.5 flex items-center gap-2 text-[15px] font-extrabold lg:text-base"><span className="h-4 w-1 rounded-full bg-primary-bright" /> {mk.makerName}</div>
+                {mk.groups.map((g) => (
+                  <div key={g.seriesId ?? '__none'} className="mb-4">
+                    {g.seriesName && <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {g.seriesName}</div>}
+                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+                      {g.products.map((p) => <ProductCard key={p.id} product={p} />)}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ))}
+                ))}
+              </div>
+            ));
+          })()}
+          {results.length > limit && (
+            <button onClick={() => setLimit((l) => l + PAGE_SIZE)} className="mb-6 w-full rounded-card border border-subtle bg-surface-2 py-3 text-[13.5px] font-bold text-ink-muted2">
+              โหลดเพิ่ม · เหลืออีก {results.length - limit} รายการ
+            </button>
+          )}
           {results.length + openBatches.length === 0 && <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>}
         </div>
       </div>

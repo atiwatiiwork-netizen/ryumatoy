@@ -7,6 +7,7 @@ import { store } from '@/data/store';
 import { useDatabase, useDispatch } from './DataProvider';
 import { ensureAuthUser } from '@/data/mutations';
 import { CURRENT_USER_ID } from '@/data/seed';
+import { notifyAdminLine } from '@/lib/notify';
 
 // Admin accounts (Facebook auth uid). Override via env NEXT_PUBLIC_ADMIN_IDS (csv).
 const ADMIN_IDS = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '08809e6a-cfd1-4d57-a8f1-06a133bd2df6')
@@ -138,7 +139,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // real name + FB. v34 makes the RPC also self-heal a provisioned row if one ever slips through.
       const { data, error } = await supabase.rpc('ryuma_signup_v2', { p_name: name, p_phone: phone, p_fb: fb, p_auth_id: authId });
       const res = (data ?? { error: error?.message ?? 'error' }) as RpcResult;
-      if (res.ok && res.user_id) { setAppUserId(res.user_id); await store.reload(); }
+      if (res.ok && res.user_id) {
+        setAppUserId(res.user_id);
+        notifyAdminLine(`👤 สมัครสมาชิกใหม่รออนุมัติ: ${name} · ${phone}`); // ping the owner's LINE
+        await store.reload();
+      }
       return res;
     } finally {
       signingUp.current = false;

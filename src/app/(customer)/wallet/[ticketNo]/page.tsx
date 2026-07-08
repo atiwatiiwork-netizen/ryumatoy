@@ -16,6 +16,7 @@ import { listForResale, submitRemainingPayment } from '@/data/mutations';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
+import { notifyAdminLine } from '@/lib/notify';
 import type { ProductStatus } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
@@ -71,6 +72,7 @@ export default function TicketDetailPage() {
   const payRemaining = () => {
     if (!slip) return;
     dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, payable, slip, selectedCoupon ? { grantId: selectedCoupon.grant.id, discount: couponOff } : undefined));
+    notifyAdminLine(`💸 สลิปส่วนต่างใหม่: ${ticket.ticket_no} · ${payable.toLocaleString()} บาท`);
     flash('ส่งสลิปส่วนต่างแล้ว · รอ Admin ตรวจสอบ');
     setPaying(false); setSlip(null); setCouponGrantId('');
   };

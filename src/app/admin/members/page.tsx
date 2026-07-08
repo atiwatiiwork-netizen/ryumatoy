@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { RANK } from '@/lib/theme';
@@ -8,8 +9,9 @@ import type { RankKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { rankPiecesOf } from '@/domain/services/ranks';
+import { dormantNewMembers, suspendedMembers, daysSinceSignup, DORMANT_DAYS } from '@/domain/services/members';
 import { baht } from '@/lib/theme';
-import { updateUser, removeUser, editTicketDeposit, deleteTicket, repairTickets } from '@/data/mutations';
+import { updateUser, removeUser, setSuspended, editTicketDeposit, deleteTicket, repairTickets } from '@/data/mutations';
 import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
 import type { User, PreorderTicket } from '@/domain/entities';
@@ -105,6 +107,9 @@ export default function AdminMembersPage() {
         )}
       </div>
 
+      {/* กันสปาย: approved members with no ticket + no order after 30 days → suspend candidates */}
+      <DormantSection />
+
       <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
         <div className="mb-3 text-base font-bold text-ink">สมาชิกทั้งหมด ({members.length})</div>
         {members.length === 0 ? (
@@ -145,6 +150,7 @@ export default function AdminMembersPage() {
                           </div>
                           <Row label="สะสม" value={`${pieces} ชิ้น · ${RANK[u.rank as RankKey].label}`} />
                           <div className="mt-1 flex flex-wrap gap-2">
+                            <Link href={`/admin/customers/${u.id}`} className="rounded-lg border border-accent-soft bg-[#b91c1c]/[0.08] px-3 py-1.5 text-[12px] font-bold text-primary-soft">โปรไฟล์เต็ม 360° →</Link>
                             <button onClick={() => setManageId(u.id)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">จัดการตั๋วพรี ({tickets})</button>
                             <button onClick={() => resetPin(u)} className="rounded-lg border border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">อนุญาตตั้ง PIN ใหม่</button>
                           </div>
@@ -160,6 +166,58 @@ export default function AdminMembersPage() {
       </div>
 
       {manageId && <TicketManagerModal userId={manageId} onClose={() => setManageId(null)} />}
+    </div>
+  );
+}
+
+/** กันสปาย: dormant new members (no ticket/order 30+ days after approval) + currently-suspended list. */
+function DormantSection() {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const dormant = dormantNewMembers(db);
+  const suspended = suspendedMembers(db);
+  if (dormant.length === 0 && suspended.length === 0) return null;
+
+  return (
+    <div className="mb-[18px] rounded-2xl border border-[#d97706]/35 bg-surface-2 p-5">
+      <div className="mb-1 flex items-center gap-2 text-base font-bold text-ink">
+        🕵️ สมาชิกเงียบ (กันสปาย) <span className="rounded-full bg-[#d97706]/[0.2] px-2 py-0.5 text-[12px] text-[#fbbf24]">{dormant.length}</span>
+      </div>
+      <div className="mb-3 text-[12px] text-ink-faint">อนุมัติเกิน {DORMANT_DAYS} วัน แต่ไม่มีตั๋ว + ไม่เคยสั่งซื้อเลย — อาจเป็นบัญชีส่องราคา · ระงับ = มองไม่เห็นสินค้า/ราคา (ปลดคืนได้)</div>
+      {dormant.length > 0 && (
+        <div className="flex flex-col divide-y divide-hair">
+          {dormant.map((u) => (
+            <div key={u.id} className="flex flex-wrap items-center gap-2.5 py-2">
+              <Link href={`/admin/customers/${u.id}`} className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-semibold">{u.display_name}</span>
+                <span className="block text-[11px] text-ink-faint">{u.phone ?? '-'} · สมัคร {fmtDate(u.created_at)} · เงียบมา <b className="text-[#fbbf24]">{daysSinceSignup(u)} วัน</b></span>
+              </Link>
+              {u.fb_link && <a href={fbUrl(u.fb_link)} target="_blank" rel="noopener noreferrer" className="text-[11.5px] text-[#60a5fa]">เช็ค FB ↗</a>}
+              <button
+                onClick={() => { if (confirm(`ระงับ "${u.display_name}" ชั่วคราว?\n\nลูกค้าจะมองไม่เห็นสินค้า/ราคาจนกว่าจะปลดระงับ (ข้อมูลไม่หาย ปลดคืนได้)`)) { dispatch(setSuspended(u.id, true)); flash(`ระงับ ${u.display_name} แล้ว`); } }}
+                className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-3 py-1.5 text-[12px] font-bold text-primary-soft"
+              >ระงับชั่วคราว</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {suspended.length > 0 && (
+        <div className="mt-3 border-t border-hair pt-3">
+          <div className="mb-2 text-[12.5px] font-bold text-ink-muted">ระงับอยู่ ({suspended.length})</div>
+          <div className="flex flex-col divide-y divide-hair">
+            {suspended.map((u) => (
+              <div key={u.id} className="flex flex-wrap items-center gap-2.5 py-2 opacity-80">
+                <Link href={`/admin/customers/${u.id}`} className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-semibold">{u.display_name} <span className="rounded-md bg-[#b91c1c]/[0.2] px-1.5 py-0.5 text-[10px] font-bold text-primary-soft">ระงับ</span></span>
+                  <span className="block text-[11px] text-ink-faint">{u.phone ?? '-'} · สมัคร {fmtDate(u.created_at)}</span>
+                </Link>
+                <button onClick={() => { dispatch(setSuspended(u.id, false)); flash(`ปลดระงับ ${u.display_name} แล้ว`); }} className="rounded-lg border border-[#16a34a]/40 bg-[#16a34a]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#4ade80]">ปลดระงับ</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
