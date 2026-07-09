@@ -67,18 +67,24 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
   const seriesOpts = seriesForFranchise(db, sd.franchise_id, sd.manufacturer_id);
   const seriesName = (sid: string) => seriesOpts.find((s) => s.id === sid)?.name;
 
-  const freshRow = (image: string | undefined, prev: Row[]): Row => ({
-    key: genId('r'), image, name: '', series_id: prev[prev.length - 1]?.series_id ?? '', // sticky: inherit last row's series
+  const freshRow = (image: string | undefined, prev: Row[], name = ''): Row => ({
+    key: genId('r'), image, name, series_id: prev[prev.length - 1]?.series_id ?? '', // sticky: inherit last row's series
     cost_yuan: '', height: '', width: '', depth: '', sel: false,
   });
+  // default the character name to the image's file name (minus extension) so the admin doesn't retype
+  const nameFromFile = (fileName: string) => fileName.replace(/\.[^.]+$/, '').trim();
 
   const addImages = async (files?: FileList | null) => {
     if (!files || !files.length) return;
     setUploading(true);
-    const urls = await Promise.all([...files].map(async (f) => { try { return await uploadImage(await applyWatermark(f), 'product'); } catch { return undefined; } }));
-    setRows((rs) => { let acc = rs; for (const url of urls) acc = [...acc, freshRow(url, acc)]; return acc; });
+    const items = await Promise.all([...files].map(async (f) => {
+      const name = nameFromFile(f.name);
+      try { return { url: await uploadImage(await applyWatermark(f), 'product'), name }; }
+      catch { return { url: undefined, name }; }
+    }));
+    setRows((rs) => { let acc = rs; for (const it of items) acc = [...acc, freshRow(it.url, acc, it.name)]; return acc; });
     setUploading(false);
-    flash(`เพิ่ม ${urls.filter(Boolean).length} รูป`);
+    flash(`เพิ่ม ${items.filter((i) => i.url).length} รูป`);
   };
 
   const set = (key: string, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
