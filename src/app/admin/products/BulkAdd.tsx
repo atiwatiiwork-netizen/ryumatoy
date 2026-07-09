@@ -8,7 +8,7 @@ import { applyWatermark } from '@/lib/watermark';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { seriesForFranchise } from '@/domain/services/catalog';
+import { seriesForFranchise, makersForFranchise } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { genId, bulkCreateProducts } from '@/data/mutations';
 import { store } from '@/data/store';
@@ -53,15 +53,17 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
   const [preview, setPreview] = useState<string | null>(null); // click a thumbnail → enlarge
 
   useEffect(() => { try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ sd, rows })); } catch { /* */ } }, [sd, rows]);
-  // keep shared ids valid once real data loads
+  // keep shared ids valid once real data loads (ค่าย stays within the franchise's own makers)
   useEffect(() => {
     setSd((d) => {
-      const m = db.manufacturers.some((x) => x.id === d.manufacturer_id) ? d.manufacturer_id : (db.manufacturers[0]?.id ?? '');
       const f = db.franchises.some((x) => x.id === d.franchise_id) ? d.franchise_id : (db.franchises[0]?.id ?? '');
+      const makers = makersForFranchise(db, f);
+      const m = makers.some((x) => x.id === d.manufacturer_id) ? d.manufacturer_id : (makers[0]?.id ?? '');
       return m === d.manufacturer_id && f === d.franchise_id ? d : { ...d, manufacturer_id: m, franchise_id: f };
     });
-  }, [db.manufacturers, db.franchises]);
+  }, [db.manufacturers, db.franchises, db.series]);
 
+  const makerOpts = makersForFranchise(db, sd.franchise_id); // ค่าย limited to the chosen เรื่อง
   const seriesOpts = seriesForFranchise(db, sd.franchise_id, sd.manufacturer_id);
   const seriesName = (sid: string) => seriesOpts.find((s) => s.id === sid)?.name;
 
@@ -161,8 +163,13 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
       <div className="mb-4 rounded-2xl border border-subtle bg-surface-2 p-4">
         <div className="mb-2.5 text-[12px] text-ink-muted">ค่าเริ่มต้นร่วม (ล็อกได้) — ซีรีย์ตั้งแยกรายแถวด้านล่าง</div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <select className={inputCls} value={sd.manufacturer_id} onChange={(e) => setSd((d) => ({ ...d, manufacturer_id: e.target.value }))}>{db.manufacturers.map((m) => <option key={m.id} value={m.id}>ค่าย · {m.name}</option>)}</select>
-          <select className={inputCls} value={sd.franchise_id} onChange={(e) => setSd((d) => ({ ...d, franchise_id: e.target.value }))}>{db.franchises.map((f) => <option key={f.id} value={f.id}>เรื่อง · {f.name}</option>)}</select>
+          <select className={inputCls} value={sd.franchise_id} onChange={(e) => setSd((d) => {
+            const fid = e.target.value;
+            const makers = makersForFranchise(db, fid);
+            const mid = makers.some((m) => m.id === d.manufacturer_id) ? d.manufacturer_id : (makers[0]?.id ?? '');
+            return { ...d, franchise_id: fid, manufacturer_id: mid };
+          })}>{db.franchises.map((f) => <option key={f.id} value={f.id}>เรื่อง · {f.name}</option>)}</select>
+          <select className={inputCls} value={sd.manufacturer_id} onChange={(e) => setSd((d) => ({ ...d, manufacturer_id: e.target.value }))}>{makerOpts.map((m) => <option key={m.id} value={m.id}>ค่าย · {m.name}</option>)}</select>
           <select className={inputCls} value={sd.wcf_type} onChange={(e) => setSd((d) => ({ ...d, wcf_type: e.target.value as WcfType }))}>
             <option value="wcf">ชนิด · WCF (มัดจำ {baht(st.deposit_wcf)})</option>
             <option value="mega_wcf">ชนิด · Mega (มัดจำ {baht(st.deposit_mega)})</option>

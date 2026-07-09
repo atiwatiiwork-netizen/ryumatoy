@@ -10,7 +10,7 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import type { WcfType } from '@/domain/entities';
 import {
@@ -544,15 +544,18 @@ function Products() {
   };
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const editing = Boolean(draft.id);
-  // when adding, snap the default เรื่อง/ค่าย to valid ids once real data loads (avoid orphan on save)
+  // when adding, snap the default เรื่อง/ค่าย to valid ids once real data loads (avoid orphan on save).
+  // ค่าย is snapped within the franchise's own makers so it can never point at a maker that doesn't
+  // make anything under the selected เรื่อง.
   useEffect(() => {
     if (editing) return;
     setDraft((d) => {
       const f = db.franchises.some((x) => x.id === d.franchise_id) ? d.franchise_id : (db.franchises[0]?.id ?? '');
-      const m = db.manufacturers.some((x) => x.id === d.manufacturer_id) ? d.manufacturer_id : (db.manufacturers[0]?.id ?? '');
+      const makers = makersForFranchise(db, f);
+      const m = makers.some((x) => x.id === d.manufacturer_id) ? d.manufacturer_id : (makers[0]?.id ?? '');
       return f === d.franchise_id && m === d.manufacturer_id ? d : { ...d, franchise_id: f, manufacturer_id: m };
     });
-  }, [db.franchises, db.manufacturers, editing]);
+  }, [db.franchises, db.manufacturers, db.series, editing]);
   // WCF/Mega → auto deposit ; yuan cost → auto selling price
   const setWcfType = (t: WcfType) => setDraft((d) => ({ ...d, wcf_type: t, deposit_amount: String(depositFor(st, t)) }));
   const setYuan = (v: string) => setDraft((d) => ({ ...d, cost_yuan: v, price_total: v ? String(priceFromYuan(st, Number(v) || 0)) : d.price_total }));
@@ -565,6 +568,7 @@ function Products() {
   };
   const reset = () => { try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } setDraft(fresh()); };
 
+  const makerOptions = makersForFranchise(db, draft.franchise_id); // only ค่าย that make a series in this เรื่อง
   const seriesOptions = seriesForFranchise(db, draft.franchise_id, draft.manufacturer_id);
   // variant-driven mode kicks in as soon as a variant ROW exists (before names are typed) — the
   // product ราคาเต็ม/หยวน are hidden + unused; ONE shared มัดจำ applies to every variant. (DNA: no price dup)
@@ -662,8 +666,14 @@ function Products() {
         ) : (
           <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="1. เรื่อง"><select className={inputCls} value={draft.franchise_id} onChange={(e) => setDraft((d) => ({ ...d, franchise_id: e.target.value, series_id: '' }))}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
-              <Field label="2. ค่าย"><select className={inputCls} value={draft.manufacturer_id} onChange={(e) => setDraft((d) => ({ ...d, manufacturer_id: e.target.value, series_id: '' }))}>{db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>
+              <Field label="1. เรื่อง"><select className={inputCls} value={draft.franchise_id} onChange={(e) => setDraft((d) => {
+                // switching เรื่อง re-derives the ค่าย list → snap ค่าย to a maker that's valid for the new เรื่อง
+                const fid = e.target.value;
+                const makers = makersForFranchise(db, fid);
+                const mid = makers.some((m) => m.id === d.manufacturer_id) ? d.manufacturer_id : (makers[0]?.id ?? '');
+                return { ...d, franchise_id: fid, manufacturer_id: mid, series_id: '' };
+              })}>{db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
+              <Field label="2. ค่าย"><select className={inputCls} value={draft.manufacturer_id} onChange={(e) => setDraft((d) => ({ ...d, manufacturer_id: e.target.value, series_id: '' }))}>{makerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>
             </div>
             <Field label="3. ซีรีย์ (ถ้ามี)">
               <select className={inputCls} value={draft.series_id} onChange={(e) => set('series_id', e.target.value)}>

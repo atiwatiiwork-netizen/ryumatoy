@@ -69,6 +69,18 @@ export function seriesForFranchise(db: Database, franchiseId: string, makerId?: 
   return db.series.filter((s) => s.franchise_ids.includes(franchiseId) && (!makerId || s.maker_ids.includes(makerId)));
 }
 
+/** Makers that actually make a series under this เรื่อง — derived from series.maker_ids, so the
+ *  ค่าย picker only offers makers relevant to the chosen franchise (e.g. Hunter×Hunter → only ks).
+ *  Falls back to ALL makers when no series under the franchise names a maker yet, so a brand-new
+ *  franchise (no series defined) is never stuck with an empty picker. */
+export function makersForFranchise(db: Database, franchiseId: string): Manufacturer[] {
+  if (!franchiseId) return db.manufacturers;
+  const ids = new Set<string>();
+  for (const s of db.series) if (s.franchise_ids.includes(franchiseId)) s.maker_ids.forEach((m) => ids.add(m));
+  const list = db.manufacturers.filter((m) => ids.has(m.id));
+  return list.length ? list : db.manufacturers;
+}
+
 /** Group products by ค่าย → then ซีรีย์, newest-first within each group. Products with no
  *  series fall into a null-series group. Used by both the admin list and the customer shop
  *  so everything reads in a tidy maker → series order. */
