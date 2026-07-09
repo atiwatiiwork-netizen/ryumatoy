@@ -52,6 +52,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     ] },
     { title: 'แบนเนอร์', items: [
       it('/admin/home', 'home', 'หน้าแรก / โปรโมชั่น'),
+      it('/admin/events', 'heart', 'กิจกรรม / Event'),
       it('/admin/poster', 'camera', 'สร้างรูปโปรโมท'),
     ] },
   ];

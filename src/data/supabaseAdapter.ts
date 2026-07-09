@@ -56,7 +56,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, rankTiers, paymentAccounts, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, rankTiers, paymentAccounts, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -78,14 +78,17 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('ticket_transfers').select('*'),
         sb.from('coupons').select('*'),
         sb.from('coupon_grants').select('*'),
+        sb.from('campaigns').select('*'),
+        sb.from('campaign_awards').select('*'),
         sb.from('rank_tiers').select('*'),
         sb.from('payment_accounts').select('*'),
         sb.from('shop_settings').select('*'),
       ]);
 
-    // coupon_grants is intentionally NOT in this fatal list: before migration v38 runs the table
-    // doesn't exist, and a missing/errored coupon table must degrade to "no coupons" — never break
-    // the whole app load (the coupon UI just no-ops until the migration is applied).
+    // coupon_grants / campaigns / campaign_awards are intentionally NOT in this fatal list: before
+    // their migration runs the tables don't exist, and a missing/errored coupon/event table must
+    // degrade to "no coupons / no events" — never break the whole app load (the UI just no-ops until
+    // the migration is applied).
     const results = [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
@@ -120,6 +123,8 @@ export const supabaseAdapter: PersistenceAdapter = {
       transfers: (transfers.data ?? []) as Database['transfers'],
       coupons: (coupons.data ?? []) as Database['coupons'],
       couponGrants: (couponGrants.data ?? []) as Database['couponGrants'],
+      campaigns: (campaigns.data ?? []) as Database['campaigns'],
+      campaignAwards: (campaignAwards.data ?? []) as Database['campaignAwards'],
       rankTiers: (rankTiers.data ?? []) as Database['rankTiers'],
       paymentAccounts: (paymentAccounts.data ?? []) as Database['paymentAccounts'],
       settings: s
@@ -163,6 +168,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]);
     await syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]);
     await syncTable(sb, 'coupon_grants', next.couponGrants as unknown as Row[], base.couponGrants as unknown as Row[]);
+    await syncTable(sb, 'campaigns', next.campaigns as unknown as Row[], base.campaigns as unknown as Row[]);
+    await syncTable(sb, 'campaign_awards', next.campaignAwards as unknown as Row[], base.campaignAwards as unknown as Row[]);
     await syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]);
 
     await syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never));

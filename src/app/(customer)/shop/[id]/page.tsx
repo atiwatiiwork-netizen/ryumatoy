@@ -18,6 +18,7 @@ import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
+import { EventProgress } from '@/components/EventBits';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -122,6 +123,9 @@ export default function ProductDetailPage() {
         <Icon name="truck" size={18} className="text-[#60a5fa]" />
         <span className="text-[13px] text-[#bcd3f5]">กำหนดการ: {product.eta_note}</span>
       </div>
+
+      {/* live-event blurb + personal progress (pre-order only; renders nothing when no event) */}
+      {!product.is_stock && <div className="mb-[18px] -mt-1"><EventProgress variant="inline" /></div>}
 
       {variants.length > 0 && (
         <>

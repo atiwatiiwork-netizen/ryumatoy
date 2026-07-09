@@ -1,9 +1,10 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct } from '../domain/services/coupons';
+import { unclaimedAwards } from '../domain/services/campaigns';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -194,12 +195,17 @@ export function approveOrder(orderId: string) {
       tickets: [...newTickets, ...db.tickets],
     };
 
+    // Event/กิจกรรม: this approval may have pushed the buyer over a threshold → auto-mint any reward
+    // coupons now (admin session = RLS-allowed to grant). Runs before the rank early-return so it
+    // always applies.
+    const withRewards = grantAllCampaignRewards(order.user_id)(updated);
+
     // rank progress counts APPROVED pieces → auto-raise a request when a threshold is crossed
     const user = db.users.find((u) => u.id === order.user_id);
-    const pieces = rankPiecesOf(updated, order.user_id);
+    const pieces = rankPiecesOf(withRewards, order.user_id);
     const elig = eligibleRank(db.settings, pieces);
-    if (user && rankIndex(elig) > rankIndex(user.rank)) return requestRank(order.user_id, elig, pieces)(updated);
-    return updated;
+    if (user && rankIndex(elig) > rankIndex(user.rank)) return requestRank(order.user_id, elig, pieces)(withRewards);
+    return withRewards;
   };
 }
 
@@ -496,6 +502,76 @@ export const revokeGrant = (grantId: string) => (db: Database): Database => ({
   ...db,
   couponGrants: db.couponGrants.map((g) => (g.id === grantId && g.status === 'active' ? { ...g, status: 'revoked' as const } : g)),
 });
+
+// ── Events / กิจกรรม ─────────────────────────────────────────────────────────
+/** Create or update an event. Saving an ACTIVE event pauses every other one (only one live at a time). */
+export const upsertCampaign = (c: Campaign) => (db: Database): Database => ({
+  ...db,
+  campaigns: upsertById(
+    c.active ? db.campaigns.map((x) => (x.id === c.id ? x : { ...x, active: false })) : db.campaigns,
+    c,
+  ),
+});
+
+/** Delete an event template. Awards + already-granted coupons stay as history. */
+export const deleteCampaign = (campaignId: string) => (db: Database): Database => ({
+  ...db,
+  campaigns: db.campaigns.filter((c) => c.id !== campaignId),
+});
+
+/**
+ * Grant every reward a customer has earned-but-not-yet-granted for ONE event. Each reward becomes a
+ * fresh Coupon template (expiring reward_expiry_days after the grant) plus coupon_count grants, and a
+ * CampaignAward row so it can never be granted twice — while LOOP repeats still qualify because a
+ * later cycle is a different (tier,cycle) key. No-op when there is nothing pending.
+ *
+ * RLS: this runs in the ADMIN session (called from approveOrder), never the customer's — customers
+ * are blocked from minting coupons/grants by design (ryuma-dna-save). Auto-granted on approval.
+ */
+export const grantCampaignRewards = (campaignId: string, userId: string) => (db: Database): Database => {
+  const c = db.campaigns.find((x) => x.id === campaignId);
+  if (!c) return db;
+  const now = new Date();
+  const pending = unclaimedAwards(db, c, userId, now);
+  if (pending.length === 0) return db;
+  const nowIso = now.toISOString();
+  const expiresAt = c.reward_expiry_days > 0
+    ? new Date(now.getTime() + c.reward_expiry_days * 86400000).toISOString().slice(0, 10)
+    : undefined;
+  const coupons: Coupon[] = [];
+  const grants: CouponGrant[] = [];
+  const awards: CampaignAward[] = [];
+  for (const a of pending) {
+    const couponId = id('c');
+    coupons.push({
+      id: couponId,
+      label: `${c.name} · คูปอง ${a.tier.coupon_value}฿`,
+      value: a.tier.coupon_value,
+      scope: c.reward_scope,
+      target_product_id: c.target_product_id || undefined,
+      target_maker_id: c.target_maker_id || undefined,
+      expires_at: expiresAt,
+      active: true,
+      created_at: nowIso,
+      campaign_id: c.id,
+    });
+    for (let i = 0; i < Math.max(1, a.tier.coupon_count); i++) {
+      grants.push({ id: id('cg'), coupon_id: couponId, user_id: userId, status: 'active', granted_at: nowIso });
+    }
+    awards.push({ id: id('ca'), campaign_id: c.id, user_id: userId, tier_index: a.tierIndex, cycle: a.cycle, claimed_at: nowIso, coupon_id: couponId });
+  }
+  return {
+    ...db,
+    coupons: [...coupons, ...db.coupons],
+    couponGrants: [...grants, ...db.couponGrants],
+    campaignAwards: [...awards, ...db.campaignAwards],
+  };
+};
+
+/** Grant pending rewards for a user across EVERY event (each no-ops if nothing is due). Called from
+ *  approveOrder so a newly-approved pre-order immediately mints any reward it just unlocked. */
+export const grantAllCampaignRewards = (userId: string) => (db: Database): Database =>
+  db.campaigns.reduce((acc, c) => grantCampaignRewards(c.id, userId)(acc), db);
 
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {

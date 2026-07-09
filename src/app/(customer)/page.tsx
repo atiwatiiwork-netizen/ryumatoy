@@ -9,6 +9,7 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, ProgressBar, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
+import { EventBanner } from '@/components/EventBits';
 import { paidPercent } from '@/domain/services/tickets';
 import { inClosedBoard } from '@/domain/services/catalog';
 
@@ -26,6 +27,9 @@ export default function HomePage() {
 
   return (
     <div>
+      {/* live event: banner + my progress (renders nothing when no event is running) */}
+      <EventBanner />
+
       {/* promo / announcement carousel (admin-managed, top of home) */}
       {promos.length > 0 && <PromoCarousel promos={promos} />}
 

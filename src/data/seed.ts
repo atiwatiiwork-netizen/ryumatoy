@@ -147,6 +147,9 @@ export const SEED_DATABASE: Database = {
 
   couponGrants: [],
 
+  campaigns: [],
+  campaignAwards: [],
+
   rankTiers: [
     { name: 'bronze', min_spend: 0, discount_percent: 0, free_shipping_per_month: 0, early_access_hours: 0 },
     { name: 'silver', min_spend: 5000, discount_percent: 3, free_shipping_per_month: 0, early_access_hours: 0 },

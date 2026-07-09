@@ -11,6 +11,7 @@ import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { RankPerksButton } from '@/components/RankModals';
 import { AuthScreen } from '@/components/AuthScreen';
+import { EventProgress } from '@/components/EventBits';
 
 export default function ProfilePage() {
   const db = useDatabase();
@@ -95,6 +96,9 @@ export default function ProfilePage() {
           ),
         )}
       </div>
+
+      {/* live-event progress toward the next reward coupon (renders nothing when no event) */}
+      <div className="mb-[18px]"><EventProgress variant="card" /></div>
 
       {isLoggedIn ? (
         <Button variant="outline" icon="logout" className="border-[#f87171]/40 text-[#f87171]" onClick={signOut}>ออกจากระบบ</Button>
