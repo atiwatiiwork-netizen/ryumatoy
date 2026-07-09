@@ -67,6 +67,7 @@ export default function PosterPage() {
   const [qrImg, setQrImg] = useState(''); // uploaded QR image (dataURL) — wins over the generated one
   const [cat, setCat] = useState<'' | 'preorder' | 'instock'>('preorder');
   const [makerId, setMakerId] = useState('');
+  const [seriesId, setSeriesId] = useState('');
   const [showHeight, setShowHeight] = useState(true);
   const [showDeposit, setShowDeposit] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -98,8 +99,11 @@ export default function PosterPage() {
     if (cat === 'preorder' && (p.is_stock || p.status !== 'open')) return false;
     if (cat === 'instock' && !p.is_stock) return false;
     if (makerId && p.manufacturer_id !== makerId) return false;
+    if (seriesId && p.series_id !== seriesId) return false;
     return true;
   });
+  // series choices narrow to the selected maker (a series lists which makers carry it)
+  const seriesOpts = db.series.filter((s) => !makerId || s.maker_ids.includes(makerId));
 
   const toggle = (id: string) => setSelected((s) => {
     const n = new Set(s);
@@ -320,9 +324,15 @@ export default function PosterPage() {
                 <option value="instock">พร้อมส่ง</option>
                 <option value="">ทั้งหมด</option>
               </select>
-              <select className={inputCls} value={makerId} onChange={(e) => setMakerId(e.target.value)}>
+              <select className={inputCls} value={makerId} onChange={(e) => { setMakerId(e.target.value); setSeriesId(''); }}>
                 <option value="">ทุกค่าย</option>
                 {db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+            <div className="mb-2">
+              <select className={inputCls} value={seriesId} onChange={(e) => setSeriesId(e.target.value)}>
+                <option value="">ทุกซีรีย์</option>
+                {seriesOpts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
             <div className="flex max-h-[360px] flex-col divide-y divide-hair overflow-y-auto">

@@ -22,6 +22,7 @@ export class Store {
   private ready = false;
   private timer?: ReturnType<typeof setTimeout>;
   private saving: Promise<void> = Promise.resolve();
+  private pendingSaves = 0; // >0 while a persist is in flight (block idle-reload from clobbering un-synced rows)
   private reloadSeq = 0;
   /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
    *  silently losing data. Called with the backend error message. */
@@ -70,6 +71,7 @@ export class Store {
     const target = this.db;
     if (base === target) return;
     this.lastSynced = target;
+    this.pendingSaves++;
     this.saving = this.saving
       .then(() => this.adapter.persist(target, base))
       .catch((err) => {
@@ -77,7 +79,8 @@ export class Store {
         // rewind so the next change re-attempts these rows instead of treating them as synced
         this.lastSynced = base;
         this.onPersistError?.(err instanceof Error ? err.message : String(err));
-      });
+      })
+      .finally(() => { this.pendingSaves--; });
     await this.saving;
   };
 
@@ -112,7 +115,10 @@ export class Store {
    *  are unsaved local changes (lastSynced !== db), and bails if any local write lands while the
    *  fetch is in flight — so it can never clobber something the user just did or is typing. */
   reloadIfIdle = async (): Promise<void> => {
-    if (!this.ready || this.lastSynced !== this.db) return; // pending edits → leave them alone
+    // pending edits OR a save in flight → leave the optimistic db alone. (Without the pendingSaves
+    // guard, a poll landing during a persist — when lastSynced === db momentarily — could overwrite
+    // rows that haven't finished uploading, losing them.)
+    if (!this.ready || this.pendingSaves > 0 || this.lastSynced !== this.db) return;
     const before = this.db;
     const seq = ++this.reloadSeq;
     let data: Database;

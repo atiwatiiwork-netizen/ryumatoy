@@ -11,6 +11,7 @@ import { cx } from '@/components/ui';
 import { seriesForFranchise } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { genId, bulkCreateProducts } from '@/data/mutations';
+import { store } from '@/data/store';
 import type { Product, WcfType } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-2.5 py-2 text-sm text-ink outline-none focus:border-accent';
@@ -112,7 +113,7 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
   };
   const validRows = rows.filter(rowValid);
 
-  const create = () => {
+  const create = async () => {
     if (!sd.manufacturer_id || !sd.franchise_id) return flash('เลือกค่าย + เรื่องก่อน');
     if (validRows.length === 0) return flash('ยังไม่มีแถวที่กรอกครบ (ต้องมี ชื่อ + หยวน + สูง)');
     const etaNote = sd.eta_q && sd.eta_year ? `${sd.eta_q} ${sd.eta_year}` : 'TBA';
@@ -137,8 +138,13 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
       return { product, variants };
     });
     dispatch(bulkCreateProducts(items));
+    // wait for the rows to actually persist before clearing the draft — if the save fails, onPersistError
+    // (AdminShell) toasts and the store keeps retrying; we keep the draft so nothing is silently lost.
+    const n = items.length;
+    flash(`กำลังบันทึก ${n} สินค้า…`);
+    await store.flush();
     try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* */ }
-    flash(`สร้าง ${items.length} สินค้าแล้ว 🎉`);
+    flash(`สร้าง ${n} สินค้าแล้ว 🎉`);
     setRows([]);
   };
 

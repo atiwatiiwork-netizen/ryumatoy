@@ -26,18 +26,25 @@ async function syncTable(sb: SupabaseClient, table: string, nextRows: Row[], bas
   const baseJson = new Map(baseRows.map((r) => [String(r[key]), JSON.stringify(r)]));
   const nextKeys = new Set(nextRows.map((r) => String(r[key])));
 
+  // IMPORTANT: attempt EVERY changed row even if one fails, so a single bad/transient row can't drop
+  // its siblings (e.g. bulk-adding 4 products → row 2 blips → rows 3-4 silently never persist). We keep
+  // the first error and throw it at the END → the store still rewinds + retries the failed row(s), but
+  // the rows that DID upload are already saved. (ryuma-dna-save rule 5)
+  let firstError: unknown = null;
   for (const row of nextRows) {
     if (baseJson.get(String(row[key])) !== JSON.stringify(row)) {
       const { error } = await sb.from(table).upsert(row);
-      if (error) throw error;
+      if (error && !firstError) firstError = error;
     }
   }
 
   const removed = baseRows.filter((r) => !nextKeys.has(String(r[key]))).map((r) => r[key] as string);
   if (removed.length) {
     const { error } = await sb.from(table).delete().in(key, removed);
-    if (error) throw error;
+    if (error && !firstError) firstError = error;
   }
+
+  if (firstError) throw firstError;
 }
 
 const stripItems = (order: Row): Row => {
