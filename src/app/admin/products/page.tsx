@@ -238,6 +238,7 @@ function SeriesTab() {
   const [name, setName] = useState('');
   const [franchises, setFranchises] = useState<string[]>([]); // a series can span many เรื่อง
   const [makers, setMakers] = useState<string[]>([]);
+  const [q, setQ] = useState('');
 
   const reset = () => { setId(null); setName(''); setFranchises([]); setMakers([]); };
   const toggleFranchise = (fid: string) => setFranchises((arr) => (arr.includes(fid) ? arr.filter((x) => x !== fid) : [...arr, fid]));
@@ -251,9 +252,6 @@ function SeriesTab() {
     if (db.products.some((p) => p.series_id === sid)) return flash('ลบไม่ได้ — มีสินค้าใช้ซีรีย์นี้');
     dispatch(removeSeries(sid)); flash('ลบซีรีย์แล้ว'); if (id === sid) reset();
   };
-  const makerNames = (ids: string[]) => ids.map((i) => db.manufacturers.find((m) => m.id === i)?.name).filter(Boolean).join(', ') || '—';
-  const franchiseNames = (ids: string[]) => ids.map((i) => db.franchises.find((f) => f.id === i)?.name).filter(Boolean).join(', ') || '—';
-
   if (db.franchises.length === 0) return <Panel><div className="text-[13px] text-ink-faint">ยังไม่มีเรื่อง — ไปเพิ่ม “เรื่อง” ก่อน แล้วค่อยสร้างซีรีย์</div></Panel>;
 
   return (
@@ -285,17 +283,63 @@ function SeriesTab() {
         </div>
       </Panel>
       <Panel>
-        <div className="mb-3 font-bold">ซีรีย์ทั้งหมด ({db.series.length})</div>
-        <div className="flex flex-col divide-y divide-hair">
-          {db.series.map((s) => (
-            <div key={s.id} className="flex items-center gap-3 py-3">
-              <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{s.name}</div><div className="text-[11.5px] text-ink-faint">{franchiseNames(s.franchise_ids)} · ค่าย: {makerNames(s.maker_ids)}</div></div>
-              <button onClick={() => { setId(s.id); setName(s.name); setFranchises(s.franchise_ids); setMakers(s.maker_ids); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
-              <button onClick={() => del(s.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
-            </div>
-          ))}
-          {db.series.length === 0 && <div className="py-8 text-center text-ink-faint">ยังไม่มีซีรีย์</div>}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="font-bold">ซีรีย์ทั้งหมด ({db.series.length})</span>
+          <div className="ml-auto flex min-w-[180px] items-center gap-2 rounded-lg border border-subtle bg-surface-3 px-2.5">
+            <Icon name="search" size={15} className="text-ink-faint" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ค้นหาซีรีย์" className="flex-1 bg-transparent py-1.5 text-[13px] outline-none placeholder:text-ink-faint" />
+          </div>
         </div>
+        {(() => {
+          const ql = q.trim().toLowerCase();
+          const matched = db.series.filter((s) => !ql || s.name.toLowerCase().includes(ql));
+          // group each series under its PRIMARY (first) เรื่อง so nothing is listed twice
+          const rowFor = (s: typeof db.series[number]) => {
+            const extra = s.franchise_ids.slice(1).map((i) => db.franchises.find((f) => f.id === i)?.name).filter(Boolean);
+            return (
+              <div key={s.id} className="flex items-center gap-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="truncate text-[13.5px] font-semibold">{s.name}</span>
+                    {extra.map((n) => <span key={n} className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-ink-faint">+{n}</span>)}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {s.maker_ids.length === 0 ? <span className="text-[11px] text-ink-faint">ยังไม่ระบุค่าย</span>
+                      : s.maker_ids.map((i) => <span key={i} className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[10.5px] font-semibold text-ink-muted2">{db.manufacturers.find((m) => m.id === i)?.name ?? '—'}</span>)}
+                  </div>
+                </div>
+                <button onClick={() => { setId(s.id); setName(s.name); setFranchises(s.franchise_ids); setMakers(s.maker_ids); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] font-semibold text-ink-muted2">แก้</button>
+                <button onClick={() => del(s.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint hover:text-[#f87171]"><Icon name="x" size={15} /></button>
+              </div>
+            );
+          };
+          // franchises that head a group, in catalog order; a trailing "อื่นๆ" for orphans
+          const groups = db.franchises
+            .map((f) => ({ fid: f.id, fname: f.name, list: matched.filter((s) => s.franchise_ids[0] === f.id).sort((a, b) => a.name.localeCompare(b.name)) }))
+            .filter((g) => g.list.length > 0);
+          const orphan = matched.filter((s) => !db.franchises.some((f) => f.id === s.franchise_ids[0])).sort((a, b) => a.name.localeCompare(b.name));
+
+          if (db.series.length === 0) return <div className="py-8 text-center text-ink-faint">ยังไม่มีซีรีย์</div>;
+          if (matched.length === 0) return <div className="py-8 text-center text-ink-faint">ไม่พบซีรีย์ “{q}”</div>;
+          return (
+            <div className="flex flex-col gap-4">
+              {groups.map((g) => (
+                <div key={g.fid}>
+                  <div className="mb-1 flex items-center gap-2 text-[12.5px] font-bold text-ink-muted">
+                    <span className="h-3.5 w-1 rounded-full bg-primary-bright" /> {g.fname} <span className="text-ink-faint">· {g.list.length}</span>
+                  </div>
+                  <div className="flex flex-col divide-y divide-hair rounded-xl border border-subtle bg-surface-3/40 px-3">{g.list.map(rowFor)}</div>
+                </div>
+              ))}
+              {orphan.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[12.5px] font-bold text-ink-faint">อื่นๆ · {orphan.length}</div>
+                  <div className="flex flex-col divide-y divide-hair rounded-xl border border-subtle bg-surface-3/40 px-3">{orphan.map(rowFor)}</div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </Panel>
     </div>
   );
