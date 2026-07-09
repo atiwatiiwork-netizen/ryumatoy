@@ -147,7 +147,17 @@ export const SEED_DATABASE: Database = {
 
   couponGrants: [],
 
-  campaigns: [],
+  campaigns: [
+    {
+      id: 'ev-1', name: 'พรีครบ รับคูปอง', product_blurb: 'ยิ่งพรีเยอะ ยิ่งได้คูปองส่วนลดเยอะ — สะสมใบพรีในช่วงกิจกรรม รับคูปองอัตโนมัติ!',
+      starts_at: '2026-07-01', ends_at: '2026-12-31', active: true,
+      tiers: [
+        { threshold: 5, coupon_value: 100, coupon_count: 1 },
+        { threshold: 10, coupon_value: 200, coupon_count: 2 },
+      ],
+      reward_scope: 'both', reward_expiry_days: 30, created_at: '2026-07-01',
+    },
+  ],
   campaignAwards: [],
 
   rankTiers: [

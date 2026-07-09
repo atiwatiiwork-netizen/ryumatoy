@@ -86,7 +86,7 @@ export default function AdminEventsPage() {
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
     dispatch(upsertCampaign(campaign));
-    flash(editing ? 'บันทึกกิจกรรมแล้ว' : 'สร้างกิจกรรมแล้ว' + (draft.active ? ' (กิจกรรมอื่นถูกปิด)' : ''));
+    flash((editing ? 'บันทึกกิจกรรมแล้ว' : 'สร้างกิจกรรมแล้ว') + (draft.active && db.campaigns.some((x) => x.id !== campaign.id && x.active) ? ' · กิจกรรมอื่นถูกพัก' : ''));
     reset();
   };
 

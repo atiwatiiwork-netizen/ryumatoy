@@ -1,6 +1,6 @@
 'use client';
 
-import { use } from 'react';
+import { useParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
@@ -12,8 +12,8 @@ import type { CouponScope } from '@/domain/entities';
 const SCOPE_LABEL: Record<CouponScope, string> = { both: 'ใช้ได้ทั้งพรี + พร้อมส่ง', preorder: 'ใช้กับพรีออเดอร์', instock: 'ใช้กับสินค้าพร้อมส่ง' };
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
 
-export default function EventDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function EventDetailPage() {
+  const { id } = useParams<{ id: string }>();
   const db = useDatabase();
   const uid = useCurrentUserId();
   const c = db.campaigns.find((x) => x.id === id);
@@ -32,7 +32,9 @@ export default function EventDetailPage({ params }: { params: Promise<{ id: stri
         <h1 className="text-xl font-extrabold">{c.name}</h1>
         {live
           ? <span className="rounded-full bg-[#16a34a]/[0.16] px-2 py-0.5 text-[11px] font-bold text-[#4ade80]">กำลังจัด</span>
-          : <span className="rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-bold text-ink-faint">จบแล้ว</span>}
+          : <span className="rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-bold text-ink-faint">
+              {!c.active ? 'งดชั่วคราว' : new Date() < new Date(c.starts_at) ? 'เร็วๆ นี้' : 'จบแล้ว'}
+            </span>}
       </div>
       <div className="mb-4 text-[12.5px] text-ink-faint">{fmtDate(c.starts_at)} – {fmtDate(c.ends_at)}</div>
 

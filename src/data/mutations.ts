@@ -568,10 +568,14 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
   };
 };
 
-/** Grant pending rewards for a user across EVERY event (each no-ops if nothing is due). Called from
- *  approveOrder so a newly-approved pre-order immediately mints any reward it just unlocked. */
+/** Grant pending rewards for a user across every ACTIVE event (each no-ops if nothing is due).
+ *  Called from approveOrder so a newly-approved pre-order immediately mints any reward it just
+ *  unlocked. Paused (active=false) events never grant — otherwise an old event with an overlapping
+ *  window would double-reward the same tickets after a new one auto-pauses it. Note an active event
+ *  still grants shortly PAST its ends_at: tickets must be created in-window, so this only covers
+ *  orders placed near the end and approved a little late (intended). */
 export const grantAllCampaignRewards = (userId: string) => (db: Database): Database =>
-  db.campaigns.reduce((acc, c) => grantCampaignRewards(c.id, userId)(acc), db);
+  db.campaigns.filter((c) => c.active).reduce((acc, c) => grantCampaignRewards(c.id, userId)(acc), db);
 
 /** List one of my tickets on the P2P marketplace (PRD §12). */
 export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
