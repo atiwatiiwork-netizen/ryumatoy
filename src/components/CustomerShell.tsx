@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase } from '@/state/DataProvider';
+import { store } from '@/data/store';
 import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
@@ -35,6 +36,12 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   useEffect(() => setMounted(true), []);
   const count = mounted ? cartCount : 0;
   const { flash } = useToast();
+  // a failed background save (RLS, schema drift, endpoint collision) must never vanish silently on
+  // the CUSTOMER side either — same guard AdminShell has (ryuma-dna-save).
+  useEffect(() => {
+    store.onPersistError = (m) => flash('บันทึกไม่สำเร็จ — ' + m);
+    return () => { store.onPersistError = undefined; };
+  }, [flash]);
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
   const { needsApproval, isLoggedIn, authReady } = useAuth();

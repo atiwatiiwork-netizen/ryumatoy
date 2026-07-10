@@ -43,7 +43,7 @@ export default function SlipApprovalPage() {
     let grantsAfter = grantsBefore;
     dispatch((d) => { grantsAfter = d.couponGrants.filter((g) => g.user_id === order.user_id).length; return d; });
     const mySubs = subsForUsers(db, [order.user_id]);
-    sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋วพรี ${order.items.length} ใบเข้ากระเป๋าแล้ว — แตะเพื่อดู`, url: '/wallet' }, dispatch).catch(() => {});
+    sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋ว ${order.items.length} ใบเข้ากระเป๋าแล้ว — แตะเพื่อดู`, url: '/wallet' }, dispatch).catch(() => {});
     if (grantsAfter > grantsBefore)
       sendPush(mySubs, { title: '🎁 ได้รับคูปองจากกิจกรรม!', body: `คุณได้รับคูปอง ${grantsAfter - grantsBefore} ใบ — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
     // confirm any stock holds → real sale

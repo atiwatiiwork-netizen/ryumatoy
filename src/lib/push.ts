@@ -31,9 +31,16 @@ type Dispatch = (m: (db: Database) => Database) => void;
 
 /** Ask permission + subscribe this device + save the row (must run from a user tap). */
 export async function enablePush(userId: string, dispatch: Dispatch): Promise<void> {
-  const reg = await navigator.serviceWorker.register('/sw.js');
+  await navigator.serviceWorker.register('/sw.js');
+  const reg = await navigator.serviceWorker.ready; // subscribe only on an ACTIVE worker
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') throw new Error('denied');
+  // Always start from a FRESH endpoint: if this browser still holds a subscription from a
+  // previous login (shared device), reusing its endpoint would collide with the other account's
+  // row (unique index) and poison the persist loop. Unsubscribing first forces a new endpoint;
+  // the stale row then points at a dead endpoint and gets pruned on the next send (410).
+  const old = await reg.pushManager.getSubscription();
+  if (old) { try { await old.unsubscribe(); } catch { /* already dead */ } }
   const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(PUSH_PUBLIC_KEY) as BufferSource });
   const j = sub.toJSON();
   if (!j.endpoint || !j.keys?.p256dh || !j.keys?.auth) throw new Error('bad-subscription');

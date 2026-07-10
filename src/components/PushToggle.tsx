@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { pushSupported, currentPushSubscription, enablePush, disablePush } from '@/lib/push';
 import { Icon } from './Icon';
@@ -10,15 +10,23 @@ import { cx } from './ui';
 /** Profile menu row: turn Web-Push notifications on/off for THIS device.
  *  iOS shows a hint until the site is installed to the Home Screen (Safari has no Notification API). */
 export function PushToggle({ userId, divider }: { userId: string; divider?: boolean }) {
+  const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [state, setState] = useState<'loading' | 'unsupported' | 'off' | 'on'>('loading');
   const [busy, setBusy] = useState(false);
 
+  // "on" means the browser holds a subscription AND that endpoint is saved under MY account —
+  // a leftover subscription from a previous login on a shared device must read as "off"
+  // (RLS: I only see my own rows, so a plain some() is exactly the ownership check).
+  const myEndpoints = db.pushSubscriptions.filter((s) => s.user_id === userId).map((s) => s.endpoint);
   useEffect(() => {
     if (!pushSupported()) { setState('unsupported'); return; }
-    currentPushSubscription().then((s) => setState(s ? 'on' : 'off')).catch(() => setState('off'));
-  }, []);
+    currentPushSubscription()
+      .then((s) => setState(s && myEndpoints.includes(s.endpoint) ? 'on' : 'off'))
+      .catch(() => setState('off'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, myEndpoints.join('|')]);
 
   const toggle = async () => {
     if (busy || state === 'loading' || state === 'unsupported') return;
