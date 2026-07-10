@@ -194,7 +194,7 @@ function ShopInner() {
                   <div key={g.seriesId ?? '__none'} className="mb-4">
                     {g.seriesName && <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {g.seriesName}</div>}
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-                      {g.products.map((p) => <ProductCard key={p.id} product={p} />)}
+                      {g.products.map((p) => <ProductCard key={p.id} product={p} quickAdd />)}
                     </div>
                   </div>
                 ))}

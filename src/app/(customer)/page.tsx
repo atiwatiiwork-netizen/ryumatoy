@@ -64,7 +64,7 @@ export default function HomePage() {
       {/* newest */}
       <SectionHeader title="มาใหม่ล่าสุด" href="/shop" link="ดูทั้งหมด →" />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 lg:gap-4">
-        {newest.map((p) => <ProductCard key={p.id} product={p} />)}
+        {newest.map((p) => <ProductCard key={p.id} product={p} quickAdd />)}
       </div>
     </div>
   );

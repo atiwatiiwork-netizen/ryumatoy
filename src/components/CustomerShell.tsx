@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
@@ -28,7 +28,12 @@ const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] 
  */
 export function CustomerShell({ children }: { children: ReactNode }) {
   const path = usePathname();
-  const { count } = useCart();
+  const { count: cartCount } = useCart();
+  // cart lives in localStorage → the server always renders 0. Show the badge only after mount so
+  // the first client render matches the server HTML (fixes a hydration mismatch on reload with items).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const count = mounted ? cartCount : 0;
   const { flash } = useToast();
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();

@@ -168,7 +168,7 @@ export default function ProductDetailPage() {
           </div>
           <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 no-scrollbar">
             {seriesMates.map((p) => (
-              <div key={p.id} className="w-[150px] shrink-0"><ProductCard product={p} /></div>
+              <div key={p.id} className="w-[150px] shrink-0"><ProductCard product={p} quickAdd /></div>
             ))}
           </div>
         </div>

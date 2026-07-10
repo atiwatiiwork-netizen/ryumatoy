@@ -13,8 +13,9 @@ import { availableFor } from '@/domain/services/reservations';
 import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
- *  `quickAdd` shows an add-to-cart button (used on board pages so customers can add
- *  many items without leaving the page). Variant products still open the detail page.
+ *  `quickAdd` shows an add-to-cart button (now passed EVERYWHERE — customer feedback: add without
+ *  tabbing into the product page). Simple pre-order + in-stock add directly; variant products still
+ *  open the detail page ("เลือกแบบในหน้าสินค้า →"); sold-out in-stock shows a muted "สินค้าหมด".
  *
  *  For variant products the card is variant-driven (DNA: variant fields are the source
  *  of truth for both price and image). With no variant picked yet it shows a diagonal
@@ -48,12 +49,20 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
   const stockLeft = product.is_stock ? availableFor(db, product) : null; // reservation-aware "เหลือ N"
   const nVariants = variants.length;
-  // pre-order simple products can be added straight to the cart; variant ones need a pick
-  const canQuickAdd = quickAdd && !product.is_stock && !product.has_variants;
+  // simple products (pre-order AND in-stock) add straight to the cart; variant ones still need a
+  // pick in the product page (customer feedback: ปุ่มแดงทุกตัว ยกเว้น variants)
+  const canQuickAdd = quickAdd && !product.has_variants && !(stockLeft != null && stockLeft <= 0);
 
   const doAdd = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
-    cart.add({ productId: product.id, depositEach: product.deposit_amount, priceEach: product.price_total });
+    // in-stock: never let the cart hold more than what's really left (reservation-aware)
+    if (stockLeft != null) {
+      const inCart = cart.lines.filter((l) => l.productId === product.id).reduce((s, l) => s + l.qty, 0);
+      if (inCart + 1 > stockLeft) { flash(`สต๊อกไม่พอ — เหลือ ${stockLeft} ชิ้น (ในตะกร้า ${inCart})`); return; }
+    }
+    // in-stock pays in full (DNA: full-pay deposit invariant) — guards legacy rows where deposit < price
+    const dep = product.is_stock ? product.price_total : product.deposit_amount;
+    cart.add({ productId: product.id, depositEach: dep, priceEach: product.price_total });
     flash('เพิ่มลงตะกร้าแล้ว ✓');
   };
 
@@ -105,7 +114,9 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
         {quickAdd && (
           canQuickAdd
             ? <button onClick={doAdd} className="mt-2 w-full rounded-lg bg-cta py-2 text-[12.5px] font-bold text-white">+ ใส่ตะกร้า</button>
-            : <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-muted2">เลือกแบบในหน้าสินค้า →</div>
+            : soldOut
+              ? <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-faint">สินค้าหมด</div>
+              : <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-muted2">เลือกแบบในหน้าสินค้า →</div>
         )}
       </div>
     </Link>
