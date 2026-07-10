@@ -35,7 +35,7 @@ create table if not exists campaign_awards (
   id text primary key,
   campaign_id text not null references campaigns(id) on delete cascade,
   user_id text not null references users(id) on delete cascade,
-  tier_index int not null,
+  tier_index int not null,              -- stores the tier THRESHOLD (stable across tier edits), not an array index
   cycle int not null,
   claimed_at timestamptz not null default now(),
   coupon_id text

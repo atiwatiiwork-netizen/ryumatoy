@@ -160,7 +160,10 @@ export default function AdminEventsPage() {
                   <option value="instock">พร้อมส่ง</option>
                 </select>
               </Field>
-              <Field label="อายุคูปอง (วันหลังได้รับ)"><input className={inputCls} inputMode="numeric" value={draft.reward_expiry_days} onChange={(e) => set('reward_expiry_days', e.target.value)} placeholder="30" /></Field>
+              <Field label="อายุคูปอง (วันหลังได้รับ)">
+                <input className={inputCls} inputMode="numeric" value={draft.reward_expiry_days} onChange={(e) => set('reward_expiry_days', e.target.value)} placeholder="30" />
+                <span className="mt-1 block text-[11px] text-ink-faint">0 = ไม่หมดอายุ</span>
+              </Field>
             </div>
             <Field label="จำกัดค่าย (ไม่บังคับ)">
               <select className={inputCls} value={draft.target_maker_id} onChange={(e) => set('target_maker_id', e.target.value)}>
@@ -170,6 +173,9 @@ export default function AdminEventsPage() {
             </Field>
 
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.active} onChange={(e) => set('active', e.target.checked)} /> เปิดใช้งาน (โชว์หน้าร้าน — ปิดกิจกรรมอื่นทั้งหมด)</label>
+            {editing && db.campaignAwards.some((a) => a.campaign_id === draft.id) && (
+              <div className="rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.08] px-3 py-2 text-[11.5px] text-[#fbbf24]">⚠️ กิจกรรมนี้แจกรางวัลไปแล้ว — ไม่ควรแก้ "ครบ (ใบ)" ของชั้นรางวัลกลางคัน (คนที่รับชั้นเดิมไปแล้วอาจรับชั้นที่แก้ใหม่ซ้ำได้)</div>
+            )}
             <Button onClick={save} icon={editing ? 'check' : 'plus'} disabled={busy}>{editing ? 'บันทึก' : 'สร้างกิจกรรม'}</Button>
           </div>
         </Panel>
@@ -215,6 +221,63 @@ export default function AdminEventsPage() {
             </div>
           )}
         </Panel>
+      </div>
+
+      <PricingGuide />
+    </div>
+  );
+}
+
+/** คู่มือตั้งชั้นรางวัล (อิงกำไร ~200฿/ใบพรี) — reference ถาวรกันลืม อยู่ท้ายหน้ากิจกรรม */
+function PricingGuide() {
+  const th = 'px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide text-ink-faint';
+  const td = 'px-3 py-2 text-[12.5px] text-ink-muted';
+  return (
+    <div className="mt-6 rounded-2xl border border-subtle bg-surface-2 p-5">
+      <div className="mb-1 font-bold">📐 คู่มือตั้งชั้นรางวัล (อิงกำไร ~200฿/ใบพรี)</div>
+      <div className="mb-4 text-[12px] text-ink-faint">หลัก: ส่วนลดที่แจกควรอยู่ราว 10–17% ของกำไรสะสม · คูปองมีวันหมดอายุ + ต้องกลับมาใช้กับออเดอร์ใหม่ = ได้กำไรรอบถัดไปมาชดเชยอีกชั้น (คนใช้จริง ~70–80% → ต้นทุนสุทธิ ~12–14%)</div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <div>
+          <div className="mb-2 text-[12.5px] font-bold text-ink-muted">คณิตพื้นฐาน</div>
+          <div className="overflow-x-auto rounded-xl border border-subtle">
+            <table className="w-full min-w-[380px] border-collapse">
+              <thead className="bg-surface-3"><tr><th className={th}>ครบ (ใบ)</th><th className={th}>กำไรสะสม</th><th className={th}>ถ้าแจก</th><th className={th}>คืนเป็น % กำไร</th></tr></thead>
+              <tbody className="divide-y divide-hair">
+                <tr><td className={td}>3</td><td className={td}>600฿</td><td className={td}>50฿</td><td className={td}>8% ✅ เบามาก</td></tr>
+                <tr><td className={td}>5</td><td className={td}>1,000฿</td><td className={td}>100฿</td><td className={td}>10% ✅ กำลังดี</td></tr>
+                <tr><td className={td}>10</td><td className={td}>2,000฿</td><td className={td}>200฿ (สะสมรวม 350)</td><td className={td}>17.5% ✅ ตึงแต่รับได้</td></tr>
+                <tr><td className={td}>10</td><td className={td}>2,000฿</td><td className={td}>200×2 (สะสมรวม 500)</td><td className={td}>25% ⚠️ แพงไป</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-[12.5px] font-bold text-ink-muted">🎯 สูตรแนะนำ (สมดุล 3 กลุ่มลูกค้า)</div>
+          <div className="overflow-x-auto rounded-xl border border-subtle">
+            <table className="w-full min-w-[380px] border-collapse">
+              <thead className="bg-surface-3"><tr><th className={th}>ชั้น</th><th className={th}>รางวัล</th><th className={th}>เจาะกลุ่ม</th><th className={th}>เหตุผล</th></tr></thead>
+              <tbody className="divide-y divide-hair">
+                <tr><td className={td}>ครบ 3</td><td className={td}>50฿ ×1</td><td className={td}>🐣 พรีน้อย</td><td className={td}>สั่งทีละ 2–3 ตัวอยู่แล้ว → ออเดอร์เดียวแตะรางวัล = ติดใจเร็ว</td></tr>
+                <tr><td className={td}>ครบ 5</td><td className={td}>100฿ ×1</td><td className={td}>🚶 พรีกลาง</td><td className={td}>จาก 3 เพิ่มแค่ 2 ใบ "อีกนิดเดียว" — จุดที่คน 3–4 ใบยอมกดเพิ่ม</td></tr>
+                <tr><td className={td}>ครบ 10</td><td className={td}>200฿ ×1</td><td className={td}>🐋 พรีเยอะ</td><td className={td}>สะสม 350/2,000 = 17.5% · loop วนใหม่ดูแลสายเปย์เอง (ครบ 20 ได้อีก 350)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 text-[11.5px] text-ink-faint">ทางเลือก — ประหยัด (~15%): 5→100, 10→200 · เปิดตัวดุดัน (~22%, เดือนแรกเดือนเดียว): 3→50, 5→100, 10→300</div>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-subtle bg-surface-3/40 p-3.5 text-[12.5px] leading-relaxed text-ink-muted2">
+        <div className="mb-1 font-bold text-ink">เคล็ดลับตั้งค่า</div>
+        <ul className="list-inside list-disc space-y-1">
+          <li><b>ระยะเวลา 1 เดือน</b> ตรงรอบเปิดพรีรายเดือน — เริ่มใหม่ทุกเดือน คนไม่รอสะสมข้ามปี</li>
+          <li><b>อายุคูปอง 30 วัน</b> — บังคับให้กลับมาซื้อภายในรอบถัดไปพอดี</li>
+          <li>scope <b>"พรี + พร้อมส่ง"</b> — คูปองกลายเป็นตัวดันของค้างสต๊อกได้ด้วย</li>
+          <li>นับ "1 รายการ" = ใบพรี 1 ใบ (1 บรรทัดในออเดอร์) — สั่งตัวเดียวกันหลายชิ้นในบรรทัดเดียวนับ 1 · ซื้อพร้อมส่ง/รอบพิเศษไม่นับ</li>
+          <li>⚠️ ไม่ควรแก้ชั้นรางวัลระหว่าง event ที่แจกไปแล้ว — ตั้งใหม่เป็น event เดือนถัดไปแทน</li>
+        </ul>
       </div>
     </div>
   );

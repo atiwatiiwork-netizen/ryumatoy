@@ -325,17 +325,17 @@ export interface Campaign {
   created_at: string;
 }
 
-/** Record that a customer CLAIMED one earned reward (campaign tier at a loop cycle). One row per
- *  (campaign, user, tier_index, cycle) — its existence means "already claimed", so it can't be
- *  double-granted. Earned-but-unclaimed rewards are computed on the fly (no row until claimed). */
+/** Record that one earned reward (campaign tier at a loop cycle) was GRANTED to a customer. One row
+ *  per (campaign, user, tier_index, cycle) — its existence means "already granted", so it can't be
+ *  double-granted. Earned-but-ungranted rewards are computed on the fly (no row until granted). */
 export interface CampaignAward {
   id: string;
   campaign_id: string;
   user_id: string;
-  tier_index: number; // index into campaign.tiers
+  tier_index: number; // the tier's THRESHOLD (not its array index) — stable when tiers are edited/reordered
   cycle: number;      // 0-based loop cycle (count period = top-tier threshold)
   claimed_at: string;
-  coupon_id?: string; // the auto-generated Coupon template created for this claim
+  coupon_id?: string; // the auto-generated Coupon template created for this grant
 }
 
 export interface User {

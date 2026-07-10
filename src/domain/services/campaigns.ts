@@ -48,19 +48,27 @@ export function topThreshold(c: Campaign): number {
   return c.tiers.reduce((m, t) => Math.max(m, t.threshold || 0), 0);
 }
 
-/** How many qualifying pre-order tickets a customer has in this campaign's window. */
+/** How many qualifying pre-order tickets a customer has in this campaign's window.
+ *  1 ticket = 1 รายการ (an order LINE; qty within a line does not multiply). Excluded:
+ *  - batch_id set → bought from a reopened stock round, not a fresh pre-order
+ *  - remaining_amount === 0 → a FULL-PAY line, i.e. an in-stock purchase (in-stock never counts).
+ *    Real pre-orders always owe a remainder at issue time (deposit < price; even Diamond's 0-deposit
+ *    leaves the full price as remaining), so this is a safe creation-time marker. */
 export function qualifyingCount(db: Database, c: Campaign, userId: string, now: Date = new Date()): number {
   const from = startOfDay(c.starts_at);
   const to = Math.min(endOfDay(c.ends_at), now.getTime()); // never count into the future
   return db.tickets.filter((t) => {
     if (t.owner_id !== userId) return false;
     if (t.batch_id) return false; // stock round → not a fresh pre-order
+    if (t.remaining_amount === 0) return false; // full-pay = in-stock line → doesn't count
     const at = new Date(t.created_at).getTime();
     return at >= from && at <= to;
   }).length;
 }
 
-export type EarnedAward = { tierIndex: number; cycle: number; tier: CampaignTier; required: number };
+/** `key` = the tier's THRESHOLD (not its array index) — stable when the admin edits/reorders/removes
+ *  tiers mid-event, so already-granted awards keep blocking exactly the reward they were for. */
+export type EarnedAward = { key: number; cycle: number; tier: CampaignTier; required: number };
 
 /** Every reward a customer has EARNED (cumulative + loop) at their current count. */
 export function earnedAwards(db: Database, c: Campaign, userId: string, now: Date = new Date()): EarnedAward[] {
@@ -72,17 +80,18 @@ export function earnedAwards(db: Database, c: Campaign, userId: string, now: Dat
   const out: EarnedAward[] = [];
   // grow cycles until even the smallest tier of the next cycle is out of reach
   for (let cycle = 0; cycle * top + minThreshold <= count; cycle++) {
-    for (const { tier, index } of tiers) {
+    for (const { tier } of tiers) {
       const required = cycle * top + tier.threshold;
-      if (required <= count) out.push({ tierIndex: index, cycle, tier, required });
+      if (required <= count) out.push({ key: tier.threshold, cycle, tier, required });
     }
   }
   return out;
 }
 
-const awardKey = (tierIndex: number, cycle: number) => `${tierIndex}:${cycle}`;
+const awardKey = (thresholdKey: number, cycle: number) => `${thresholdKey}:${cycle}`;
 
-/** Set of "tierIndex:cycle" a customer has already claimed for a campaign. */
+/** Set of "threshold:cycle" a customer has already been granted for a campaign.
+ *  (campaign_awards.tier_index stores the tier THRESHOLD — see entities.ts.) */
 export function claimedKeys(db: Database, campaignId: string, userId: string): Set<string> {
   return new Set(
     db.campaignAwards
@@ -91,10 +100,10 @@ export function claimedKeys(db: Database, campaignId: string, userId: string): S
   );
 }
 
-/** Rewards earned but not yet claimed — what the profile "รับรางวัล" button hands out. */
+/** Rewards earned but not yet granted — what approveOrder's auto-grant hands out. */
 export function unclaimedAwards(db: Database, c: Campaign, userId: string, now: Date = new Date()): EarnedAward[] {
   const claimed = claimedKeys(db, c.id, userId);
-  return earnedAwards(db, c, userId, now).filter((a) => !claimed.has(awardKey(a.tierIndex, a.cycle)));
+  return earnedAwards(db, c, userId, now).filter((a) => !claimed.has(awardKey(a.key, a.cycle)));
 }
 
 export { awardKey };

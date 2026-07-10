@@ -558,7 +558,7 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
     for (let i = 0; i < Math.max(1, a.tier.coupon_count); i++) {
       grants.push({ id: id('cg'), coupon_id: couponId, user_id: userId, status: 'active', granted_at: nowIso });
     }
-    awards.push({ id: id('ca'), campaign_id: c.id, user_id: userId, tier_index: a.tierIndex, cycle: a.cycle, claimed_at: nowIso, coupon_id: couponId });
+    awards.push({ id: id('ca'), campaign_id: c.id, user_id: userId, tier_index: a.key, cycle: a.cycle, claimed_at: nowIso, coupon_id: couponId });
   }
   return {
     ...db,
