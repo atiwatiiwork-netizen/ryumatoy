@@ -52,9 +52,11 @@ export default function CartPage() {
           if (!product) return null; // product was removed since it was added → skip (never crash)
           const variant = db.variants.find((v) => v.id === l.variantId);
           const isPre = !product.is_stock;
+          // line photo: the chosen แบบ's own image first, else the product photo
+          const img = variant?.image_url ?? product.images[0] ?? db.variants.find((v) => v.product_id === product.id && v.image_url)?.image_url;
           return (
             <div key={l.productId + (l.variantId ?? '')} className="flex gap-3 rounded-card border border-subtle bg-surface-2 p-[11px]">
-              <ProductThumb isStock={product.is_stock} size={72} showRibbon={false} />
+              <ProductThumb isStock={product.is_stock} size={72} showRibbon={false} src={img} />
               <div className="min-w-0 flex-1">
                 <div className="flex justify-between gap-2">
                   <div className="text-[13px] font-semibold leading-tight">{product.series_name}{variant ? ` · ${variant.name}` : ''}</div>
