@@ -11,6 +11,7 @@ import { cx } from '@/components/ui';
 import { seriesForFranchise, makersForFranchise } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { genId, bulkCreateProducts } from '@/data/mutations';
+import { sendPush, subsAll } from '@/lib/push';
 import { store } from '@/data/store';
 import type { Product, WcfType } from '@/domain/entities';
 
@@ -153,6 +154,9 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
     await store.flush();
     try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* */ }
     flash(`สร้าง ${n} สินค้าแล้ว 🎉`);
+    // one summary push for the whole batch (not N separate pings) — best-effort
+    const names = items.slice(0, 3).map((i) => i.product.character_name ?? i.product.series_name).join(' · ');
+    sendPush(subsAll(db), { title: `🆕 เปิดพรีใหม่ ${n} รายการ`, body: names + (n > 3 ? ` และอีก ${n - 3}` : ''), url: '/shop?cat=preorder' }, dispatch).catch(() => {});
     setRows([]);
   };
 

@@ -12,6 +12,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
 import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
+import { sendPush, subsAll, subsForProductOwners, statusPushPayload } from '@/lib/push';
 import type { WcfType } from '@/domain/entities';
 import {
   genId, upsertCategory, removeCategory, upsertManufacturer, removeManufacturer, upsertFranchise, removeFranchise,
@@ -409,6 +410,9 @@ function StatusRow({ product: p }: { product: Product }) {
   const advance = (extra?: { tracking_no?: string; shipped_at?: string }) => {
     if (!next) return;
     dispatch(setProductStatus(p.id, next, extra));
+    // notify this lot's buyers when it starts moving / lands (ryuma push spec 4.1/4.2)
+    if (next === 'shipping' || next === 'arrived')
+      sendPush(subsForProductOwners(db, p.id), statusPushPayload(next, p.series_name), dispatch).catch(() => {});
     flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว`);
     setOpen(false);
   };
@@ -625,6 +629,12 @@ function Products() {
     dispatch(setProductVariants(product.id, draft.variants.map((v) => ({ id: v.id, name: v.name, price_total: Number(v.price), image_url: v.image }))));
     // cascade the lifecycle status to this product's tickets (customer wallet tracking)
     dispatch(setProductStatus(product.id, product.status));
+    // push notifications — best-effort, never blocks the save (ryuma push spec 1/2/4)
+    if (!editing) {
+      sendPush(subsAll(db), { title: isStock ? '🟢 พร้อมส่งเข้าใหม่' : '🆕 เปิดพรีใหม่', body: `${finalName} · ${baht(price)}`, url: `/shop/${product.id}` }, dispatch).catch(() => {});
+    } else if (existing && existing.status !== product.status && (product.status === 'shipping' || product.status === 'arrived')) {
+      sendPush(subsForProductOwners(db, product.id), statusPushPayload(product.status, finalName), dispatch).catch(() => {});
+    }
     flash(editing ? 'บันทึกสินค้าแล้ว' : 'เพิ่มสินค้าแล้ว'); reset();
   };
 

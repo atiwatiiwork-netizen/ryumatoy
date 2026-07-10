@@ -415,6 +415,18 @@ export interface ShopSettings {
   announcements?: PromoBanner[];
 }
 
+/** One device's Web-Push subscription (a customer may hold several — phone + desktop).
+ *  endpoint is unique per device/browser; keys are the browser-issued encryption pair.
+ *  Rows are written by the OWNER (enable toggle) and read by admin to send. */
+export interface PushSubscription {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
+}
+
 /** A promo/announcement slide on the customer home carousel. */
 export interface PromoBanner {
   id: string;
@@ -446,6 +458,7 @@ export interface Database {
   couponGrants: CouponGrant[];
   campaigns: Campaign[];
   campaignAwards: CampaignAward[];
+  pushSubscriptions: PushSubscription[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];
   settings: ShopSettings;

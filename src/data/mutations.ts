@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
@@ -572,6 +572,20 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
     campaignAwards: [...awards, ...db.campaignAwards],
   };
 };
+
+// ── Web Push subscriptions ───────────────────────────────────────────────────
+/** Save one device's push subscription (replaces any older row for the same endpoint). */
+export const addPushSubscription = (sub: PushSubscriptionRow) => (db: Database): Database => ({
+  ...db,
+  pushSubscriptions: [sub, ...db.pushSubscriptions.filter((s) => s.endpoint !== sub.endpoint)],
+});
+
+/** Drop a subscription — used when the user turns notifications off, or when a send reports the
+ *  endpoint gone (410: the browser revoked it). */
+export const removePushSubscriptionByEndpoint = (endpoint: string) => (db: Database): Database => ({
+  ...db,
+  pushSubscriptions: db.pushSubscriptions.filter((s) => s.endpoint !== endpoint),
+});
 
 /** Grant pending rewards for a user across every ACTIVE event (each no-ops if nothing is due).
  *  Called from approveOrder so a newly-approved pre-order immediately mints any reward it just

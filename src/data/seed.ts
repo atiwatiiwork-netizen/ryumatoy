@@ -147,6 +147,8 @@ export const SEED_DATABASE: Database = {
 
   couponGrants: [],
 
+  pushSubscriptions: [],
+
   campaigns: [
     {
       id: 'ev-1', name: 'พรีครบ รับคูปอง', product_blurb: 'ยิ่งพรีเยอะ ยิ่งได้คูปองส่วนลดเยอะ — สะสมใบพรีในช่วงกิจกรรม รับคูปองอัตโนมัติ!',

@@ -12,6 +12,7 @@ import { usableGrantsFor } from '@/domain/services/coupons';
 import { RankPerksButton } from '@/components/RankModals';
 import { AuthScreen } from '@/components/AuthScreen';
 import { EventProgress } from '@/components/EventBits';
+import { PushToggle } from '@/components/PushToggle';
 
 export default function ProfilePage() {
   const db = useDatabase();
@@ -29,12 +30,13 @@ export default function ProfilePage() {
   const myCoupons = usableGrantsFor(db, CURRENT_USER_ID).length;
   const progress = next ? Math.min(100, (pieces / next.target) * 100) : 100;
 
-  // Only ใบพรีของฉัน + คูปอง are live this phase; the rest are coming soon.
-  const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode }[] = [
+  // Only ใบพรีของฉัน + คูปอง are live this phase; การแจ้งเตือน is a live toggle rendered
+  // specially below; the rest are coming soon.
+  const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode; push?: boolean }[] = [
     { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
     { icon: 'tag', label: 'คูปองของฉัน', href: '/coupons', right: myCoupons ? <Pill>{myCoupons}</Pill> : undefined },
+    { icon: 'bell', label: 'การแจ้งเตือน', push: true },
     { icon: 'swap', label: 'รายการขาย P2P' },
-    { icon: 'bell', label: 'การแจ้งเตือน' },
     { icon: 'store', label: 'ภาษา' },
     { icon: 'settings', label: 'ธีม' },
   ];
@@ -80,7 +82,9 @@ export default function ProfilePage() {
 
       <div className="mb-[18px] overflow-hidden rounded-card border border-subtle bg-surface-2">
         {menu.map((m, i) =>
-          m.href ? (
+          m.push ? (
+            <PushToggle key={m.label} userId={CURRENT_USER_ID} divider={i > 0} />
+          ) : m.href ? (
             <Link key={m.label} href={m.href} className={`flex items-center gap-3 px-4 py-3.5 ${i ? 'border-t border-hair' : ''}`}>
               <Icon name={m.icon} size={20} className="text-primary-soft" />
               <span className="flex-1 text-sm font-medium">{m.label}</span>
