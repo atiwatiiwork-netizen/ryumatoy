@@ -10,7 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { franchiseOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch } from '@/domain/services/catalog';
 import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch } from '@/data/mutations';
-import type { Product, ProductBatch, WcfType } from '@/domain/entities';
+import type { PreorderTicket, Product, ProductBatch, WcfType } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const labelCls = 'mb-1 block text-[12px] font-semibold text-ink-muted';
@@ -256,9 +256,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const sold = batchSoldQty(db, b.id);
   const remaining = batchRemaining(db, b.id, b.stock_qty);
   const buyers = batchBuyers(db, b.id);
+  const tickets = db.tickets.filter((t) => t.batch_id === b.id); // full ticket rows → มัดจำ + popup
+  const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const noBuyers = sold === 0;
   const fullPay = b.deposit_amount >= b.price_total;
   const [open, setOpen] = useState(false);
+  const [peek, setPeek] = useState<PreorderTicket | null>(null); // ตั๋วที่กดดูรายละเอียด
   const [edit, setEdit] = useState(false);
   const [ep, setEp] = useState(String(b.price_total));
   const [eq, setEq] = useState(String(b.stock_qty));
@@ -292,17 +295,81 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
       {open && (
         <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
-          <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนซื้อรอบนี้ ({buyers.reduce((s, x) => s + x.qty, 0)} ตัว)</div>
-          {buyers.length === 0 ? <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div> : (
+          <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนซื้อรอบนี้ ({buyers.reduce((s, x) => s + x.qty, 0)} ตัว) · แตะรายชื่อดูตั๋ว/สลิป</div>
+          {tickets.length === 0 ? <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div> : (
             <div className="flex flex-col gap-1.5">
-              {buyers.map((x, i) => (
-                <div key={i} className="flex flex-wrap items-center justify-between gap-1 text-[13px]">
-                  <span className="flex items-center gap-2"><Icon name="user" size={13} className="text-primary-soft" /> {x.name}</span>
-                  <span className="text-ink-muted">×{x.qty} · <b className="text-ink">{baht(x.paid)}</b> · <span className="font-mono text-[11px] text-ink-faint">{x.ticket_no}</span> · {fmtDate(x.created_at)}</span>
-                </div>
+              {tickets.map((t) => (
+                <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
+                  <span className="flex items-center gap-2"><Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}</span>
+                  <span className="text-ink-muted">×{t.qty} · มัดจำ <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> · รวม <b className="text-ink">{baht(t.deposit_paid + t.remaining_amount)}</b> · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
+                </button>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {peek && <TicketPeek ticket={peek} batch={b} onClose={() => setPeek(null)} />}
+    </div>
+  );
+}
+
+/** Popup แสดงรายละเอียดคร่าวๆ ของตั๋วในรอบพิเศษ + สลิป (แตะสลิปเพื่อขยายตรวจ). */
+function TicketPeek({ ticket: t, batch: b, onClose }: { ticket: PreorderTicket; batch: ProductBatch; onClose: () => void }) {
+  const db = useDatabase();
+  const [big, setBig] = useState<string | null>(null);
+  const p = db.products.find((x) => x.id === t.product_id);
+  const buyer = db.users.find((u) => u.id === t.owner_id);
+  const due = t.remaining_amount - t.remaining_paid;
+  // สลิปมัดจำอยู่บนออเดอร์ที่สั่งรอบนี้ (order → items ผูก batch เดียวกัน + คนเดียวกัน)
+  const order = db.orders.find((o) => o.user_id === t.owner_id && o.items.some((i) => i.batch_id === b.id));
+  const rps = db.remainingPayments.filter((r) => r.ticket_id === t.id && r.slip_url);
+  const slips: { label: string; url: string }[] = [
+    ...(order?.slip_url ? [{ label: 'สลิปมัดจำ', url: order.slip_url }] : []),
+    ...rps.map((r, i) => ({ label: `สลิปส่วนต่าง${rps.length > 1 ? ` #${i + 1}` : ''}${r.status === 'pending' ? ' (รอตรวจ)' : ''}`, url: r.slip_url })),
+  ];
+  const row = (k: string, v: React.ReactNode) => (
+    <div className="flex justify-between gap-3 py-1 text-[13px]"><span className="text-ink-faint">{k}</span><span className="text-right font-semibold text-ink">{v}</span></div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/70 p-4" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-[420px] overflow-y-auto rounded-2xl border border-subtle bg-surface-2 p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-mono text-[13px] font-bold text-primary-soft">{t.ticket_no}</span>
+          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
+        </div>
+        <div className="mb-3 text-[15px] font-extrabold leading-tight">{p?.series_name ?? '—'} <span className="text-[12px] font-semibold text-ink-faint">· {b.label}</span></div>
+
+        <div className="rounded-xl border border-subtle bg-surface-3/50 px-3 py-1.5">
+          {row('ลูกค้า', <>{buyer?.display_name ?? '—'}{buyer?.member_code ? <span className="ml-1 font-mono text-[11px] text-ink-faint">{buyer.member_code}</span> : null}</>)}
+          {row('จำนวน', `×${t.qty}`)}
+          {row('มัดจำจ่ายแล้ว', <span className="text-[#4ade80]">{baht(t.deposit_paid)}</span>)}
+          {row('ส่วนต่างค้างจ่าย', due > 0 ? <span className="text-[#fbbf24]">{baht(due)}</span> : <span className="text-[#4ade80]">จ่ายครบ ✓</span>)}
+          {row('ราคารวม', baht(t.deposit_paid + t.remaining_amount))}
+          {row('วันที่ซื้อ', fmtDate(t.created_at))}
+        </div>
+
+        <div className="mt-3 mb-1.5 text-[12px] font-semibold text-ink-muted">สลิป ({slips.length}) · แตะเพื่อขยาย</div>
+        {slips.length === 0 ? <div className="text-[12.5px] text-ink-faint">ไม่พบสลิป</div> : (
+          <div className="flex flex-wrap gap-2">
+            {slips.map((s, i) => (
+              <button key={i} onClick={() => setBig(s.url)} className="w-[104px] text-left">
+                <img src={s.url} alt={s.label} className="h-[130px] w-full rounded-lg border border-subtle object-cover" />
+                <span className="mt-1 block text-[10.5px] font-semibold text-ink-muted2">{s.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <a href={`/wallet/${encodeURIComponent(t.ticket_no)}`} target="_blank" rel="noreferrer" className="mt-4 block rounded-xl border border-subtle bg-surface-3 py-2.5 text-center text-[12.5px] font-bold text-ink-muted2">เปิดหน้าตั๋วเต็ม →</a>
+      </div>
+
+      {/* lightbox — สลิปภาพใหญ่เต็มจอเผื่อตรวจ */}
+      {big && (
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/90 p-4" onClick={(e) => { e.stopPropagation(); setBig(null); }}>
+          <img src={big} alt="slip" className="max-h-[92vh] max-w-full rounded-lg object-contain" />
+          <button className="absolute right-4 top-4 grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white"><Icon name="x" size={20} /></button>
         </div>
       )}
     </div>
