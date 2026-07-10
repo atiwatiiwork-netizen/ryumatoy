@@ -10,7 +10,11 @@ const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['500'], variable: '--
 export const metadata: Metadata = {
   title: 'Ryuma · ริวมะ — Pre-order Figure & WCF',
   description: 'พรีออเดอร์ Figure, WCF, Resin หลากหลาย Franchise — จองด้วยมัดจำผ่าน PromptPay ติดตามใบพรีแบบดิจิทัล',
-  icons: { icon: '/ryuma-logo.png' },
+  // iOS "Add to Home Screen" reads apple-touch-icon (else it renders a letter tile);
+  // Android/Chrome installs read manifest.json. appleWebApp.title keeps the icon label short ("Ryuma").
+  icons: { icon: '/ryuma-logo.png', apple: '/apple-touch-icon.png' },
+  manifest: '/manifest.json',
+  appleWebApp: { capable: true, title: 'Ryuma', statusBarStyle: 'black-translucent' },
 };
 
 export const viewport: Viewport = {
