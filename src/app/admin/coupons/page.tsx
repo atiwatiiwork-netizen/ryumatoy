@@ -12,6 +12,7 @@ import { RANK_ORDER } from '@/domain/services/ranks';
 import { grantStats } from '@/domain/services/coupons';
 import { CouponTierPill } from '@/components/CouponTicket';
 import { createCoupon, updateCoupon, deleteCoupon, grantCoupon, grantCouponToRank, revokeGrant } from '@/data/mutations';
+import { sendPush, subsForUsers } from '@/lib/push';
 import type { Coupon, CouponScope, RankName } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -191,6 +192,7 @@ export default function AdminCouponsPage() {
     const giveSelected = () => {
       if (!picked.size) { flash('เลือกลูกค้าก่อน'); return; }
       dispatch(grantCoupon(coupon.id, [...picked]));
+      sendPush(subsForUsers(db, [...picked]), { title: '🎟️ คุณได้รับคูปองส่วนลด!', body: `${coupon.label} · ลด ${baht(coupon.value)} — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
       flash(`มอบคูปองให้ ${picked.size} คน`);
       setPicked(new Set());
     };
@@ -202,7 +204,12 @@ export default function AdminCouponsPage() {
           <select className={cx(inputCls, 'w-auto py-1.5')} value={rank} onChange={(e) => setRank(e.target.value as RankName)}>
             {RANK_ORDER.map((r) => <option key={r} value={r}>{RANK[r as RankKey].emoji} {RANK[r as RankKey].label}</option>)}
           </select>
-          <button onClick={() => { dispatch(grantCouponToRank(coupon.id, rank)); flash(`มอบให้ทุกคนใน ${RANK[rank as RankKey].label}`); }} className="rounded-lg bg-primary px-3 py-1.5 text-[12.5px] font-bold text-white">มอบทั้ง rank</button>
+          <button onClick={() => {
+            dispatch(grantCouponToRank(coupon.id, rank));
+            const ids = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank).map((u) => u.id);
+            sendPush(subsForUsers(db, ids), { title: '🎟️ คุณได้รับคูปองส่วนลด!', body: `${coupon.label} · ลด ${baht(coupon.value)} — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
+            flash(`มอบให้ทุกคนใน ${RANK[rank as RankKey].label}`);
+          }} className="rounded-lg bg-primary px-3 py-1.5 text-[12.5px] font-bold text-white">มอบทั้ง rank</button>
         </div>
         <div className="mb-2 max-h-60 overflow-y-auto rounded-lg border border-subtle">
           {members.length === 0 ? <div className="p-3 text-[12.5px] text-ink-faint">ยังไม่มีสมาชิก</div> : members.map((u) => {
