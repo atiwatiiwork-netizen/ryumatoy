@@ -200,8 +200,21 @@ export default function PosterPage() {
         const cellH = (availH - gap * (rows - 1)) / rows;
         const nameFs = Math.min(30, Math.max(19, cellW * 0.082));
         const priceFs = nameFs * 1.12;
-        // COMPACT text block (feedback): name + ONE combined price line → the image gets the rest
-        const textH = 8 + nameFs + 8 + priceFs + 10;
+        const vFs = Math.max(15, Math.round(priceFs * 0.62)); // per-variant price line
+        const MAX_VLINES = 3;
+        // variant products list EVERY แบบ with its own price (feedback: ราคาแรก/ต่ำสุดตัวเดียวทำให้เข้าใจผิด)
+        const variantLines = (p: Product): { name: string; price: number }[] => {
+          const vs = db.variants.filter((v) => v.product_id === p.id);
+          return vs.length >= 2 ? vs.map((v) => ({ name: v.name ?? '', price: v.price_total ?? p.price_total })) : [];
+        };
+        // text block height differs per cell: name + (variant lines | one price line) + optional meta line
+        const textHFor = (p: Product) => {
+          const vl = variantLines(p);
+          if (vl.length === 0) return 8 + nameFs + 8 + priceFs + 10;
+          const lines = Math.min(vl.length, MAX_VLINES) + (vl.length > MAX_VLINES ? 1 : 0);
+          const metaH = (showDeposit && !p.is_stock) || (showHeight && p.height_cm != null) ? vFs * 0.9 + 6 : 0;
+          return 8 + nameFs + 6 + lines * (vFs + 7) + metaH + 8;
+        };
 
         picked.forEach((p, i) => {
           const col = i % cols, row = Math.floor(i / cols);
@@ -210,6 +223,7 @@ export default function PosterPage() {
           ctx.strokeStyle = 'rgba(255,255,255,0.09)'; roundRect(ctx, x, y, cellW, cellH, 16); ctx.stroke();
 
           // image — COVER (fills the cell, reads big & clear); variant teaser = diagonal split
+          const textH = textHFor(p);
           const iw = cellW - 16, ih = cellH - 16 - textH;
           const ix = x + 8, iy = y + 8;
           const cellImgs = (imgs[i] ?? []).filter((m): m is HTMLImageElement => !!m);
@@ -232,28 +246,63 @@ export default function PosterPage() {
           }
           ctx.restore();
 
-          // texts — 2 rows only
+          // texts — name, then (per-variant price lines | one combined price line)
           const cxm = x + cellW / 2;
           ctx.textAlign = 'center';
           ctx.fillStyle = '#ffffff'; ctx.font = `700 ${nameFs}px system-ui, sans-serif`;
           ctx.fillText(ellipsize(ctx, p.series_name, cellW - 20), cxm, iy + ih + nameFs + 6);
 
-          // combined line: ฿PRICE [· มัดจำ ฿X] [· สูง Y ซม.] — auto-drops the height part if tight
-          const segs: { text: string; font: string; color: string }[] = [
-            { text: baht(p.price_total), font: `900 ${priceFs}px system-ui, sans-serif`, color: '#ff9d9d' },
-          ];
-          if (showDeposit && !p.is_stock && p.deposit_amount < p.price_total)
-            segs.push({ text: `  มัดจำ ${baht(p.deposit_amount)}`, font: `700 ${priceFs * 0.62}px system-ui, sans-serif`, color: '#4ade80' });
-          if (showHeight && p.height_cm != null)
-            segs.push({ text: `  สูง ${p.height_cm} ซม.`, font: `500 ${priceFs * 0.58}px system-ui, sans-serif`, color: '#9a9290' });
-          const widthOf = (list: typeof segs) => list.reduce((s, g) => { ctx.font = g.font; return s + ctx.measureText(g.text).width; }, 0);
-          let line = segs;
-          if (widthOf(line) > cellW - 18 && line.length > 2) line = line.slice(0, 2); // drop height first
-          if (widthOf(line) > cellW - 18 && line.length > 1) line = line.slice(0, 1); // then deposit
-          let sx = cxm - widthOf(line) / 2;
-          const py = iy + ih + nameFs + 10 + priceFs;
-          ctx.textAlign = 'left';
-          for (const g of line) { ctx.font = g.font; ctx.fillStyle = g.color; ctx.fillText(g.text, sx, py); sx += ctx.measureText(g.text).width; }
+          const vl = variantLines(p);
+          if (vl.length > 0) {
+            // one line per แบบ: "ชื่อแบบ ฿ราคา" (name white, price red-bold); cap MAX_VLINES + summary
+            let vy = iy + ih + nameFs + 8 + vFs;
+            const shown = vl.slice(0, MAX_VLINES);
+            for (const v of shown) {
+              const priceTxt = ` ${baht(v.price)}`;
+              ctx.font = `900 ${vFs}px system-ui, sans-serif`;
+              const priceW = ctx.measureText(priceTxt).width;
+              ctx.font = `600 ${vFs * 0.92}px system-ui, sans-serif`;
+              const nameTxt = ellipsize(ctx, v.name || 'แบบ', cellW - 24 - priceW);
+              const nameW = ctx.measureText(nameTxt).width;
+              let sx = cxm - (nameW + priceW) / 2;
+              ctx.textAlign = 'left';
+              ctx.fillStyle = '#d9d2d0'; ctx.fillText(nameTxt, sx, vy); sx += nameW;
+              ctx.font = `900 ${vFs}px system-ui, sans-serif`; ctx.fillStyle = '#ff9d9d'; ctx.fillText(priceTxt, sx, vy);
+              ctx.textAlign = 'center';
+              vy += vFs + 7;
+            }
+            if (vl.length > MAX_VLINES) {
+              ctx.font = `600 ${vFs * 0.85}px system-ui, sans-serif`; ctx.fillStyle = '#9a9290';
+              ctx.fillText(`+อีก ${vl.length - MAX_VLINES} แบบ`, cxm, vy);
+              vy += vFs + 7;
+            }
+            // meta line: มัดจำ (shared by every แบบ) · สูง
+            const meta: string[] = [];
+            if (showDeposit && !p.is_stock) meta.push(`มัดจำ ${baht(p.deposit_amount)}`);
+            if (showHeight && p.height_cm != null) meta.push(`สูง ${p.height_cm} ซม.`);
+            if (meta.length) {
+              ctx.font = `700 ${Math.round(vFs * 0.85)}px system-ui, sans-serif`; ctx.fillStyle = '#4ade80';
+              ctx.fillText(ellipsize(ctx, meta.join(' · '), cellW - 20), cxm, vy);
+            }
+          } else {
+            // combined line: ฿PRICE [· มัดจำ ฿X] [· สูง Y ซม.] — auto-drops the height part if tight
+            const segs: { text: string; font: string; color: string }[] = [
+              { text: baht(p.price_total), font: `900 ${priceFs}px system-ui, sans-serif`, color: '#ff9d9d' },
+            ];
+            if (showDeposit && !p.is_stock && p.deposit_amount < p.price_total)
+              segs.push({ text: `  มัดจำ ${baht(p.deposit_amount)}`, font: `700 ${priceFs * 0.62}px system-ui, sans-serif`, color: '#4ade80' });
+            if (showHeight && p.height_cm != null)
+              segs.push({ text: `  สูง ${p.height_cm} ซม.`, font: `500 ${priceFs * 0.58}px system-ui, sans-serif`, color: '#9a9290' });
+            const widthOf = (list: typeof segs) => list.reduce((s, g) => { ctx.font = g.font; return s + ctx.measureText(g.text).width; }, 0);
+            let line = segs;
+            if (widthOf(line) > cellW - 18 && line.length > 2) line = line.slice(0, 2); // drop height first
+            if (widthOf(line) > cellW - 18 && line.length > 1) line = line.slice(0, 1); // then deposit
+            let sx = cxm - widthOf(line) / 2;
+            const py = iy + ih + nameFs + 10 + priceFs;
+            ctx.textAlign = 'left';
+            for (const g of line) { ctx.font = g.font; ctx.fillStyle = g.color; ctx.fillText(g.text, sx, py); sx += ctx.measureText(g.text).width; }
+            ctx.textAlign = 'center';
+          }
         });
       }
       if (!cancelled) setRendering(false);
