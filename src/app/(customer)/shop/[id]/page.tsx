@@ -150,8 +150,8 @@ export default function ProductDetailPage() {
         </div>
       )}
       {limited && (
-        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : 'text-[#4ade80]')}>
-          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : `เหลือ ${avail} ชิ้น`}
+        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : avail === 1 ? 'animate-pulse text-[#f87171]' : 'text-[#4ade80]')}>
+          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : `เหลือ ${avail} ชิ้น`}
         </div>
       )}
       <div className="flex gap-2.5">

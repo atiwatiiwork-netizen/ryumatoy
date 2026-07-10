@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
+import { uploadImage } from '@/lib/upload';
+import { applyWatermark } from '@/lib/watermark';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
@@ -62,9 +64,22 @@ function LegacyCreate() {
   const [cname, setCname] = useState('');
   const [height, setHeight] = useState('');
   const [wcf, setWcf] = useState<WcfType>('wcf');
+  const [dep, setDep] = useState(''); // custom มัดจำ — blank = ใช้เรทตามชนิด (finished goods มักใช้ 1000)
+  const [images, setImages] = useState<string[]>([]);
+  const [imgBusy, setImgBusy] = useState(false);
 
   const seriesOpts = seriesForFranchise(db, fr, mk);
   const eligible = db.products.filter((p) => !p.is_stock && !hasOpenBatch(db, p.id)); // pre-order SKUs without an open round
+  const rateDep = wcf === 'mega_wcf' ? st.deposit_mega : st.deposit_wcf;
+  const depNum = Number(dep) || 0; // 0 = fall back to the type rate / SKU snapshot
+
+  const addImage = async (file?: File) => {
+    if (!file) return;
+    setImgBusy(true);
+    try { const url = await uploadImage(await applyWatermark(file), 'product'); setImages((a) => [...a, url]); flash('เพิ่มรูป + ลายน้ำแล้ว'); }
+    catch { flash('อัปโหลดรูปไม่สำเร็จ'); }
+    finally { setImgBusy(false); }
+  };
 
   const openExisting = () => {
     const p = db.products.find((x) => x.id === pid);
@@ -72,19 +87,20 @@ function LegacyCreate() {
     if (hasOpenBatch(db, p.id)) return flash('SKU นี้มีรอบพิเศษเปิดอยู่แล้ว (ปิดรอบก่อน)');
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
-    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true }));
+    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined }));
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}`);
-    setQty(''); setPrice(''); setLabel('');
+    setQty(''); setPrice(''); setLabel(''); setDep('');
   };
   const createNew = () => {
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (!cname.trim()) return flash('กรอกชื่อตัวละคร');
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
+    if (!fullPay && depNum > 0 && depNum >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย (หรือสลับเป็นจ่ายเต็ม)');
     const sname = seriesOpts.find((s) => s.id === sid)?.name;
     const finalName = sname ? `${cname.trim()} - ${sname}` : cname.trim();
-    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, qty: q, price: pr, fullPay, label: label.trim() || undefined }));
+    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined }));
     flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว`);
-    setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel('');
+    setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel(''); setDep(''); setImages([]);
   };
 
   return (
@@ -110,17 +126,38 @@ function LegacyCreate() {
           <label className="block"><span className={labelCls}>ซีรีย์ (ไม่บังคับ)</span><select className={inputCls} value={sid} onChange={(e) => setSid(e.target.value)}><option value="">— ไม่มี —</option>{seriesOpts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
           <label className="block"><span className={labelCls}>ชนิด</span><select className={inputCls} value={wcf} onChange={(e) => setWcf(e.target.value as WcfType)}><option value="wcf">WCF (มัดจำ {baht(st.deposit_wcf)})</option><option value="mega_wcf">Mega (มัดจำ {baht(st.deposit_mega)})</option></select></label>
           <label className="block"><span className={labelCls}>สูง (ซม.)</span><input className={inputCls} inputMode="decimal" value={height} onChange={(e) => setHeight(e.target.value.replace(/[^\d.]/g, ''))} placeholder="เช่น 8" /></label>
+          <div className="sm:col-span-2">
+            <span className={labelCls}>รูปสินค้า</span>
+            <div className="flex flex-wrap gap-2">
+              {images.map((img, i) => (
+                <div key={i} className="relative h-16 w-16 overflow-hidden rounded-lg border border-subtle">
+                  <img src={img} alt="" className="h-full w-full object-cover" />
+                  <button onClick={() => setImages((a) => a.filter((_, j) => j !== i))} className="absolute right-0 top-0 grid h-5 w-5 place-items-center bg-black/60 text-white"><Icon name="x" size={12} /></button>
+                </div>
+              ))}
+              <label className="grid h-16 w-16 cursor-pointer place-items-center rounded-lg border border-dashed border-accent bg-surface-3 text-ink-faint">
+                {imgBusy ? <Icon name="box" size={18} className="animate-pulse" /> : <Icon name="camera" size={18} />}
+                <input type="file" accept="image/*" className="hidden" onChange={(e) => addImage(e.target.files?.[0])} />
+              </label>
+            </div>
+          </div>
         </div>
       )}
 
-      <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-4">
         <label className="block"><span className={labelCls}>ราคาขาย (บาท)</span><input className={inputCls} inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="เช่น 1600" /></label>
+        <label className="block">
+          <span className={labelCls}>มัดจำ (บาท)</span>
+          <input className={inputCls} inputMode="numeric" value={dep} onChange={(e) => setDep(e.target.value.replace(/[^\d]/g, ''))} disabled={fullPay}
+            placeholder={fullPay ? 'จ่ายเต็ม' : sub === 'existing' ? `เดิม ${baht(db.products.find((x) => x.id === pid)?.deposit_amount ?? rateDep)}` : `เรท ${baht(rateDep)}`} />
+          <span className="mt-1 block text-[10.5px] text-ink-faint">{fullPay ? '—' : 'เว้นว่าง = ใช้เรทชนิด · ของเสร็จแล้วมักใช้ 1000'}</span>
+        </label>
         <label className="block"><span className={labelCls}>จำนวน</span><input className={inputCls} inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/[^\d]/g, ''))} placeholder="เช่น 5" /></label>
         <label className="block"><span className={labelCls}>ชื่อล็อต (ไม่บังคับ)</span><input className={inputCls} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="รอบพิเศษ" /></label>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2.5">
-        <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={sub === 'existing' ? (db.products.find((x) => x.id === pid)?.deposit_amount ?? (wcf === 'mega_wcf' ? st.deposit_mega : st.deposit_wcf)) : (wcf === 'mega_wcf' ? st.deposit_mega : st.deposit_wcf)} />
+        <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={depNum > 0 ? depNum : (sub === 'existing' ? (db.products.find((x) => x.id === pid)?.deposit_amount ?? rateDep) : rateDep)} />
         <span className="text-[11.5px] text-ink-faint">{fullPay ? 'ลูกค้าจ่ายเต็มตอนสั่ง (ของอยู่ในมือ)' : 'เก็บมัดจำก่อน · เก็บส่วนต่างตอนของถึง'}</span>
         <button onClick={sub === 'existing' ? openExisting : createNew} className="ml-auto rounded-lg bg-cta px-5 py-2.5 text-sm font-bold text-white">เปิดรอบพิเศษ</button>
       </div>

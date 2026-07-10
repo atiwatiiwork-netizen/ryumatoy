@@ -4,18 +4,22 @@ import Link from 'next/link';
 import type { ProductBatch } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { baht } from '@/lib/theme';
-import { metaLine, batchRemaining } from '@/domain/services/catalog';
+import { metaLine } from '@/domain/services/catalog';
+import { batchAvailable } from '@/domain/services/reservations';
 import { ProductThumb, cx } from './ui';
 
 /** A special pre-order round (สต๊อกใบพรี) shown on the shop — same figure, its own lot/price.
- *  Stock shown as "เหลือน้อย"/"สินค้าหมด" (never an exact count); sold-out stays greyed. */
+ *  Availability is RESERVATION-AWARE (batchAvailable): someone sitting in the 15-min payment/slip
+ *  stage already holds their unit, so a round pulled to 0 shows สินค้าหมด before any slip is approved.
+ *  Scarcity labels (owner spec): every buyable state blinks "สินค้าเหลือน้อย" (rounds are limited by
+ *  nature); exactly 1 left → "เหลือ 1 ชิ้นสุดท้าย"; 0 → สินค้าหมด, greyed + unclickable. */
 export function BatchCard({ batch }: { batch: ProductBatch }) {
   const db = useDatabase();
   const product = db.products.find((p) => p.id === batch.product_id);
   if (!product) return null;
-  const remaining = batchRemaining(db, batch.id, batch.stock_qty);
-  const soldOut = remaining <= 0;
-  const low = remaining > 0 && remaining <= 3;
+  const avail = batchAvailable(db, batch);
+  const soldOut = avail <= 0;
+  const lastOne = avail === 1;
   const fullPay = batch.deposit_amount >= batch.price_total;
 
   const inner = (
@@ -35,8 +39,8 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
         <div className="mt-1.5 flex items-center gap-2">
           <span className="text-[15px] font-extrabold text-primary-soft">{baht(batch.price_total)}</span>
           {soldOut ? <span className="text-[11px] text-ink-faint">หมด</span>
-            : low ? <span className="text-[11px] font-bold text-[#fbbf24]">เหลือน้อย</span>
-            : <span className="text-[11px] text-ink-faint">พร้อมจอง</span>}
+            : lastOne ? <span className="animate-pulse text-[11px] font-extrabold text-[#f87171]">เหลือ 1 ชิ้นสุดท้าย</span>
+            : <span className="animate-pulse text-[11px] font-bold text-[#fbbf24]">สินค้าเหลือน้อย</span>}
         </div>
         {/* full-pay batch = ready-to-ship; deposit batch = still a pre-order round */}
         <div className="mt-0.5 text-[10.5px] font-semibold text-ink-muted2">

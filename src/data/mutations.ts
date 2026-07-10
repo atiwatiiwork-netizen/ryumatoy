@@ -271,14 +271,15 @@ export const removeBatch = (batchId: string) => (db: Database): Database => ({
  *  round per SKU. `addSurplus` (legacy: physical stock we already hold) bumps surplus first; without it
  *  the round sells existing surplus (from a production close). Deposit = the SKU's deposit unless
  *  `fullPay` (จ่ายเต็ม/พร้อมส่ง → deposit = price). Existing buyers keep their snapshot (ryuma-preorder-stock-spec). */
-export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean }) => (db: Database): Database => {
+export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number }) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p) return db;
   if (db.batches.some((b) => b.product_id === productId && b.status === 'open')) return db; // one round at a time
   const qty = Math.max(0, Math.floor(opts.qty));
   if (qty <= 0) return db;
   const price = opts.price > 0 ? opts.price : p.price_total;
-  const deposit = opts.fullPay ? price : p.deposit_amount;
+  // custom deposit (e.g. finished-goods rate 1000฿) wins; capped at the price so the remaining is never negative
+  const deposit = opts.fullPay ? price : Math.min(price, (opts.deposit && opts.deposit > 0 ? opts.deposit : p.deposit_amount));
   const now = new Date().toISOString();
   const products = opts.addSurplus ? db.products.map((x) => (x.id === productId ? { ...x, surplus_qty: (x.surplus_qty ?? 0) + qty } : x)) : db.products;
   const stockAdditions = opts.addSurplus
@@ -294,21 +295,25 @@ export const createLegacyStockProduct = (data: {
   franchise_id: string; manufacturer_id: string; series_id?: string; character_name: string; series_name: string;
   height_cm?: number; wcf_type?: WcfType; images?: string[];
   qty: number; price: number; fullPay: boolean; label?: string;
+  deposit?: number; // custom มัดจำ (e.g. finished-goods rate 1000฿); falls back to the WCF/Mega rate
 }) => (db: Database): Database => {
   const pid = id('p');
   const now = new Date().toISOString();
+  const deposit = data.fullPay
+    ? data.price
+    : Math.min(data.price, (data.deposit && data.deposit > 0 ? data.deposit : depositFor(db.settings, data.wcf_type ?? 'wcf')));
   const product: Product = {
     id: pid, franchise_id: data.franchise_id, manufacturer_id: data.manufacturer_id,
     series_id: data.series_id || undefined, series_name: data.series_name, character_name: data.character_name || undefined,
     wcf_type: data.wcf_type, type: 'other', description: '', images: data.images ?? [],
     eta_note: data.fullPay ? 'พร้อมส่ง' : 'ระหว่างทาง',
-    price_total: data.price, deposit_amount: data.fullPay ? data.price : depositFor(db.settings, data.wcf_type ?? 'wcf'),
+    price_total: data.price, deposit_amount: deposit,
     is_stock: false, height_cm: data.height_cm, has_variants: false,
     status: data.fullPay ? 'arrived' : 'shipping', shipped_at: data.fullPay ? undefined : now,
     surplus_qty: 0, stock_origin: 'manual', created_at: now,
   };
   const withProduct = { ...db, products: [product, ...db.products] };
-  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true })(withProduct);
+  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit })(withProduct);
 };
 
 /** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
