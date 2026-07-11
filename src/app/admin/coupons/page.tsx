@@ -189,10 +189,16 @@ export default function AdminCouponsPage() {
     const held = (uid: string) => db.couponGrants.some((g) => g.coupon_id === coupon.id && g.user_id === uid && g.status === 'active');
 
     const toggle = (uid: string) => setPicked((s) => { const n = new Set(s); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
+    // 🔔 devices this member can receive a push on (0 = the push has nowhere to land)
+    const bell = (uid: string) => db.pushSubscriptions.filter((s) => s.user_id === uid).length;
+    const couponPush = { title: '🎟️ คุณได้รับคูปองส่วนลด!', body: `${coupon.label} · ลด ${baht(coupon.value)} — ดูใน "คูปองของฉัน"`, url: '/coupons' };
     const giveSelected = () => {
       if (!picked.size) { flash('เลือกลูกค้าก่อน'); return; }
       dispatch(grantCoupon(coupon.id, [...picked]));
-      sendPush(subsForUsers(db, [...picked]), { title: '🎟️ คุณได้รับคูปองส่วนลด!', body: `${coupon.label} · ลด ${baht(coupon.value)} — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
+      // push ONLY those who actually received a NEW grant — grantCoupon skips anyone already
+      // holding an active copy, and a "you got a coupon" ping without a coupon is a lie
+      const got = [...picked].filter((uid) => !held(uid));
+      sendPush(subsForUsers(db, got), couponPush, dispatch).catch(() => {});
       flash(`มอบคูปองให้ ${picked.size} คน`);
       setPicked(new Set());
     };
@@ -206,8 +212,9 @@ export default function AdminCouponsPage() {
           </select>
           <button onClick={() => {
             dispatch(grantCouponToRank(coupon.id, rank));
-            const ids = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank).map((u) => u.id);
-            sendPush(subsForUsers(db, ids), { title: '🎟️ คุณได้รับคูปองส่วนลด!', body: `${coupon.label} · ลด ${baht(coupon.value)} — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
+            // same "actually got a NEW grant" rule as giveSelected (mutation skips active holders)
+            const ids = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank && !held(u.id)).map((u) => u.id);
+            sendPush(subsForUsers(db, ids), couponPush, dispatch).catch(() => {});
             flash(`มอบให้ทุกคนใน ${RANK[rank as RankKey].label}`);
           }} className="rounded-lg bg-primary px-3 py-1.5 text-[12.5px] font-bold text-white">มอบทั้ง rank</button>
         </div>
@@ -218,6 +225,7 @@ export default function AdminCouponsPage() {
               <button key={u.id} disabled={already} onClick={() => toggle(u.id)} className={cx('flex w-full items-center gap-2.5 border-b border-subtle px-3 py-2 text-left last:border-0', already ? 'opacity-50' : 'hover:bg-white/[0.03]')}>
                 <span className={cx('grid h-4 w-4 place-items-center rounded border', picked.has(u.id) ? 'border-accent bg-cta' : 'border-subtle')}>{picked.has(u.id) && <Icon name="check" size={11} className="text-white" />}</span>
                 <span className="flex-1 text-[13px]">{u.display_name} <span className="text-ink-faint">· {RANK[u.rank as RankKey].label}</span></span>
+                {bell(u.id) > 0 && <span title="เปิดการแจ้งเตือนไว้ — push ถึงแน่นอน" className="text-[11px]">🔔</span>}
                 {already && <span className="text-[11px] text-[#4ade80]">มีแล้ว</span>}
               </button>
             );
