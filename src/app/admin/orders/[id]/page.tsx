@@ -123,6 +123,15 @@ export default function SlipApprovalPage() {
           <div className="flex-1" />
           {approved ? (
             <div className="rounded-btn border border-subtle bg-surface-3 py-3 text-center text-sm font-bold text-ink-muted2">ออก Ticket เรียบร้อยแล้ว</div>
+          ) : order.items.length === 0 ? (
+            <>
+              {/* split-flush aftermath: the order row landed but its items never did — approving
+                  would take the money and issue ZERO tickets. Only rejecting is allowed. */}
+              <div className="mb-2.5 rounded-btn border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] p-3 text-[12.5px] leading-relaxed text-primary-soft">
+                ⚠️ ออเดอร์นี้ไม่มีรายการสินค้า (ข้อมูลขาดจากการเซฟไม่สมบูรณ์) — อนุมัติไม่ได้เพราะจะไม่มีตั๋วออก ให้ปฏิเสธแล้วแจ้งลูกค้าสั่งใหม่
+              </div>
+              <button onClick={reject} className="w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
+            </>
           ) : (
             <>
               <Button variant="success" icon="check" onClick={approve}>Approve · ออก Ticket</Button>

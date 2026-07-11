@@ -6,8 +6,9 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
-import { fillMissingTicketsFor } from '@/data/mutations';
+import { fillMissingTicketsFor, reclaimOrphanCouponGrants } from '@/data/mutations';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { orphanUsedGrants } from '@/domain/services/coupons';
 import { store } from '@/data/store';
 import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
@@ -58,6 +59,17 @@ export function CustomerShell({ children }: { children: ReactNode }) {
     healed.current = true;
     dispatch(fillMissingTicketsFor(CURRENT_USER_ID));
     flash(`กู้คืนใบพรีที่หายไป ${missing} ใบแล้ว ✓`);
+  }, [db, CURRENT_USER_ID, dispatch, flash]);
+  // SELF-HEAL #2: coupons burned by a split flush (grant 'used' but its order/final-payment never
+  // persisted) come back automatically too.
+  const reclaimed = useRef(false);
+  useEffect(() => {
+    if (reclaimed.current || !CURRENT_USER_ID) return;
+    const orphans = orphanUsedGrants(db, CURRENT_USER_ID).length;
+    if (orphans === 0) return;
+    reclaimed.current = true;
+    dispatch(reclaimOrphanCouponGrants(CURRENT_USER_ID));
+    flash(`↩️ คืนคูปอง ${orphans} ใบ (การใช้ครั้งก่อนไม่สมบูรณ์)`);
   }, [db, CURRENT_USER_ID, dispatch, flash]);
   const { needsApproval, isLoggedIn, authReady } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);

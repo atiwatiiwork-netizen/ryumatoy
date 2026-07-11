@@ -3,7 +3,7 @@ import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, unmatchedApprovedItems } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
-import { couponMatchesProduct } from '../domain/services/coupons';
+import { couponMatchesProduct, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -636,6 +636,33 @@ export const fillMissingTicketsFor = (userId: string) => (db: Database): Databas
     });
   }
   return issued.length ? { ...db, tickets: [...issued, ...db.tickets] } : db;
+};
+
+/**
+ * SELF-HEAL: give back this customer's coupons burned by a split flush (grant went 'used' but the
+ * order / remaining-payment it paid for never persisted — coupon_grants is one of the FIRST tables
+ * written). For the ticket case, when the ticket-side discount DID land (detected against the
+ * order-item snapshot) the discount is added back before reactivating, so nothing double-benefits.
+ * RLS-legal: a customer may update their own grants and tickets. Idempotent.
+ */
+export const reclaimOrphanCouponGrants = (userId: string) => (db: Database): Database => {
+  const orphans = orphanUsedGrants(db, userId);
+  if (orphans.length === 0) return db;
+  const ids = new Set(orphans.map((o) => o.grant.id));
+  const revertByTicket = new Map<string, number>();
+  for (const o of orphans) {
+    if (o.kind === 'ticket' && o.revertTicket && o.grant.ticket_id)
+      revertByTicket.set(o.grant.ticket_id, (revertByTicket.get(o.grant.ticket_id) ?? 0) + (o.grant.discount_amount ?? 0));
+  }
+  return {
+    ...db,
+    couponGrants: db.couponGrants.map((g) => (ids.has(g.id)
+      ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, ticket_id: undefined, discount_amount: undefined }
+      : g)),
+    tickets: revertByTicket.size
+      ? db.tickets.map((t) => (revertByTicket.has(t.id) ? { ...t, remaining_amount: t.remaining_amount + revertByTicket.get(t.id)! } : t))
+      : db.tickets,
+  };
 };
 
 /** Admin sweep: credit any earned-but-unminted event rewards for EVERY member — covers Diamond

@@ -9,6 +9,7 @@ import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { orphanUsedGrants } from '@/domain/services/coupons';
 import { repairTickets } from '@/data/mutations';
 import type { ProductStatus } from '@/domain/entities';
 
@@ -19,9 +20,12 @@ export default function AdminDashboardPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
-  // "จ่ายแล้วตั๋วหาย" watchdog — approved-order items with no matching ticket (split flush)
-  const lostTickets = unmatchedApprovedItems(db);
+  // "ข้อมูลขาดจาก split flush" watchdog — three failure shapes of the non-atomic multi-table save:
+  const lostTickets = unmatchedApprovedItems(db); // approved item, no ticket
   const lostPeople = new Set(lostTickets.map((x) => x.order.user_id)).size;
+  const zeroItemOrders = db.orders.filter((o) => (o.status === 'pending_approval' || o.status === 'approved') && o.items.length === 0);
+  const orphanGrants = orphanUsedGrants(db).length; // coupon burned, its order/rp never landed (self-heals client-side)
+  const hasAnomaly = lostTickets.length > 0 || zeroItemOrders.length > 0 || orphanGrants > 0;
 
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
@@ -66,11 +70,17 @@ export default function AdminDashboardPage() {
         <Stat label="Stock ใกล้หมด" value={String(lowStock)} icon="bolt" />
       </div>
 
-      {lostTickets.length > 0 && (
+      {hasAnomaly && (
         <div className="mb-[22px] rounded-2xl border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] p-5">
-          <div className="mb-2 flex items-center gap-2 font-bold text-primary-soft"><Icon name="warning" size={18} /> ตั๋วหายจากออเดอร์ที่อนุมัติแล้ว ({lostTickets.length} ใบ · {lostPeople} คน)</div>
-          <div className="mb-3 text-[12.5px] text-ink-muted2">ออเดอร์เขียนสำเร็จแต่ตั๋วเขียนไม่ทัน (มือถือหลุดกลางเซฟ) — ระบบจะกู้เองเมื่อลูกค้าเปิดแอป หรือกดซ่อมทันทีที่นี่</div>
-          <button onClick={() => { dispatch(repairTickets()); flash(`ซ่อมตั๋วแล้ว ${lostTickets.length} ใบ ✓`); }} className="rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">🔧 ซ่อมตั๋วทั้งหมดตอนนี้</button>
+          <div className="mb-2 flex items-center gap-2 font-bold text-primary-soft"><Icon name="warning" size={18} /> พบข้อมูลขาดจากการเซฟไม่สมบูรณ์ (มือถือหลุดกลางเซฟ)</div>
+          <ul className="mb-3 list-inside list-disc text-[12.5px] leading-relaxed text-ink-muted2">
+            {lostTickets.length > 0 && <li>ตั๋วหายจากออเดอร์ที่อนุมัติแล้ว <b className="text-ink">{lostTickets.length} ใบ · {lostPeople} คน</b> — กู้เองเมื่อลูกค้าเปิดแอป หรือกดซ่อมด้านล่าง</li>}
+            {zeroItemOrders.length > 0 && <li>ออเดอร์ไม่มีรายการสินค้า <b className="text-ink">{zeroItemOrders.length} ออเดอร์</b> — อนุมัติไม่ได้ ให้ปฏิเสธแล้วแจ้งลูกค้าสั่งใหม่</li>}
+            {orphanGrants > 0 && <li>คูปองถูกใช้แต่ออเดอร์/สลิปไม่สมบูรณ์ <b className="text-ink">{orphanGrants} ใบ</b> — ระบบคืนให้เองเมื่อลูกค้าเปิดแอป</li>}
+          </ul>
+          {lostTickets.length > 0 && (
+            <button onClick={() => { dispatch(repairTickets()); flash(`ซ่อมตั๋วแล้ว ${lostTickets.length} ใบ ✓`); }} className="rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">🔧 ซ่อมตั๋วทั้งหมดตอนนี้</button>
+          )}
         </div>
       )}
 
