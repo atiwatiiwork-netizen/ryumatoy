@@ -427,6 +427,22 @@ export interface PushSubscription {
   created_at: string;
 }
 
+/** A customer's broadcast-notification preferences (สินค้าใหม่ pushes only — their own account
+ *  events always notify). One row per user; NO row (or an empty array) = รับทั้งหมด in that
+ *  dimension. Both set = AND ("เฉพาะค่าย A+ ในเรื่อง One Piece"). */
+export interface PushPref {
+  user_id: string;
+  maker_ids: string[];      // [] = ทุกค่าย
+  franchise_ids: string[];  // [] = ทุกเรื่อง
+  updated_at?: string;
+}
+
+/** Admin kill-switch per push trigger (Push Control page). Missing key = enabled. */
+export interface PushConfigRow {
+  key: string; // 'new_preorder' | 'new_instock' | 'lot_shipping' | 'lot_arrived' | 'order_approved' | 'order_rejected' | 'rp_approved' | 'parcel' | 'coupon_grant' | 'event_reward'
+  enabled: boolean;
+}
+
 /** A promo/announcement slide on the customer home carousel. */
 export interface PromoBanner {
   id: string;
@@ -459,6 +475,8 @@ export interface Database {
   campaigns: Campaign[];
   campaignAwards: CampaignAward[];
   pushSubscriptions: PushSubscription[];
+  pushPrefs: PushPref[];
+  pushConfig: PushConfigRow[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];
   settings: ShopSettings;

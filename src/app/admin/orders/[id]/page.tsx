@@ -7,7 +7,7 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, RankBadge } from '@/components/ui';
 import { approveOrder, rejectOrder } from '@/data/mutations';
-import { sendPush, subsForUsers } from '@/lib/push';
+import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { confirmReservation, releaseReservation } from '@/lib/reserve';
 import { franchiseOf } from '@/domain/services/catalog';
 import { nextTicketNo } from '@/domain/services/tickets';
@@ -43,8 +43,9 @@ export default function SlipApprovalPage() {
     let grantsAfter = grantsBefore;
     dispatch((d) => { grantsAfter = d.couponGrants.filter((g) => g.user_id === order.user_id).length; return d; });
     const mySubs = subsForUsers(db, [order.user_id]);
-    sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋ว ${order.items.length} ใบเข้ากระเป๋าแล้ว — แตะเพื่อดู`, url: '/wallet' }, dispatch).catch(() => {});
-    if (grantsAfter > grantsBefore)
+    if (pushEnabled(db, 'order_approved'))
+      sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋ว ${order.items.length} ใบเข้ากระเป๋าแล้ว — แตะเพื่อดู`, url: '/wallet' }, dispatch).catch(() => {});
+    if (grantsAfter > grantsBefore && pushEnabled(db, 'event_reward'))
       sendPush(mySubs, { title: '🎁 ได้รับคูปองจากกิจกรรม!', body: `คุณได้รับคูปอง ${grantsAfter - grantsBefore} ใบ — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
     // confirm any stock holds → real sale
     await Promise.all((order.reservation_ids ?? []).map((rid) => confirmReservation(rid)));
@@ -55,7 +56,8 @@ export default function SlipApprovalPage() {
   const reject = async () => {
     if (!confirm('ปฏิเสธสลิปนี้? สต๊อกที่จองไว้จะถูกคืน')) return;
     dispatch(rejectOrder(order.id));
-    sendPush(subsForUsers(db, [order.user_id]), { title: '❌ สลิปไม่ผ่านการตรวจ', body: 'ยอด/สลิปไม่ถูกต้อง — ติดต่อแอดมิน หรือสั่งใหม่อีกครั้ง', url: '/' }, dispatch).catch(() => {});
+    if (pushEnabled(db, 'order_rejected'))
+      sendPush(subsForUsers(db, [order.user_id]), { title: '❌ สลิปไม่ผ่านการตรวจ', body: 'ยอด/สลิปไม่ถูกต้อง — ติดต่อแอดมิน หรือสั่งใหม่อีกครั้ง', url: '/' }, dispatch).catch(() => {});
     await Promise.all((order.reservation_ids ?? []).map((rid) => releaseReservation(rid)));
     flash('ปฏิเสธออเดอร์แล้ว · คืนสต๊อก');
     router.push('/admin');

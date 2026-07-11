@@ -148,6 +148,8 @@ export const SEED_DATABASE: Database = {
   couponGrants: [],
 
   pushSubscriptions: [],
+  pushPrefs: [],
+  pushConfig: [],
 
   campaigns: [
     {

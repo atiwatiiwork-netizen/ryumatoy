@@ -12,7 +12,7 @@ import { RANK_ORDER } from '@/domain/services/ranks';
 import { grantStats } from '@/domain/services/coupons';
 import { CouponTierPill } from '@/components/CouponTicket';
 import { createCoupon, updateCoupon, deleteCoupon, grantCoupon, grantCouponToRank, revokeGrant } from '@/data/mutations';
-import { sendPush, subsForUsers } from '@/lib/push';
+import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { Coupon, CouponScope, RankName } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -198,7 +198,7 @@ export default function AdminCouponsPage() {
       // push ONLY those who actually received a NEW grant — grantCoupon skips anyone already
       // holding an active copy, and a "you got a coupon" ping without a coupon is a lie
       const got = [...picked].filter((uid) => !held(uid));
-      sendPush(subsForUsers(db, got), couponPush, dispatch).catch(() => {});
+      if (pushEnabled(db, 'coupon_grant')) sendPush(subsForUsers(db, got), couponPush, dispatch).catch(() => {});
       flash(`มอบคูปองให้ ${picked.size} คน`);
       setPicked(new Set());
     };
@@ -214,7 +214,7 @@ export default function AdminCouponsPage() {
             dispatch(grantCouponToRank(coupon.id, rank));
             // same "actually got a NEW grant" rule as giveSelected (mutation skips active holders)
             const ids = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank && !held(u.id)).map((u) => u.id);
-            sendPush(subsForUsers(db, ids), couponPush, dispatch).catch(() => {});
+            if (pushEnabled(db, 'coupon_grant')) sendPush(subsForUsers(db, ids), couponPush, dispatch).catch(() => {});
             flash(`มอบให้ทุกคนใน ${RANK[rank as RankKey].label}`);
           }} className="rounded-lg bg-primary px-3 py-1.5 text-[12.5px] font-bold text-white">มอบทั้ง rank</button>
         </div>

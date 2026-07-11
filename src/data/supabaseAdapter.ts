@@ -56,7 +56,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, rankTiers, paymentAccounts, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, rankTiers, paymentAccounts, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -81,6 +81,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('campaigns').select('*'),
         sb.from('campaign_awards').select('*'),
         sb.from('push_subscriptions').select('*'),
+        sb.from('push_prefs').select('*'),
+        sb.from('push_config').select('*'),
         sb.from('rank_tiers').select('*'),
         sb.from('payment_accounts').select('*'),
         sb.from('shop_settings').select('*'),
@@ -127,6 +129,8 @@ export const supabaseAdapter: PersistenceAdapter = {
       campaigns: (campaigns.data ?? []) as Database['campaigns'],
       campaignAwards: (campaignAwards.data ?? []) as Database['campaignAwards'],
       pushSubscriptions: (pushSubscriptions.data ?? []) as Database['pushSubscriptions'],
+      pushPrefs: (pushPrefs.data ?? []) as Database['pushPrefs'],
+      pushConfig: (pushConfig.data ?? []) as Database['pushConfig'],
       rankTiers: (rankTiers.data ?? []) as Database['rankTiers'],
       paymentAccounts: (paymentAccounts.data ?? []) as Database['paymentAccounts'],
       settings: s
@@ -173,6 +177,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     await syncTable(sb, 'campaigns', next.campaigns as unknown as Row[], base.campaigns as unknown as Row[]);
     await syncTable(sb, 'campaign_awards', next.campaignAwards as unknown as Row[], base.campaignAwards as unknown as Row[]);
     await syncTable(sb, 'push_subscriptions', next.pushSubscriptions as unknown as Row[], base.pushSubscriptions as unknown as Row[]);
+    await syncTable(sb, 'push_prefs', next.pushPrefs as unknown as Row[], base.pushPrefs as unknown as Row[], 'user_id');
+    await syncTable(sb, 'push_config', next.pushConfig as unknown as Row[], base.pushConfig as unknown as Row[], 'key');
     await syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]);
 
     await syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never));

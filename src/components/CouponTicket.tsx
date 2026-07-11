@@ -115,10 +115,12 @@ export function CouponReceived() {
   if (!ready || !uid) return null;
   const unseen = usableGrantsFor(db, uid).filter((x) => !seen.includes(x.grant.id));
   if (!unseen.length) return null;
-  const { grant, coupon } = unseen[0];
+  const { coupon } = unseen[0];
 
+  // ONE popup per batch — dismissing marks EVERY unseen grant seen. (Before: one popup per coupon,
+  // so an account holding several fresh coupons chain-popped on every reload — the "หลายคูปองแวปๆ".)
   const dismiss = () => {
-    const next = [...seen, grant.id];
+    const next = [...seen, ...unseen.map((x) => x.grant.id)];
     setSeen(next);
     try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* private mode */ }
   };
@@ -127,10 +129,11 @@ export function CouponReceived() {
     <div className="fixed inset-0 z-[110] grid place-items-center bg-black/75 p-6" onClick={dismiss}>
       <div className="w-full max-w-[380px] text-center" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 text-[13px] font-semibold text-ink-muted2">🎉 คุณได้รับคูปองส่วนลด!</div>
-        <div className="mb-4 text-2xl font-extrabold text-ink">เย่! ใช้ได้เลย</div>
+        <div className="mb-4 text-2xl font-extrabold text-ink">{unseen.length > 1 ? `ได้รับ ${unseen.length} ใบ!` : 'เย่! ใช้ได้เลย'}</div>
         <div className="animate-couponPop">
           <CouponTicket coupon={coupon} size="lg" />
         </div>
+        {unseen.length > 1 && <div className="mt-3 text-[13px] font-bold text-primary-soft">+ อีก {unseen.length - 1} ใบ รออยู่ใน “คูปองของฉัน”</div>}
         <button onClick={dismiss} className="mt-6 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">เก็บไว้ในกระเป๋า</button>
         <div className="mt-2 text-[11.5px] text-ink-faint">ดูคูปองทั้งหมดได้ที่ “คูปองของฉัน”</div>
       </div>

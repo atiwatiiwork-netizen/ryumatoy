@@ -10,7 +10,7 @@ import { cx } from '@/components/ui';
 import { uploadImage } from '@/lib/upload';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { approveRemainingPayment, setParcel } from '@/data/mutations';
-import { sendPush, subsForUsers } from '@/lib/push';
+import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
 
 const CARRIERS: { key: Carrier; label: string }[] = [
@@ -84,7 +84,8 @@ export default function OrdersHubPage() {
                   </div>
                   <button onClick={() => {
                     dispatch(approveRemainingPayment(r.id));
-                    sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ชำระครบ — รอจัดส่งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                    if (pushEnabled(db, 'rp_approved'))
+                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ชำระครบ — รอจัดส่งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
                     flash('อนุมัติส่วนต่างแล้ว');
                   }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
                 </div>
@@ -165,7 +166,8 @@ function ParcelRow({ ticket, label, dispatch, flash }: {
     if (!no.trim()) return flash('ใส่เลขพัสดุก่อน');
     dispatch(setParcel(ticket.id, carrier, no.trim(), img));
     const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
-    sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
+    if (pushEnabled(db, 'parcel'))
+      sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
     flash(`จัดส่งแล้ว · ${ticket.ticket_no} จบกระบวนการ ✓`);
   };
 

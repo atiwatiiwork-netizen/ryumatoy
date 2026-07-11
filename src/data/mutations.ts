@@ -587,6 +587,20 @@ export const removePushSubscriptionByEndpoint = (endpoint: string) => (db: Datab
   pushSubscriptions: db.pushSubscriptions.filter((s) => s.endpoint !== endpoint),
 });
 
+/** Save a customer's broadcast preferences (สินค้าใหม่ pushes). Empty arrays = รับทั้งหมด →
+ *  the row is dropped entirely (absent row = default-all, keeps the table tiny). */
+export const setPushPrefs = (userId: string, makerIds: string[], franchiseIds: string[]) => (db: Database): Database => {
+  const rest = db.pushPrefs.filter((p) => p.user_id !== userId);
+  if (makerIds.length === 0 && franchiseIds.length === 0) return { ...db, pushPrefs: rest };
+  return { ...db, pushPrefs: [{ user_id: userId, maker_ids: makerIds, franchise_ids: franchiseIds, updated_at: new Date().toISOString() }, ...rest] };
+};
+
+/** Admin: enable/disable one push trigger (Push Control). Missing key = enabled. */
+export const setPushConfig = (key: string, enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  pushConfig: [{ key, enabled }, ...db.pushConfig.filter((c) => c.key !== key)],
+});
+
 /** Grant pending rewards for a user across every ACTIVE event (each no-ops if nothing is due).
  *  Called from approveOrder so a newly-approved pre-order immediately mints any reward it just
  *  unlocked. Paused (active=false) events never grant — otherwise an old event with an overlapping

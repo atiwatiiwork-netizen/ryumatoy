@@ -71,6 +71,23 @@ export const subsForUsers = (db: Database, userIds: string[]): PushRow[] =>
 export const subsForProductOwners = (db: Database, productId: string): PushRow[] =>
   subsForUsers(db, [...new Set(db.tickets.filter((t) => t.product_id === productId).map((t) => t.owner_id))]);
 
+/** Admin kill-switch per trigger (Push Control page). Missing key = enabled. */
+export const pushEnabled = (db: Database, key: string): boolean =>
+  db.pushConfig.find((c) => c.key === key)?.enabled ?? true;
+
+/** Devices to receive a NEW-PRODUCT broadcast, honoring each customer's ค่าย/เรื่อง preferences.
+ *  No pref row (or an empty dimension) = รับทั้งหมด; both dimensions set = AND. Account events
+ *  (order approved, parcel, …) are NOT filtered — only these broadcasts are. */
+export function subsForNewProduct(db: Database, product: { manufacturer_id: string; franchise_id: string }): PushRow[] {
+  return db.pushSubscriptions.filter((s) => {
+    const p = db.pushPrefs.find((x) => x.user_id === s.user_id);
+    if (!p) return true;
+    const mOk = !p.maker_ids?.length || p.maker_ids.includes(product.manufacturer_id);
+    const fOk = !p.franchise_ids?.length || p.franchise_ids.includes(product.franchise_id);
+    return mOk && fOk;
+  });
+}
+
 /** Send a notification to a set of devices, then prune endpoints the browser has revoked.
  *  Fire-and-forget from admin flows — a push must never block or fail the actual save. */
 export async function sendPush(subs: PushRow[], payload: PushPayload, dispatch?: Dispatch): Promise<{ sent: number; gone: string[] }> {
