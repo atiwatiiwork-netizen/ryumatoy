@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { fillMissingTicketsFor } from '@/data/mutations';
+import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { store } from '@/data/store';
 import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
 import { Icon, type IconName } from './Icon';
@@ -29,6 +31,7 @@ const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] 
  */
 export function CustomerShell({ children }: { children: ReactNode }) {
   const path = usePathname();
+  const dispatch = useDispatch();
   const { count: cartCount } = useCart();
   // cart lives in localStorage → the server always renders 0. Show the badge only after mount so
   // the first client render matches the server HTML (fixes a hydration mismatch on reload with items).
@@ -44,6 +47,18 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   }, [flash]);
   const db = useDatabase();
   const CURRENT_USER_ID = useCurrentUserId();
+  // SELF-HEAL "จ่ายแล้วตั๋วหาย": a split flush (mobile backgrounding mid-save on a Diamond
+  // auto-approve) can persist the order without its tickets. Re-issue MY missing tickets once per
+  // session as soon as the data shows a gap — the customer gets them back without contacting admin.
+  const healed = useRef(false);
+  useEffect(() => {
+    if (healed.current || !CURRENT_USER_ID) return;
+    const missing = unmatchedApprovedItems(db, CURRENT_USER_ID).length;
+    if (missing === 0) return;
+    healed.current = true;
+    dispatch(fillMissingTicketsFor(CURRENT_USER_ID));
+    flash(`กู้คืนใบพรีที่หายไป ${missing} ใบแล้ว ✓`);
+  }, [db, CURRENT_USER_ID, dispatch, flash]);
   const { needsApproval, isLoggedIn, authReady } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   const isActive = (href: string) =>

@@ -1,6 +1,6 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
-import { nextTicketNo } from '../domain/services/tickets';
+import { nextTicketNo, unmatchedApprovedItems } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct } from '../domain/services/coupons';
@@ -80,12 +80,18 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
       ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, order_id: orderId, discount_amount: discount } : g))
       : db.couponGrants;
     const withOrder = { ...db, orders: [order, ...db.orders], couponGrants };
-    // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step
-    return autoApprove ? approveOrder(orderId)(withOrder) : withOrder;
+    // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step.
+    // mintRewards:false — this runs in the CUSTOMER session, which RLS forbids from minting event
+    // coupons/awards; minting here would abort the whole flush and lose the tickets. Their rewards
+    // are credited by the admin sweep (/admin/events) or the next admin-approved order.
+    return autoApprove ? approveOrder(orderId, { mintRewards: false })(withOrder) : withOrder;
   };
 }
 
-/** Admin approves a slip: mark order approved + auto-issue one ticket per item (PRD §9 step 6). */
+/** Admin approves a slip: mark order approved + auto-issue one ticket per item (PRD §9 step 6).
+ *  opts.mintRewards (default true) — event reward coupons are minted ONLY in the admin session;
+ *  the customer-side Diamond auto-approve passes false because RLS forbids customers minting
+ *  coupons/awards, and a blocked mint would abort the whole flush (tickets included). */
 /** One-shot repair for orders damaged by the old ticket_no collision bug. Idempotent + safe:
  *  (1) renumbers any DUPLICATE ticket_no (keeps the first, gives later dups the next free number for
  *      their prefix) so persistence stops failing on the UNIQUE constraint; existing good tickets keep
@@ -136,7 +142,8 @@ export const repairTickets = () => (db: Database): Database => {
   return { ...out, tickets: [...issued, ...out.tickets] };
 };
 
-export function approveOrder(orderId: string) {
+export function approveOrder(orderId: string, opts: { mintRewards?: boolean } = {}) {
+  const mintRewards = opts.mintRewards ?? true;
   return (db: Database): Database => {
     const order = db.orders.find((o) => o.id === orderId);
     if (!order || order.status !== 'pending_approval') return db;
@@ -197,8 +204,8 @@ export function approveOrder(orderId: string) {
 
     // Event/กิจกรรม: this approval may have pushed the buyer over a threshold → auto-mint any reward
     // coupons now (admin session = RLS-allowed to grant). Runs before the rank early-return so it
-    // always applies.
-    const withRewards = grantAllCampaignRewards(order.user_id)(updated);
+    // always applies. Skipped for the customer-side Diamond auto-approve (mintRewards:false).
+    const withRewards = mintRewards ? grantAllCampaignRewards(order.user_id)(updated) : updated;
 
     // rank progress counts APPROVED pieces → auto-raise a request when a threshold is crossed
     const user = db.users.find((u) => u.id === order.user_id);
@@ -600,6 +607,41 @@ export const setPushConfig = (key: string, enabled: boolean) => (db: Database): 
   ...db,
   pushConfig: [{ key, enabled }, ...db.pushConfig.filter((c) => c.key !== key)],
 });
+
+/**
+ * SELF-HEAL: re-issue this customer's own missing tickets (approved-order items with no matching
+ * ticket). Runs automatically in CustomerShell on load, so a split flush (mobile backgrounding on a
+ * Diamond auto-approve — orders wrote, tickets didn't) fixes itself the next time they open the app.
+ * RLS-legal: a customer may insert their OWN tickets. Snapshot values come from the order item.
+ */
+export const fillMissingTicketsFor = (userId: string) => (db: Database): Database => {
+  const missing = unmatchedApprovedItems(db, userId);
+  if (missing.length === 0) return db;
+  const issued: PreorderTicket[] = [];
+  for (const { order, item } of missing) {
+    const product = db.products.find((p) => p.id === item.product_id);
+    if (!product) continue;
+    const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
+    const unitPrice = item.unit_price ?? product.price_total;
+    const unitDeposit = item.unit_deposit ?? product.deposit_amount;
+    const when = order.approved_at ?? order.created_at;
+    issued.push({
+      id: id('t'), ticket_no: nextTicketNo(db, abbr, new Date(), issued),
+      product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
+      owner_id: userId, original_buyer_id: userId, qty: item.qty,
+      deposit_paid: item.deposit_amount ?? unitDeposit * item.qty, // line snapshot (rank perk included)
+      remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
+      remaining_paid: 0, status: 'active', product_status: product.status, qr_code_url: '',
+      created_at: when, approved_at: when,
+    });
+  }
+  return issued.length ? { ...db, tickets: [...issued, ...db.tickets] } : db;
+};
+
+/** Admin sweep: credit any earned-but-unminted event rewards for EVERY member — covers Diamond
+ *  auto-approved orders (customer sessions can't mint) and repaired tickets. Idempotent. */
+export const grantRewardsSweep = () => (db: Database): Database =>
+  db.users.filter((u) => !u.is_admin && u.id !== 'u-admin').reduce((acc, u) => grantAllCampaignRewards(u.id)(acc), db);
 
 /** Grant pending rewards for a user across every ACTIVE event (each no-ops if nothing is due).
  *  Called from approveOrder so a newly-approved pre-order immediately mints any reward it just

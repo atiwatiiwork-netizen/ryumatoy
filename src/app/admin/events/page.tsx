@@ -7,7 +7,7 @@ import { uploadImage } from '@/lib/upload';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
-import { genId, upsertCampaign, deleteCampaign } from '@/data/mutations';
+import { genId, upsertCampaign, deleteCampaign, grantRewardsSweep } from '@/data/mutations';
 import { campaignLive, sortedTiers } from '@/domain/services/campaigns';
 import type { Campaign, CampaignTier, CouponScope } from '@/domain/entities';
 
@@ -181,7 +181,17 @@ export default function AdminEventsPage() {
         </Panel>
 
         <Panel>
-          <div className="mb-3 font-bold">กิจกรรมทั้งหมด ({db.campaigns.length})</div>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="font-bold">กิจกรรมทั้งหมด ({db.campaigns.length})</span>
+            {/* Diamond auto-approve (customer session) can't mint rewards — this credits anything owed */}
+            <button onClick={() => {
+              let before = 0, after = 0;
+              dispatch((d) => { before = d.campaignAwards.length; return d; });
+              dispatch(grantRewardsSweep());
+              dispatch((d) => { after = d.campaignAwards.length; return d; });
+              flash(after > before ? `เติมรางวัลย้อนหลัง ${after - before} รายการ ✓` : 'ไม่มีรางวัลค้างจ่าย ✓');
+            }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-semibold text-ink-muted2">🔄 ตรวจจ่ายรางวัลย้อนหลัง</button>
+          </div>
           {db.campaigns.length === 0 ? (
             <div className="py-8 text-center text-[13px] text-ink-faint">ยังไม่มีกิจกรรม — สร้างด้านซ้าย</div>
           ) : (

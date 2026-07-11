@@ -1,12 +1,15 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useToast } from '@/state/ToastProvider';
 import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
+import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { repairTickets } from '@/data/mutations';
 import type { ProductStatus } from '@/domain/entities';
 
 const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'arrived'];
@@ -14,6 +17,11 @@ const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'a
 export default function AdminDashboardPage() {
   const router = useRouter();
   const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  // "จ่ายแล้วตั๋วหาย" watchdog — approved-order items with no matching ticket (split flush)
+  const lostTickets = unmatchedApprovedItems(db);
+  const lostPeople = new Set(lostTickets.map((x) => x.order.user_id)).size;
 
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
@@ -57,6 +65,14 @@ export default function AdminDashboardPage() {
         <Stat label="ยอดเงินวันนี้" value={baht(todayIncome)} icon="payments" green />
         <Stat label="Stock ใกล้หมด" value={String(lowStock)} icon="bolt" />
       </div>
+
+      {lostTickets.length > 0 && (
+        <div className="mb-[22px] rounded-2xl border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] p-5">
+          <div className="mb-2 flex items-center gap-2 font-bold text-primary-soft"><Icon name="warning" size={18} /> ตั๋วหายจากออเดอร์ที่อนุมัติแล้ว ({lostTickets.length} ใบ · {lostPeople} คน)</div>
+          <div className="mb-3 text-[12.5px] text-ink-muted2">ออเดอร์เขียนสำเร็จแต่ตั๋วเขียนไม่ทัน (มือถือหลุดกลางเซฟ) — ระบบจะกู้เองเมื่อลูกค้าเปิดแอป หรือกดซ่อมทันทีที่นี่</div>
+          <button onClick={() => { dispatch(repairTickets()); flash(`ซ่อมตั๋วแล้ว ${lostTickets.length} ใบ ✓`); }} className="rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">🔧 ซ่อมตั๋วทั้งหมดตอนนี้</button>
+        </div>
+      )}
 
       {arrivingSoon.length > 0 && (
         <div className="mb-[22px] animate-pulseRed rounded-2xl border border-[#2563eb]/40 bg-[#2563eb]/[0.1] p-5">
