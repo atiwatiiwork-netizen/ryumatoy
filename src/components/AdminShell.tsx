@@ -32,7 +32,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
   const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });
   const groups: { title?: string; items: NavItem[] }[] = [
-    { items: [it('/admin', 'dashboard', 'Dashboard')] },
+    { items: [it('/admin', 'dashboard', 'Dashboard'), it('/admin/analytics', 'sliders', 'วิเคราะห์รายเดือน')] },
     { title: 'สินค้า', items: [
       it('/admin/products', 'box', 'Pre-Order'),
       it('/admin/instock', 'store', 'In-Stock'),
