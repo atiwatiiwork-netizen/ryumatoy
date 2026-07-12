@@ -18,7 +18,10 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || '/';
+  // SECURITY: only ever open a SAME-ORIGIN path — a payload url must never navigate a trusted "Ryuma"
+  // notification to an external site (phishing). Coerce anything off-origin back to the home path.
+  let url = '/';
+  try { const u = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin); url = u.origin === self.location.origin ? u.pathname + u.search + u.hash : '/'; } catch { url = '/'; }
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((tabs) => {
     for (const t of tabs) { if ('focus' in t) { t.navigate(url); return t.focus(); } }
     return self.clients.openWindow(url);

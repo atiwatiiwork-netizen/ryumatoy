@@ -228,7 +228,13 @@ function LegacyCreate() {
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
     dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined }));
-    if (!fullPay) dispatch(setProductStatus(p.id, startStatus)); // ผลิต(รอโกดัง) / เดินทาง
+    // setProductStatus cascades to EVERY ticket of the SKU. Only apply it on a SKU with NO existing
+    // buyers — otherwise opening a fresh special round would flip earlier-round buyers' status (and
+    // skip the warehouse gate). SKUs that already have tickets keep their per-ticket status; advance
+    // the new round via the ยืนยันโกดัง gate. (audit W#2 — pending per-batch-status refactor)
+    const hasExistingTickets = db.tickets.some((t) => t.product_id === p.id);
+    if (!fullPay && !hasExistingTickets) dispatch(setProductStatus(p.id, startStatus));
+    else if (!fullPay && hasExistingTickets) flash('เปิดรอบใหม่แล้ว — สถานะผู้พรีเดิมไม่ถูกแตะ (เลื่อนผ่านยืนยันโกดัง)');
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
   };

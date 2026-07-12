@@ -17,8 +17,12 @@ const toIso = (d: string): string | undefined => {
   const m = DATE_RE.exec(d);
   if (!m) return undefined;
   let [, dd, mm, yy] = m;
-  // 2-digit → +2000; Buddhist Era (25xx, some warehouse sheets use it) → -543 to Gregorian.
-  let y = Number(yy); if (y < 100) y += 2000; else if (y >= 2500) y -= 543;
+  // 2-digit → +2000; Buddhist Era (25xx four-digit, OR a 2-digit BE like 69 that widened to an
+  // implausibly-far-future 2069) → -543 to Gregorian. Warehouse sheets abbreviate the BE year too.
+  let y = Number(yy);
+  if (y < 100) y += 2000;
+  if (y >= 2500) y -= 543;
+  else if (y > new Date().getFullYear() + 5) y -= 543;
   const iso = new Date(Date.UTC(y, Number(mm) - 1, Number(dd)));
   return isNaN(iso.getTime()) ? undefined : iso.toISOString().slice(0, 10);
 };

@@ -70,8 +70,8 @@ export function InstallBellNudge({ userId }: { userId: string }) {
 
   const doInstall = async () => {
     if (!deferred) return;
-    try { await deferred.prompt(); const c = await deferred.userChoice; if (c.outcome === 'accepted') { setInstalled(true); flash('กำลังติดตั้ง… เปิดจากไอคอน Ryuma ได้เลย'); } setDeferred(null); }
-    catch { /* user dismissed */ }
+    try { await deferred.prompt(); const c = await deferred.userChoice; if (c.outcome === 'accepted') { setInstalled(true); setDeferred(null); flash('กำลังติดตั้ง… เปิดจากไอคอน Ryuma ได้เลย'); } /* dismissed → keep deferred so they can retry one-tap */ }
+    catch { /* prompt failed → keep deferred */ }
   };
   const doBell = async () => {
     if (busy) return;

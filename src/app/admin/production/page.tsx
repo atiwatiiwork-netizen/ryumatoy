@@ -26,11 +26,16 @@ export default function ProductionPage() {
   // open board (those are managed by the board — close the board first, then they show up here).
   const items = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status === 'open' && !inOpenBoard(db, p));
   const orderedOf = (pid: string) => orderedQtyOf(db, pid);
-  const finalOf = (pid: string) => Number(qty[pid] ?? String(orderedOf(pid))) || 0;
+  // clamp to ≥ ยอดจอง so the surplus preview is truthful — closeProduction clamps the same way, so a
+  // typed value below the booked qty would otherwise show a wrong "ไม่มีส่วนเกิน". (audit A#7)
+  const finalOf = (pid: string) => Math.max(orderedOf(pid), Number(qty[pid] ?? String(orderedOf(pid))) || 0);
   const chosen = items.filter((p) => sel[p.id]);
 
   const close = () => {
     if (chosen.length === 0) return flash('เลือกรายการที่จะสั่งผลิตก่อน');
+    // irreversible (writes a round log + flips all tickets to production) → confirm first (audit A#8)
+    const totalFinal = chosen.reduce((s, p) => s + finalOf(p.id), 0);
+    if (!window.confirm(`ปิดรอบสั่งผลิต ${chosen.length} รายการ · รวมสั่ง ${totalFinal} ชิ้น?\nยืนยันแล้วย้อนกลับไม่ได้`)) return;
     dispatch(closeProduction(chosen.map((p) => ({ productId: p.id, finalQty: finalOf(p.id) }))));
     flash(`ปิดรอบ → ผลิต ${chosen.length} รายการ`);
     setSel({});

@@ -154,10 +154,9 @@ export function CustomerShell({ children }: { children: ReactNode }) {
             <Icon name="cart" size={19} />
             {count > 0 && <span className="absolute -right-1 -top-1 grid h-[17px] min-w-[17px] place-items-center rounded-full bg-primary-bright px-1 text-[10px] font-bold text-white">{count}</span>}
           </Link>
-          <button aria-label="การแจ้งเตือน" className="relative grid h-9 w-9 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">
+          <Link href="/profile" aria-label="การแจ้งเตือน" className="grid h-9 w-9 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">
             <Icon name="bell" size={18} />
-            <span className="absolute right-2.5 top-2.5 h-[6px] w-[6px] rounded-full bg-primary-bright" />
-          </button>
+          </Link>
         </div>
       </header>
 

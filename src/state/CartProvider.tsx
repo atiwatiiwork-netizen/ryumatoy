@@ -54,7 +54,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const add = useCallback((line: Omit<CartLine, 'qty'> & { qty?: number }) => {
     const qty = line.qty ?? 1;
     setLines((prev) => {
-      const i = prev.findIndex((l) => same(l, line.productId, line.variantId));
+      // match on batchId too, so a special-round line (its own price) never MERGES into a normal
+      // pre-order line of the same product and inherits the wrong deposit/price. (audit: cart batchId)
+      const i = prev.findIndex((l) => same(l, line.productId, line.variantId) && l.batchId === line.batchId);
       if (i >= 0) {
         const next = [...prev];
         next[i] = { ...next[i], qty: next[i].qty + qty };

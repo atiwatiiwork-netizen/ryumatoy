@@ -3,7 +3,7 @@ import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, unmatchedApprovedItems } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
-import { couponMatchesProduct, orphanUsedGrants } from '../domain/services/coupons';
+import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -60,8 +60,22 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     });
     // an in-stock coupon reduces what's transferred now (capped so total never goes below 0)
     const grossDeposit = items.reduce((s, i) => s + i.deposit_amount, 0);
-    const validGrant = coupon && db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active');
-    const discount = validGrant ? Math.max(0, Math.min(coupon!.discount, grossDeposit)) : 0;
+    // SECURITY: re-derive the discount from the coupon TEMPLATE here — never trust `coupon.discount`
+    // (it only drives the UI; a crafted request could pass any number). Re-validate active/expiry/scope/
+    // target and cap at the MATCHING in-stock subtotal, so a coupon can't discount more than the
+    // in-stock products it actually targets. (audit H1/H2)
+    let validGrant = coupon ? db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active') : undefined;
+    let discount = 0;
+    if (validGrant) {
+      const tpl = db.coupons.find((c) => c.id === validGrant!.coupon_id);
+      const base = tpl ? items.reduce((s, i) => {
+        const p = db.products.find((x) => x.id === i.product_id);
+        if (!p || !(p.is_stock ?? false) || !scopeAllows(tpl.scope, true) || !couponMatchesProduct(tpl, p)) return s;
+        return s + i.deposit_amount;
+      }, 0) : 0;
+      discount = tpl && tpl.active && !couponExpired(tpl, new Date()) ? couponDiscount(tpl, Math.min(base, grossDeposit)) : 0;
+      if (discount <= 0) validGrant = undefined; // nothing valid to discount → don't burn the grant
+    }
     const now = new Date().toISOString();
     const order: Order = {
       id: orderId,
@@ -220,6 +234,9 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean } = 
  *  Any coupon spent on the order is returned to the customer (grant back to active). */
 export const rejectOrder = (orderId: string) => (db: Database): Database => {
   const order = db.orders.find((o) => o.id === orderId);
+  // Only a still-pending order may be rejected. Rejecting an already-approved order would return the
+  // coupon while its tickets + in-stock deposit reductions stay applied = double benefit. (audit M1)
+  if (!order || order.status !== 'pending_approval') return db;
   return {
     ...db,
     orders: db.orders.map((o) => (o.id === orderId ? { ...o, status: 'rejected' as const } : o)),
@@ -409,9 +426,18 @@ export const editBatch = (batchId: string, patch: { price?: number; qty?: number
 export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply) => (db: Database): Database => {
   const now = new Date().toISOString();
   const ticket = db.tickets.find((t) => t.id === ticketId);
-  const validGrant = coupon && ticket && db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active');
   const due = ticket ? ticket.remaining_amount - ticket.remaining_paid : 0;
-  const discount = validGrant ? Math.max(0, Math.min(coupon!.discount, due)) : 0;
+  // SECURITY: re-derive from the coupon TEMPLATE + re-validate (active/expiry/scope=pre-order/target)
+  // — never trust the client-passed discount. (audit H1/H2)
+  let validGrant = coupon && ticket ? db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active') : undefined;
+  let discount = 0;
+  if (validGrant && ticket) {
+    const tpl = db.coupons.find((c) => c.id === validGrant!.coupon_id);
+    const product = db.products.find((p) => p.id === ticket.product_id);
+    const ok = !!tpl && tpl.active && !couponExpired(tpl, new Date()) && scopeAllows(tpl.scope, false) && (!product || couponMatchesProduct(tpl, product));
+    discount = ok ? couponDiscount(tpl!, due) : 0;
+    if (discount <= 0) validGrant = undefined;
+  }
   return {
     ...db,
     // drop the discount off the ticket's remaining_amount so the (already reduced) slip settles it in full

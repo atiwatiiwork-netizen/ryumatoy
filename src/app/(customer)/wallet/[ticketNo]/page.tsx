@@ -13,7 +13,7 @@ import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
-import { listForResale, submitRemainingPayment } from '@/data/mutations';
+import { submitRemainingPayment } from '@/data/mutations';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
@@ -83,8 +83,9 @@ export default function TicketDetailPage() {
   };
 
   const resell = () => {
-    dispatch(listForResale(ticket.id, CURRENT_USER_ID, ticket.deposit_paid + ticket.remaining_amount));
-    flash('ลงขาย P2P แล้ว · รอผู้สนใจ');
+    // P2P Market ยังไม่เปิด (parked) — listForResale จะล็อกตั๋วแบบกู้คืนไม่ได้ + ยังไม่มีตลาด/ปุ่มยกเลิก
+    // จึงกันไว้ก่อน ให้ตรงกับสถานะ "เร็วๆ นี้" ที่อื่น (audit: P2P dead-end). ปลดล็อกเมื่อระบบ P2P พร้อม.
+    flash('ตลาดซื้อขายใบพรี (P2P) กำลังพัฒนา — เร็วๆ นี้');
   };
 
   return (
