@@ -12,7 +12,7 @@ import { BackBar, cx } from '@/components/ui';
 import { AuthScreen } from '@/components/AuthScreen';
 import { submitSourcingRequest, resendSourcingRequest, paySourcing } from '@/data/mutations';
 import { sendPush, subsForAdmins, pushEnabled } from '@/lib/push';
-import { sourcingStatusOf, sourcingDaysLeft, sourcingEtaLabel, transportLabel, openSourcingCount, MAX_OPEN_REQUESTS } from '@/domain/services/sourcing';
+import { sourcingStatusOf, sourcingDaysLeft, sourcingEtaLabel, sourcingEtaConfig, transportLabel, openSourcingCount, MAX_OPEN_REQUESTS } from '@/domain/services/sourcing';
 import { useSmartBack } from '@/lib/nav';
 import type { SourcingRequest } from '@/domain/entities';
 
@@ -39,7 +39,9 @@ export default function SourcingPage() {
   return (
     <div className="mx-auto max-w-[640px]">
       <BackBar title="หาของ" onBack={goBack} />
-      <div className="mb-4 text-[12.5px] leading-relaxed text-ink-faint">อยากได้ตัวไหนที่ร้านยังไม่มี ส่งรูป+ชื่อมา เดี๋ยวเราหาให้ — ตอบกลับพร้อมราคา/มัดจำ แจ้งเตือนเด้งถึงมือถือ</div>
+      <div className="mb-3 text-[12.5px] leading-relaxed text-ink-faint">อยากได้ตัวไหนที่ร้านยังไม่มี ส่งรูป+ชื่อมา เดี๋ยวเราหาให้ — ตอบกลับพร้อมราคา/มัดจำ แจ้งเตือนเด้งถึงมือถือ</div>
+
+      <SourcingRules />
 
       {/* ① ส่งเรื่องหาของ */}
       {showForm ? (
@@ -78,6 +80,34 @@ export default function SourcingPage() {
           {history.map((r) => <HistoryCard key={r.id} r={r} open={open} />)}
         </Section>
       )}
+    </div>
+  );
+}
+
+/** กติกาการหาของ — ranges อ่านจาก config จริง (แอดมินแก้แล้วข้อความนี้ขยับตาม). */
+function SourcingRules() {
+  const db = useDatabase();
+  const c = sourcingEtaConfig(db);
+  const rules: { emoji: string; head: string; body: React.ReactNode }[] = [
+    { emoji: '📦', head: 'สินค้าตีเป็นมือ 2 ทุกรายการ', body: 'กล่องน้ำตาลอาจเป็นกล่องอื่น ไม่ใช่กล่องของค่าย' },
+    { emoji: '🚛', head: 'ราคาที่แจ้งกลับ = รวมส่งแล้ว', body: 'ไม่มีบวกเพิ่มภายหลัง' },
+    { emoji: '🛡️', head: 'คืนมัดจำ 100% ทุกกรณี', body: 'หากผู้ขายไม่ส่งของ หรือรายการถูกยกเลิก' },
+    { emoji: '⏱️', head: 'ระยะเวลาคร่าวๆ', body: <>🚚 รถ <b className="text-ink">{c.truck_min}-{c.truck_max} วัน</b> · 🚢 เรือ <b className="text-ink">{c.ship_min}-{c.ship_max} วัน</b><span className="block text-[11px] text-ink-faint">ปกติส่งรถ — บางช่วงด่านเข้ม รถเข้าไม่ได้ ต้องสลับเป็นเรือ</span></> },
+  ];
+  return (
+    <div className="mb-5 overflow-hidden rounded-2xl border border-[#d4af37]/25 bg-gradient-to-br from-[#d4af37]/[0.07] to-transparent">
+      <div className="border-b border-[#d4af37]/20 px-4 py-2.5 text-[13px] font-extrabold text-[#f1d27a]">📜 กติกาการหาของ</div>
+      <div className="flex flex-col divide-y divide-hair">
+        {rules.map((r) => (
+          <div key={r.head} className="flex gap-3 px-4 py-2.5">
+            <span className="text-[16px] leading-6">{r.emoji}</span>
+            <div className="min-w-0">
+              <div className="text-[12.5px] font-bold text-ink">{r.head}</div>
+              <div className="text-[12px] leading-relaxed text-ink-muted2">{r.body}</div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -294,7 +324,7 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
             )}
           </div>
         </div>
-        <label className="block"><span className="mb-1 block text-[12px] font-semibold text-ink-muted">โน้ตเพิ่มเติม (ไม่บังคับ)</span><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น เอาสีพิเศษ / กล่องต้องสวย" /></label>
+        <label className="block"><span className="mb-1 block text-[12px] font-semibold text-ink-muted">โน้ตเพิ่มเติม (ไม่บังคับ)</span><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="ระบุ สี / เวอร์ชั่น ถ้ามี" /></label>
         <button onClick={submit} disabled={busy} className="rounded-xl bg-cta py-3 text-sm font-bold text-white disabled:opacity-50">🔎 ส่งเรื่องให้ร้านหา</button>
       </div>
     </div>

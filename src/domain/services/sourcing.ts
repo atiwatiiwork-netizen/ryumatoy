@@ -30,7 +30,7 @@ export function openSourcingCount(db: Database, userId: string, now: Date = new 
 
 // ── transport ETA config (app_config key 'sourcing_eta') ────────────────────
 export interface SourcingEtaConfig { truck_min: number; truck_max: number; ship_min: number; ship_max: number }
-const ETA_DEFAULT: SourcingEtaConfig = { truck_min: 7, truck_max: 12, ship_min: 25, ship_max: 40 };
+const ETA_DEFAULT: SourcingEtaConfig = { truck_min: 7, truck_max: 10, ship_min: 15, ship_max: 25 };
 
 export function sourcingEtaConfig(db: Database): SourcingEtaConfig {
   const row = db.appConfig.find((c) => c.key === 'sourcing_eta');
