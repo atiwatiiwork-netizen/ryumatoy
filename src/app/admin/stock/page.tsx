@@ -104,14 +104,24 @@ function WarehouseCard({ product, tickets, sf }: { product: Product; tickets: Pr
     } catch { flash('อ่านรูปไม่สำเร็จ — ลองวางข้อความแทน'); }
     finally { setOcrBusy(false); }
   };
+  const pushArrived = (owner_id: string, ticket_no: string) => {
+    if (pushEnabled(db, 'warehouse'))
+      sendPush(subsForUsers(db, [owner_id]), { title: '🚢 ของถึงโกดังจีนแล้ว!', body: `${product.series_name} · กำลังส่งมาไทย — แตะดูกำหนดถึง`, url: `/wallet/${encodeURIComponent(ticket_no)}` }, dispatch).catch(() => {});
+  };
   const confirm = (t: PreorderTicket) => {
     if (!effDate) return flash('ยังไม่มีวันเข้าโกดัง — จับคู่ SF หรือใส่วันเอง');
     dispatch(confirmWarehouse(t.id, { date: effDate, transport: effTransport, slip }));
-    if (pushEnabled(db, 'warehouse'))
-      sendPush(subsForUsers(db, [t.owner_id]), { title: '🚢 ของถึงโกดังจีนแล้ว!', body: `${product.series_name} · กำลังส่งมาไทย — แตะดูกำหนดถึง`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+    pushArrived(t.owner_id, t.ticket_no);
     flash(`ยืนยันโกดัง · ${t.ticket_no} → กำลังส่งมาไทย ✓`);
   };
-  const confirmAll = () => { if (!effDate) return flash('ยังไม่มีวันเข้าโกดัง'); tickets.forEach(confirm); };
+  const confirmAll = () => {
+    if (!effDate) return flash('ยังไม่มีวันเข้าโกดัง');
+    tickets.forEach((t) => dispatch(confirmWarehouse(t.id, { date: effDate, transport: effTransport, slip })));
+    // push ONCE per owner — a customer who bought N units of the round shouldn't get N identical alerts
+    const seen = new Set<string>();
+    for (const t of tickets) { if (!seen.has(t.owner_id)) { seen.add(t.owner_id); pushArrived(t.owner_id, t.ticket_no); } }
+    flash(`ยืนยันโกดัง ${tickets.length} ตั๋ว → กำลังส่งมาไทย ✓`);
+  };
 
   return (
     <div className="rounded-xl border border-subtle bg-surface-2 p-3.5">

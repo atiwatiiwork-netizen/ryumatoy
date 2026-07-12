@@ -374,7 +374,11 @@ export const confirmWarehouse = (ticketId: string, opts: { date: string; transpo
   const productTickets = tickets.filter((x) => x.product_id === t.product_id);
   const allMoved = productTickets.length > 0 && productTickets.every((x) => x.product_status !== 'production');
   const products = allMoved
-    ? db.products.map((p) => (p.id === t.product_id && p.status === 'production' ? { ...p, status: 'shipping' as const, shipped_at: p.shipped_at ?? opts.date } : p))
+    ? db.products.map((p) => (p.id === t.product_id && p.status === 'production'
+        // lift the product AND refresh the 'ผลิต · รอเข้าโกดัง' placeholder so the shop detail page
+        // doesn't keep showing "ผลิต" on a product that's now กำลังเดินทาง.
+        ? { ...p, status: 'shipping' as const, shipped_at: p.shipped_at ?? opts.date, eta_note: 'กำลังเดินทางมาไทย' }
+        : p))
     : db.products;
   return { ...db, tickets, products };
 };

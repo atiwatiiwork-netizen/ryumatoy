@@ -55,9 +55,18 @@ export function ticketSfCode(db: Database, t: PreorderTicket): string | undefine
   return req?.sf_code || db.products.find((p) => p.id === t.product_id)?.sf_code;
 }
 
-/** A ticket still in 'production' with no warehouse date = waiting for the warehouse gate (the Filter). */
+/** Products that flow through the China-warehouse gate = special rounds (have a ProductBatch) or
+ *  sourcing items (have a sourcing request). NORMAL pre-order boards have neither while in production,
+ *  so they keep their own Status-tab flow (with the China→ไทย tracking input) — the warehouse gate does
+ *  not touch them. Scopes both the queue and the StatusRow gate to exactly the owner's stated scope. */
+export function usesWarehouseGate(db: Database, productId: string): boolean {
+  return db.batches.some((b) => b.product_id === productId) || db.sourcingRequests.some((r) => r.product_id === productId);
+}
+
+/** A ticket still in 'production' with no warehouse date, on a warehouse-gated product = waiting for the
+ *  warehouse gate (the Filter). */
 export function awaitingWarehouse(db: Database, t: PreorderTicket): boolean {
-  return t.product_status === 'production' && !t.warehouse_at;
+  return t.product_status === 'production' && !t.warehouse_at && usesWarehouseGate(db, t.product_id);
 }
 
 /** Does a product still have ticket(s) waiting for the warehouse gate? Used to STOP the old Status-tab
