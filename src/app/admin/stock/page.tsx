@@ -286,7 +286,8 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     let newBatchId = '';
     dispatch((d) => { newBatchId = d.batches.find((x) => x.product_id === b.product_id && x.status === 'open')?.id ?? ''; return d; });
     if (p && pushEnabled(db, 'restock'))
-      sendPush(subsForNewProduct(db, p), { title: '🔥 มาเพิ่มแล้ว!', body: `${p.series_name} · รอบใหม่ ${q} ชิ้น @ ${baht(Number(rp) || b.price_total)}`, url: `/shop/${b.product_id}${newBatchId ? `?batch=${newBatchId}` : ''}` }, dispatch).catch(() => {});
+      // ส่งแค่ชื่อ + ราคา — ไม่บอกจำนวนที่มาเพิ่ม (สร้างความเร่งด่วน + ไม่เผยสต๊อก)
+      sendPush(subsForNewProduct(db, p), { title: '🔥 มาเพิ่มแล้ว!', body: `${p.series_name} · เปิดรอบใหม่ ${baht(Number(rp) || b.price_total)}`, url: `/shop/${b.product_id}${newBatchId ? `?batch=${newBatchId}` : ''}` }, dispatch).catch(() => {});
     flash(`เปิดรอบใหม่ +${q} ชิ้นแล้ว 🔥 (รอบเก่าเก็บเข้าประวัติ)`);
     setRestock(false); setRq('');
   };
