@@ -88,6 +88,10 @@ export interface Product {
   // Shipping (set when the lot leaves China → status 'shipping'):
   tracking_no?: string;
   shipped_at?: string; // date the lot left the China warehouse (ETA counts from here)
+  // maker's SF tracking (given when the maker ships to the China warehouse) — INTERNAL only, never
+  // shown to customers; matched against the warehouse table to confirm arrival. One per product for
+  // pre-order/special rounds (ryuma-warehouse-spec). Sourcing keeps its own on the request.
+  sf_code?: string;
   // Close-order / production round (set when admin closes the pre-order round):
   production_qty?: number; // จำนวนไฟนอลที่สั่งผลิตจากค่าย
   surplus_qty?: number; // ส่วนเกินจากยอดจอง → กลายเป็นสต๊อกร้าน (production_qty − ordered)
@@ -215,6 +219,12 @@ export interface PreorderTicket {
   parcel_no?: string;
   parcel_image?: string;
   shipped_out_at?: string; // เวลาที่แอดมินกดจัดส่งพัสดุ
+  // ── ยืนยันโกดังจีน (ryuma-warehouse-spec) — the GATE for ผลิต → เดินทางมาไทย, per-ticket ──
+  // warehouse_at = the "เข้าโกดัง" date matched from the warehouse table → the REAL ETA start.
+  // Its presence lets this ticket's product_status flip to 'shipping' (customer wallet reads it).
+  warehouse_at?: string;                    // ISO date the piece entered the China warehouse
+  warehouse_transport?: SourcingTransport;  // รถ/เรือ read from the table's ล๊อต column
+  warehouse_slip?: string;                  // the warehouse-table screenshot (evidence, admin-only)
   created_at: string;
   approved_at?: string;
 }
@@ -485,6 +495,7 @@ export interface SourcingRequest {
   approved_at?: string;    // เริ่มงาน; start day = +1
   product_id?: string;     // the hidden product created at approve (status rides on it)
   resent_from?: string;    // id of the expired row this one was cloned from
+  sf_code?: string;        // maker SF tracking for THIS case (by-case; warehouse-confirm matches it)
 }
 
 /** A promo/announcement slide on the customer home carousel. */

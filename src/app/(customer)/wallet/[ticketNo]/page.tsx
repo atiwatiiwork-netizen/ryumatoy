@@ -12,6 +12,7 @@ import { Button, BackBar, ProgressBar, QrPanel, TicketQr, cx } from '@/component
 import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
+import { warehouseEtaLabel } from '@/domain/services/warehouse';
 import { listForResale, submitRemainingPayment } from '@/data/mutations';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
@@ -47,6 +48,9 @@ export default function TicketDetailPage() {
   const currentIdx = isShipped ? TIMELINE.length - 1 : TIMELINE.findIndex((s) => s.key === ticket.product_status);
   const carrierLabel: Record<string, string> = { ems: 'EMS', jt: 'J&T', flash: 'Flash', kerry: 'Kerry' };
   const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
+  // warehouse-confirmed tickets carry their OWN start date + transport (ryuma-warehouse-spec) →
+  // that ETA wins over the lot-level one.
+  const whEta = ticket.product_status === 'shipping' && ticket.warehouse_at ? warehouseEtaLabel(db, ticket) : '';
 
   // remaining-balance payment: available once the lot is shipping onward
   const canPay = due > 0 && ['shipping', 'arrived', 'delivered'].includes(ticket.product_status);
@@ -103,7 +107,12 @@ export default function TicketDetailPage() {
         </div>
       </div>
 
-      {eta && (
+      {whEta ? (
+        <div className="mb-3.5 flex items-center gap-2.5 rounded-card border border-[#2563eb]/30 bg-[#2563eb]/10 px-4 py-3">
+          <Icon name="truck" size={18} className="text-[#60a5fa]" />
+          <div className="text-[13px] text-[#bcd3f5]">🚢 ถึงโกดังจีนแล้ว · {whEta}</div>
+        </div>
+      ) : eta && (
         <div className="mb-3.5 flex items-center gap-2.5 rounded-card border border-[#2563eb]/30 bg-[#2563eb]/10 px-4 py-3">
           <Icon name="truck" size={18} className="text-[#60a5fa]" />
           <div className="text-[13px] text-[#bcd3f5]">คาดว่าถึงไทย <b>{etaRangeLabel(eta)}</b> {etaDaysLabel(eta)}{product.tracking_no ? <> · <span className="font-mono text-[11px]">Track {product.tracking_no}</span></> : null}</div>

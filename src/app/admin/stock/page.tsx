@@ -10,8 +10,10 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound } from '@/data/mutations';
-import { sendPush, subsForNewProduct, pushEnabled } from '@/lib/push';
+import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus } from '@/data/mutations';
+import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
+import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
+import { ocrImage } from '@/lib/ocr';
 import type { PreorderTicket, Product, ProductBatch, WcfType } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -32,6 +34,7 @@ export default function StockPage() {
 
       {tab === 'legacy' ? <LegacyCreate /> : <SurplusList />}
 
+      <WarehouseConfirm />
       <OpenRounds />
       <History />
     </div>
@@ -46,6 +49,130 @@ function SubBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 }
 function ModeToggle({ fullPay, onToggle, deposit }: { fullPay: boolean; onToggle: () => void; deposit: number }) {
   return <button onClick={onToggle} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', fullPay ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}>{fullPay ? 'พร้อมส่ง · จ่ายเต็ม' : `เก็บมัดจำ ${baht(deposit)}`}</button>;
+}
+
+// ── ยืนยันเข้าโกดังจีน (gate ผลิต → เดินทางมาไทย) — per-ticket ────────────────
+function WarehouseConfirm() {
+  const db = useDatabase();
+  const queue = warehouseQueue(db);
+  if (queue.length === 0) return null;
+  const total = queue.reduce((s, g) => s + g.tickets.length, 0);
+  return (
+    <div className="mb-6 rounded-2xl border border-[#2563eb]/40 bg-[#2563eb]/[0.06] p-5">
+      <div className="mb-1 font-bold text-[#bcd3f5]">📦 ยืนยันเข้าโกดังจีน ({total} ตั๋ว · {queue.length} รายการ)</div>
+      <div className="mb-3 text-[12px] text-ink-faint">ของถึงโกดังจีนแล้ว → ใส่เลข SF ของค่าย → วาง/อัปโหลดตารางโกดัง → จับคู่วันเข้าโกดัง → ยืนยัน = สถานะ “กำลังส่งมาไทย” + เริ่มนับ ETA</div>
+      <div className="flex flex-col gap-3">
+        {queue.map((g) => <WarehouseCard key={g.product.id} product={g.product} tickets={g.tickets} sf={g.sf} />)}
+      </div>
+    </div>
+  );
+}
+
+function WarehouseCard({ product, tickets, sf }: { product: Product; tickets: PreorderTicket[]; sf?: string }) {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
+  const sourcingReq = db.sourcingRequests.find((r) => r.product_id === product.id);
+  const [sfInput, setSfInput] = useState(sf ?? '');
+  const [text, setText] = useState('');
+  const [rows, setRows] = useState<ReturnType<typeof parseWarehouseText>>([]);
+  const [slip, setSlip] = useState<string | undefined>();
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrPct, setOcrPct] = useState(0);
+  // manual override (used if SF not found in the table)
+  const match = matchWarehouseRow(rows, sfInput);
+  const [date, setDate] = useState('');
+  const [transport, setTransport] = useState<'truck' | 'ship'>('truck');
+  const effDate = match?.date || date;
+  const effTransport = match?.transport ?? transport;
+
+  const saveSf = () => {
+    if (!sfInput.trim()) return flash('ใส่เลข SF ก่อน');
+    dispatch(sourcingReq ? setSourcingSf(sourcingReq.id, sfInput.trim()) : setProductSf(product.id, sfInput.trim()));
+    flash('บันทึกเลข SF แล้ว');
+  };
+  const parse = (raw: string) => { setText(raw); setRows(parseWarehouseText(raw)); };
+  const onImage = async (file?: File) => {
+    if (!file) return;
+    setOcrBusy(true); setOcrPct(0);
+    try {
+      const url = await uploadImage(file, 'warehouse'); setSlip(url); // keep the screenshot as evidence
+      const t = await ocrImage(file, setOcrPct);
+      parse(t);
+      flash('อ่านรูปเสร็จ — ตรวจ/แก้ก่อนยืนยัน');
+    } catch { flash('อ่านรูปไม่สำเร็จ — ลองวางข้อความแทน'); }
+    finally { setOcrBusy(false); }
+  };
+  const confirm = (t: PreorderTicket) => {
+    if (!effDate) return flash('ยังไม่มีวันเข้าโกดัง — จับคู่ SF หรือใส่วันเอง');
+    dispatch(confirmWarehouse(t.id, { date: effDate, transport: effTransport, slip }));
+    if (pushEnabled(db, 'warehouse'))
+      sendPush(subsForUsers(db, [t.owner_id]), { title: '🚢 ของถึงโกดังจีนแล้ว!', body: `${product.series_name} · กำลังส่งมาไทย — แตะดูกำหนดถึง`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+    flash(`ยืนยันโกดัง · ${t.ticket_no} → กำลังส่งมาไทย ✓`);
+  };
+  const confirmAll = () => { if (!effDate) return flash('ยังไม่มีวันเข้าโกดัง'); tickets.forEach(confirm); };
+
+  return (
+    <div className="rounded-xl border border-subtle bg-surface-2 p-3.5">
+      <div className="mb-2 flex items-center gap-2">
+        {product.images[0] && <img src={product.images[0]} alt="" className="h-12 w-12 rounded-lg object-cover" />}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13.5px] font-bold">{product.series_name} {sourcingReq && <span className="rounded bg-[#8b5cf6]/[0.16] px-1.5 py-0.5 text-[10px] font-bold text-[#c4b5fd]">หาของ</span>}</div>
+          <div className="text-[11.5px] text-ink-faint">รอเข้าโกดัง {tickets.length} ตั๋ว · {[...new Set(tickets.map((t) => userName(t.owner_id)))].join(', ').slice(0, 60)}</div>
+        </div>
+      </div>
+
+      {/* 1) เลข SF ของค่าย */}
+      <div className="mb-2 flex items-end gap-2">
+        <label className="flex-1 text-[11px] text-ink-faint">เลข SF ค่าย (ดูภายใน) <input className={cx(inputCls, 'mt-0.5 py-2 font-mono')} value={sfInput} onChange={(e) => setSfInput(e.target.value)} placeholder="เช่น SF5194798275423" /></label>
+        <button onClick={saveSf} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12px] font-bold text-ink-muted2">บันทึก SF</button>
+      </div>
+
+      {/* 2) ตารางโกดัง: อัปโหลดรูป (OCR) หรือ วางข้อความ */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#2563eb]/40 bg-[#2563eb]/[0.1] px-3 py-2 text-[12.5px] font-bold text-[#60a5fa]">
+          <Icon name="camera" size={15} /> {ocrBusy ? `อ่านรูป… ${ocrPct}%` : '📷 อัปโหลดตารางโกดัง (OCR)'}
+          <input type="file" accept="image/*" className="hidden" disabled={ocrBusy} onChange={(e) => onImage(e.target.files?.[0])} />
+        </label>
+        <span className="text-[11px] text-ink-faint">หรือวางข้อความจากเว็บโกดังด้านล่าง</span>
+      </div>
+      <textarea value={text} onChange={(e) => parse(e.target.value)} placeholder={'วางแถวจากตารางโกดัง เช่น:\nเรือ 5249 SF5194798275423 ... 26/06/2026 26/06/2026'} className={cx(inputCls, 'min-h-[52px] font-mono text-[11px]')} />
+
+      {/* 3) ผลจับคู่ */}
+      {rows.length > 0 && (
+        <div className="mt-2 rounded-lg bg-surface-3/60 px-3 py-2 text-[12px]">
+          {match ? (
+            <div className="font-semibold text-[#4ade80]">✓ พบ SF ในตาราง · เข้าโกดัง <b className="text-ink">{match.date ? new Date(match.date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '— (แก้วันด้านล่าง)'}</b>{match.transport && <> · {match.transport === 'ship' ? '🚢 เรือ' : '🚚 รถ'}</>}</div>
+          ) : (
+            <div className="text-[#fbbf24]">อ่านได้ {rows.length} แถว แต่ไม่พบเลข SF “{sfInput || '—'}” — ตรวจเลข SF หรือใส่วันเข้าโกดังเอง</div>
+          )}
+        </div>
+      )}
+
+      {/* 4) วัน/ขนส่ง (เติมเองถ้าไม่พบ) + ยืนยัน */}
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <label className="text-[11px] text-ink-faint">วันเข้าโกดัง <input type="date" className={cx(inputCls, 'mt-0.5 w-[150px] py-2')} value={effDate} onChange={(e) => setDate(e.target.value)} disabled={!!match?.date} /></label>
+        <label className="text-[11px] text-ink-faint">ขนส่ง <select className={cx(inputCls, 'mt-0.5 w-auto py-2')} value={effTransport} onChange={(e) => setTransport(e.target.value as 'truck' | 'ship')} disabled={!!match?.transport}><option value="truck">🚚 รถ</option><option value="ship">🚢 เรือ</option></select></label>
+        <button onClick={confirmAll} disabled={!effDate} className="rounded-lg bg-cta px-4 py-2.5 text-[12.5px] font-bold text-white disabled:opacity-50">✅ ยืนยันทั้งหมด {tickets.length} ตั๋ว</button>
+      </div>
+
+      {/* per-ticket (ของมาไม่พร้อมกัน) */}
+      {tickets.length > 1 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[11.5px] font-semibold text-primary-soft">ยืนยันทีละตั๋ว ({tickets.length}) ▾</summary>
+          <div className="mt-1.5 flex flex-col divide-y divide-hair">
+            {tickets.map((t) => (
+              <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-[12.5px]">
+                <span>{userName(t.owner_id)} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span></span>
+                <button onClick={() => confirm(t)} disabled={!effDate} className="rounded-lg bg-cta px-3 py-1.5 text-[11.5px] font-bold text-white disabled:opacity-50">ยืนยัน →</button>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
 }
 
 // ── Tab A: legacy create (existing SKU or new SKU) ───────────────────────────
@@ -67,6 +194,7 @@ function LegacyCreate() {
   const [height, setHeight] = useState('');
   const [wcf, setWcf] = useState<WcfType>('wcf');
   const [dep, setDep] = useState(''); // custom มัดจำ — blank = ใช้เรทตามชนิด (finished goods มักใช้ 1000)
+  const [startStatus, setStartStatus] = useState<'production' | 'shipping'>('shipping'); // ผลิต(รอโกดัง)/เดินทาง
   const [images, setImages] = useState<string[]>([]);
   const [imgBusy, setImgBusy] = useState(false);
 
@@ -90,6 +218,7 @@ function LegacyCreate() {
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
     dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined }));
+    if (!fullPay) dispatch(setProductStatus(p.id, startStatus)); // ผลิต(รอโกดัง) / เดินทาง
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
   };
@@ -100,7 +229,7 @@ function LegacyCreate() {
     if (!fullPay && depNum > 0 && depNum >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย (หรือสลับเป็นจ่ายเต็ม)');
     const sname = seriesOpts.find((s) => s.id === sid)?.name;
     const finalName = sname ? `${cname.trim()} - ${sname}` : cname.trim();
-    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined }));
+    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus }));
     flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว`);
     setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel(''); setDep(''); setImages([]);
   };
@@ -160,7 +289,14 @@ function LegacyCreate() {
 
       <div className="mt-3 flex flex-wrap items-center gap-2.5">
         <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={depNum > 0 ? depNum : (sub === 'existing' ? (db.products.find((x) => x.id === pid)?.deposit_amount ?? rateDep) : rateDep)} />
-        <span className="text-[11.5px] text-ink-faint">{fullPay ? 'ลูกค้าจ่ายเต็มตอนสั่ง (ของอยู่ในมือ)' : 'เก็บมัดจำก่อน · เก็บส่วนต่างตอนของถึง'}</span>
+        {!fullPay && (
+          <div className="inline-flex overflow-hidden rounded-lg border border-subtle">
+            {(['production', 'shipping'] as const).map((s) => (
+              <button key={s} onClick={() => setStartStatus(s)} className={cx('px-3 py-2 text-[12px] font-bold', startStatus === s ? 'bg-primary text-white' : 'bg-surface-3 text-ink-muted2')}>{s === 'production' ? 'เริ่ม: ผลิต (รอโกดัง)' : 'เริ่ม: เดินทางแล้ว'}</button>
+            ))}
+          </div>
+        )}
+        <span className="text-[11.5px] text-ink-faint">{fullPay ? 'ลูกค้าจ่ายเต็มตอนสั่ง (ของอยู่ในมือ)' : startStatus === 'production' ? 'ของยังผลิต → ยืนยันโกดังก่อนเปลี่ยนเป็นเดินทาง' : 'ของออกจากจีนแล้ว'}</span>
         <button onClick={sub === 'existing' ? openExisting : createNew} className="ml-auto rounded-lg bg-cta px-5 py-2.5 text-sm font-bold text-white">เปิดรอบพิเศษ</button>
       </div>
     </div>

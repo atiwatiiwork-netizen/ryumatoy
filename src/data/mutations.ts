@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow, SourcingTransport } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, unmatchedApprovedItems } from '../domain/services/tickets';
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
@@ -303,20 +303,23 @@ export const createLegacyStockProduct = (data: {
   height_cm?: number; wcf_type?: WcfType; images?: string[];
   qty: number; price: number; fullPay: boolean; label?: string;
   deposit?: number; // custom มัดจำ (e.g. finished-goods rate 1000฿); falls back to the WCF/Mega rate
+  startStatus?: 'production' | 'shipping'; // pre-order rounds: 'production' waits for the warehouse gate
 }) => (db: Database): Database => {
   const pid = id('p');
   const now = new Date().toISOString();
   const deposit = data.fullPay
     ? data.price
     : Math.min(data.price, (data.deposit && data.deposit > 0 ? data.deposit : depositFor(db.settings, data.wcf_type ?? 'wcf')));
+  // full-pay = ของอยู่ในมือ → arrived. deposit round: admin picks ผลิต(รอโกดัง) / เดินทาง.
+  const status: ProductStatus = data.fullPay ? 'arrived' : (data.startStatus ?? 'shipping');
   const product: Product = {
     id: pid, franchise_id: data.franchise_id, manufacturer_id: data.manufacturer_id,
     series_id: data.series_id || undefined, series_name: data.series_name, character_name: data.character_name || undefined,
     wcf_type: data.wcf_type, type: 'other', description: '', images: data.images ?? [],
-    eta_note: data.fullPay ? 'พร้อมส่ง' : 'ระหว่างทาง',
+    eta_note: data.fullPay ? 'พร้อมส่ง' : (status === 'production' ? 'ผลิต · รอเข้าโกดัง' : 'ระหว่างทาง'),
     price_total: data.price, deposit_amount: deposit,
     is_stock: false, height_cm: data.height_cm, has_variants: false,
-    status: data.fullPay ? 'arrived' : 'shipping', shipped_at: data.fullPay ? undefined : now,
+    status, shipped_at: status === 'shipping' ? now : undefined,
     surplus_qty: 0, stock_origin: 'manual', created_at: now,
   };
   const withProduct = { ...db, products: [product, ...db.products] };
@@ -339,6 +342,41 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
     qty: opts.qty, price, deposit, fullPay: deposit >= price,
     label: opts.label?.trim() || `รอบ ${rounds.length + 1}`, addSurplus: true,
   })(closed);
+};
+
+// ── ยืนยันโกดังจีน (warehouse gate for ผลิต → เดินทางมาไทย) ────────────────────
+/** Record the maker's SF tracking on a product (pre-order/special) — internal, matched to the
+ *  warehouse table. */
+export const setProductSf = (productId: string, sf: string) => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => (p.id === productId ? { ...p, sf_code: sf.trim() || undefined } : p)),
+});
+
+/** Record the maker's SF tracking on a sourcing request (by-case). */
+export const setSourcingSf = (requestId: string, sf: string) => (db: Database): Database => ({
+  ...db,
+  sourcingRequests: db.sourcingRequests.map((r) => (r.id === requestId ? { ...r, sf_code: sf.trim() || undefined } : r)),
+});
+
+/**
+ * ยืนยันเข้าโกดัง for ONE ticket (per-ticket, per ryuma-warehouse-spec): the matched "เข้าโกดัง" date
+ * becomes warehouse_at (the real ETA start) and flips this ticket's product_status ผลิต → เดินทาง.
+ * When EVERY active ticket of the product has left production, the product-level status lifts too
+ * (keeps the Status tab + sourcing page in sync — no duplicate status system). Requires a date
+ * (the gate). Admin session only.
+ */
+export const confirmWarehouse = (ticketId: string, opts: { date: string; transport: SourcingTransport; slip?: string }) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t || t.product_status !== 'production' || !opts.date) return db;
+  const tickets = db.tickets.map((x) => (x.id === ticketId
+    ? { ...x, product_status: 'shipping' as const, warehouse_at: opts.date, warehouse_transport: opts.transport, warehouse_slip: opts.slip ?? x.warehouse_slip }
+    : x));
+  const productTickets = tickets.filter((x) => x.product_id === t.product_id);
+  const allMoved = productTickets.length > 0 && productTickets.every((x) => x.product_status !== 'production');
+  const products = allMoved
+    ? db.products.map((p) => (p.id === t.product_id && p.status === 'production' ? { ...p, status: 'shipping' as const, shipped_at: p.shipped_at ?? opts.date } : p))
+    : db.products;
+  return { ...db, tickets, products };
 };
 
 /** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
