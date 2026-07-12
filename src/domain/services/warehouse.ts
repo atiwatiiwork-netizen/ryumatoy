@@ -17,7 +17,8 @@ const toIso = (d: string): string | undefined => {
   const m = DATE_RE.exec(d);
   if (!m) return undefined;
   let [, dd, mm, yy] = m;
-  let y = Number(yy); if (y < 100) y += 2000;
+  // 2-digit → +2000; Buddhist Era (25xx, some warehouse sheets use it) → -543 to Gregorian.
+  let y = Number(yy); if (y < 100) y += 2000; else if (y >= 2500) y -= 543;
   const iso = new Date(Date.UTC(y, Number(mm) - 1, Number(dd)));
   return isNaN(iso.getTime()) ? undefined : iso.toISOString().slice(0, 10);
 };
@@ -57,6 +58,13 @@ export function ticketSfCode(db: Database, t: PreorderTicket): string | undefine
 /** A ticket still in 'production' with no warehouse date = waiting for the warehouse gate (the Filter). */
 export function awaitingWarehouse(db: Database, t: PreorderTicket): boolean {
   return t.product_status === 'production' && !t.warehouse_at;
+}
+
+/** Does a product still have ticket(s) waiting for the warehouse gate? Used to STOP the old Status-tab
+ *  stepper from jumping ผลิต → เดินทาง without a เข้าโกดัง date (single source for that transition,
+ *  no duplicate/conflicting path). Products with no such ticket advance normally. */
+export function productAwaitingWarehouse(db: Database, productId: string): boolean {
+  return db.tickets.some((t) => t.product_id === productId && awaitingWarehouse(db, t));
 }
 
 /** Tickets waiting for warehouse confirmation, grouped by product (special rounds + sourcing + any

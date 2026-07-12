@@ -12,6 +12,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
 import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
+import { productAwaitingWarehouse } from '@/domain/services/warehouse';
 import { sendPush, subsForNewProduct, subsForProductOwners, statusPushPayload, pushEnabled } from '@/lib/push';
 import type { WcfType } from '@/domain/entities';
 import {
@@ -398,6 +399,8 @@ function StatusRow({ product: p }: { product: Product }) {
   const idx = LOT_STEPS.indexOf(p.status);
   const arrivedIdx = LOT_STEPS.indexOf('arrived');
   const next = idx < arrivedIdx ? LOT_STEPS[idx + 1] : null;
+  // ผลิต → เดินทาง ต้องผ่าน "ยืนยันโกดัง" ก่อน (หน้าสต๊อก) ถ้ายังมีตั๋วรอเข้าโกดัง — กัน 2 ทางชนกัน
+  const gateWarehouse = next === 'shipping' && productAwaitingWarehouse(db, p.id);
   const [open, setOpen] = useState(false);
   const [showBuyers, setShowBuyers] = useState(false);
   const [track, setTrack] = useState(p.tracking_no ?? '');
@@ -440,6 +443,8 @@ function StatusRow({ product: p }: { product: Product }) {
           <button onClick={() => setOpen((o) => !o)} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">ปิดใบพรี →</button>
         ) : !next ? (
           <Link href="/admin/orders" className="whitespace-nowrap rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-3 py-1.5 text-[12px] font-bold text-primary-soft">จัดส่งรายตั๋ว →</Link>
+        ) : gateWarehouse ? (
+          <Link href="/admin/stock" title="ยืนยันเข้าโกดังจีนก่อน (หน้าสต๊อก) จึงจะเป็นกำลังเดินทาง" className="whitespace-nowrap rounded-lg border border-[#2563eb]/45 bg-[#2563eb]/[0.14] px-3 py-1.5 text-[12px] font-bold text-[#93c5fd]">🚢 ยืนยันโกดัง →</Link>
         ) : (
           <button onClick={() => (next === 'shipping' ? setOpen((o) => !o) : advance())} className="whitespace-nowrap rounded-lg bg-cta px-3 py-1.5 text-[12.5px] font-bold text-white">→ {STATUS[next as StatusKey].label}</button>
         )}
