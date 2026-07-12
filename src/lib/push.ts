@@ -82,12 +82,15 @@ export const pushEnabled = (db: Database, key: string): boolean =>
  *  No pref row (or an empty dimension) = รับทั้งหมด; both dimensions set = AND. Account events
  *  (order approved, parcel, …) are NOT filtered — only these broadcasts are. */
 export function subsForNewProduct(db: Database, product: { manufacturer_id: string; franchise_id: string }): PushRow[] {
+  // OPT-OUT model: maker_ids / franchise_ids are the MUTED lists. Default (no pref row, or a category
+  // not in the muted list) = RECEIVE. This makes a NEWLY-added ค่าย/เรื่อง reach everyone automatically —
+  // a customer only stops getting the ones they explicitly muted, never the new ones (ryuma-push-adoption).
   return db.pushSubscriptions.filter((s) => {
     const p = db.pushPrefs.find((x) => x.user_id === s.user_id);
     if (!p) return true;
-    const mOk = !p.maker_ids?.length || p.maker_ids.includes(product.manufacturer_id);
-    const fOk = !p.franchise_ids?.length || p.franchise_ids.includes(product.franchise_id);
-    return mOk && fOk;
+    const mutedMaker = p.maker_ids?.includes(product.manufacturer_id);
+    const mutedFranchise = p.franchise_ids?.includes(product.franchise_id);
+    return !mutedMaker && !mutedFranchise;
   });
 }
 

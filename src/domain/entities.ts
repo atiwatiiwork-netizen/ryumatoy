@@ -442,8 +442,10 @@ export interface PushSubscription {
  *  dimension. Both set = AND ("เฉพาะค่าย A+ ในเรื่อง One Piece"). */
 export interface PushPref {
   user_id: string;
-  maker_ids: string[];      // [] = ทุกค่าย
-  franchise_ids: string[];  // [] = ทุกเรื่อง
+  // OPT-OUT (mute) lists — the ค่าย/เรื่อง this user turned OFF for "สินค้าใหม่" news. [] = รับทุกอย่าง
+  // (the default). A newly-added ค่าย/เรื่อง is never in here, so it's received automatically.
+  maker_ids: string[];      // muted makers ([] = ไม่ปิดค่ายไหนเลย = รับทุกค่าย)
+  franchise_ids: string[];  // muted franchises ([] = รับทุกเรื่อง)
   updated_at?: string;
 }
 

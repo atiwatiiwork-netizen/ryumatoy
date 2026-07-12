@@ -18,6 +18,7 @@ import { RankCongrats } from './RankModals';
 import { CouponReceived } from './CouponTicket';
 import { ProfileGate } from './ProfileGate';
 import { PublicLanding } from './PublicLanding';
+import { InstallBellNudge } from './InstallBellNudge';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -175,6 +176,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
       <RankCongrats />
       <CouponReceived />
       <ProfileGate />
+      {CURRENT_USER_ID && <InstallBellNudge userId={CURRENT_USER_ID} />}
     </div>
   );
 }
