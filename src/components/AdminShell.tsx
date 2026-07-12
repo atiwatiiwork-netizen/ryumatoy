@@ -47,6 +47,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     ] },
     { title: 'ออเดอร์', items: [
       it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP + awaitingParcel),
+      it('/admin/sourcing', 'search', 'หาของ', db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length),
       it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด'),
       it('/admin/payment', 'payments', 'ตั้งค่าการเงิน'),
     ] },

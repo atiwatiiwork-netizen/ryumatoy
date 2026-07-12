@@ -70,6 +70,9 @@ export const subsForUsers = (db: Database, userIds: string[]): PushRow[] =>
 /** Every device of every customer holding a ticket on this product. */
 export const subsForProductOwners = (db: Database, productId: string): PushRow[] =>
   subsForUsers(db, [...new Set(db.tickets.filter((t) => t.product_id === productId).map((t) => t.owner_id))]);
+/** The shop owner's own devices (admin accounts) — for customer→admin pings like new sourcing requests. */
+export const subsForAdmins = (db: Database): PushRow[] =>
+  subsForUsers(db, db.users.filter((u) => u.is_admin).map((u) => u.id));
 
 /** Admin kill-switch per trigger (Push Control page). Missing key = enabled. */
 export const pushEnabled = (db: Database, key: string): boolean =>

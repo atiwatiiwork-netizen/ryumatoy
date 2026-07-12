@@ -580,6 +580,115 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
   };
 };
 
+// ── ระบบหาของ (sourcing requests) ────────────────────────────────────────────
+const SOURCING_TTL_MS = 5 * 86400000;
+
+/** Customer files a sourcing request (cap: 3 open per user — UI guards too, this is the backstop).
+ *  Single-table insert from the customer session (DNA rule 7 friendly). */
+export const submitSourcingRequest = (data: {
+  user_id: string; maker_id?: string; maker_name: string; franchise_id?: string; franchise_name: string;
+  character_name: string; qty: number; images: string[]; note?: string; resent_from?: string;
+}) => (db: Database): Database => {
+  const open = db.sourcingRequests.filter((r) => r.user_id === data.user_id
+    && (r.status === 'requested' || r.status === 'paid'
+      || (r.status === 'quoted' && (!r.expires_at || new Date(r.expires_at).getTime() > Date.now())))).length;
+  if (open >= 3) return db;
+  return {
+    ...db,
+    sourcingRequests: [{
+      id: id('sr'), user_id: data.user_id,
+      maker_id: data.maker_id || undefined, maker_name: data.maker_name.trim(),
+      franchise_id: data.franchise_id || undefined, franchise_name: data.franchise_name.trim(),
+      character_name: data.character_name.trim(), qty: Math.max(1, Math.floor(data.qty)),
+      images: data.images.slice(0, 3), note: data.note?.trim() || undefined,
+      status: 'requested', created_at: new Date().toISOString(), resent_from: data.resent_from,
+    }, ...db.sourcingRequests],
+  };
+};
+
+/** "ส่งเช็คใหม่" — mark the timed-out row expired and clone it as a fresh request (no re-typing). */
+export const resendSourcingRequest = (requestId: string) => (db: Database): Database => {
+  const r = db.sourcingRequests.find((x) => x.id === requestId);
+  if (!r) return db;
+  const marked = { ...db, sourcingRequests: db.sourcingRequests.map((x) => (x.id === requestId ? { ...x, status: 'expired' as const } : x)) };
+  return submitSourcingRequest({ user_id: r.user_id, maker_id: r.maker_id, maker_name: r.maker_name, franchise_id: r.franchise_id, franchise_name: r.franchise_name, character_name: r.character_name, qty: r.qty, images: r.images, note: r.note, resent_from: r.id })(marked);
+};
+
+/** Admin quotes: price/deposit per unit + transport → 5-day TTL starts. */
+export const quoteSourcing = (requestId: string, q: { price: number; deposit: number; transport: 'truck' | 'ship' }) => (db: Database): Database => ({
+  ...db,
+  sourcingRequests: db.sourcingRequests.map((r) => (r.id === requestId && ['requested', 'quoted', 'unavailable'].includes(r.status)
+    ? { ...r, status: 'quoted' as const, price: Math.max(1, Math.round(q.price)), deposit: Math.min(Math.max(1, Math.round(q.deposit)), Math.max(1, Math.round(q.price))), transport: q.transport, quoted_at: new Date().toISOString(), expires_at: new Date(Date.now() + SOURCING_TTL_MS).toISOString() }
+    : r)),
+});
+
+/** Admin: "รายการนี้ยังไม่สามารถหาได้ตอนนี้" → watchlist, 5-day TTL. */
+export const unavailableSourcing = (requestId: string) => (db: Database): Database => ({
+  ...db,
+  sourcingRequests: db.sourcingRequests.map((r) => (r.id === requestId && ['requested', 'quoted'].includes(r.status)
+    ? { ...r, status: 'unavailable' as const, expires_at: new Date(Date.now() + SOURCING_TTL_MS).toISOString() }
+    : r)),
+});
+
+/** Customer attaches the deposit slip (only while the quote is alive). Own-row update (RLS-legal). */
+export const paySourcing = (requestId: string, slipUrl: string) => (db: Database): Database => ({
+  ...db,
+  sourcingRequests: db.sourcingRequests.map((r) => (r.id === requestId && r.status === 'quoted'
+    && (!r.expires_at || new Date(r.expires_at).getTime() > Date.now())
+    ? { ...r, status: 'paid' as const, slip_url: slipUrl, paid_at: new Date().toISOString() }
+    : r)),
+});
+
+/** Admin links a custom-typed ค่าย/เรื่อง to real catalog rows (required before เริ่มงาน). */
+export const linkSourcingCatalog = (requestId: string, link: { maker_id?: string; franchise_id?: string }) => (db: Database): Database => ({
+  ...db,
+  sourcingRequests: db.sourcingRequests.map((r) => (r.id === requestId ? { ...r, ...(link.maker_id ? { maker_id: link.maker_id } : {}), ...(link.franchise_id ? { franchise_id: link.franchise_id } : {}) } : r)),
+});
+
+/**
+ * Admin เริ่มงาน (slip checked): mint the fulfillment as REAL pre-order plumbing — a HIDDEN product
+ * (status 'production' → never in the shop), a CLOSED 1-round batch (never in the storefront; the
+ * ticket's batch_id also keeps it out of event counting per spec), and the customer's ticket. From
+ * here the normal lot flow takes over (Status tab → shipping/arrived pushes, ส่วนต่าง, พัสดุ).
+ * Requires maker_id + franchise_id linked (ticket_no needs the franchise abbr).
+ */
+export const approveSourcingStart = (requestId: string) => (db: Database): Database => {
+  const r = db.sourcingRequests.find((x) => x.id === requestId);
+  if (!r || r.status !== 'paid' || !r.maker_id || !r.franchise_id || !r.price || !r.deposit) return db;
+  const now = new Date().toISOString();
+  const pid = id('p');
+  const franchise = db.franchises.find((f) => f.id === r.franchise_id);
+  const buyer = db.users.find((u) => u.id === r.user_id);
+  const product: Product = {
+    id: pid, franchise_id: r.franchise_id, manufacturer_id: r.maker_id,
+    series_name: r.character_name, character_name: r.character_name,
+    type: 'other', description: `หาของให้ ${buyer?.display_name ?? ''}`.trim(), images: r.images,
+    eta_note: 'หาของ · เริ่มงานแล้ว', price_total: r.price, deposit_amount: r.deposit,
+    is_stock: false, has_variants: false, status: 'production', surplus_qty: 0, created_at: now,
+  };
+  const batch = { id: id('b'), product_id: pid, label: 'หาของ', price_total: r.price, deposit_amount: r.deposit, stock_qty: r.qty, status: 'closed' as const, created_at: now };
+  const ticket: PreorderTicket = {
+    id: id('t'), ticket_no: nextTicketNo(db, franchise?.abbr ?? 'xx'),
+    product_id: pid, batch_id: batch.id, owner_id: r.user_id, original_buyer_id: r.user_id,
+    qty: r.qty, deposit_paid: r.deposit * r.qty, remaining_amount: Math.max(0, r.price - r.deposit) * r.qty,
+    remaining_paid: 0, status: 'active', product_status: 'production', qr_code_url: '',
+    created_at: now, approved_at: now,
+  };
+  return {
+    ...db,
+    products: [product, ...db.products],
+    batches: [batch, ...db.batches],
+    tickets: [ticket, ...db.tickets],
+    sourcingRequests: db.sourcingRequests.map((x) => (x.id === requestId ? { ...x, status: 'working' as const, approved_at: now, product_id: pid } : x)),
+  };
+};
+
+/** Admin edits the transport ETA ranges (app_config 'sourcing_eta'). */
+export const setSourcingEta = (value: { truck_min: number; truck_max: number; ship_min: number; ship_max: number }) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: 'sourcing_eta', value }, ...db.appConfig.filter((c) => c.key !== 'sourcing_eta')],
+});
+
 // ── Web Push subscriptions ───────────────────────────────────────────────────
 /** Save one device's push subscription (replaces any older row for the same endpoint). */
 export const addPushSubscription = (sub: PushSubscriptionRow) => (db: Database): Database => ({

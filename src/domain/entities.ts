@@ -437,10 +437,54 @@ export interface PushPref {
   updated_at?: string;
 }
 
+/** Generic app config row (key → jsonb) — for settings that must NOT ride on shop_settings'
+ *  fixed column list (adding columns there breaks every settings save until the migration runs).
+ *  First user: sourcing transport ETA ranges {truck_min,truck_max,ship_min,ship_max}. */
+export interface AppConfigRow {
+  key: string;
+  value: Record<string, unknown>;
+}
+
 /** Admin kill-switch per push trigger (Push Control page). Missing key = enabled. */
 export interface PushConfigRow {
   key: string; // 'new_preorder' | 'new_instock' | 'lot_shipping' | 'lot_arrived' | 'order_approved' | 'order_rejected' | 'rp_approved' | 'parcel' | 'coupon_grant' | 'event_reward'
   enabled: boolean;
+}
+
+/**
+ * ระบบหาของ — a customer's request for a finished-in-China item (ryuma-sourcing-spec).
+ * Status flow: requested → quoted (5-day TTL, "ตัดสินใจก่อน") → paid (slip attached) → working
+ * (admin approved; start day = approve+1; a HIDDEN product+batch+ticket is created and the rest
+ * rides the normal lot flow) — or requested → unavailable (5-day TTL, watchlist "ยังหาไม่ได้").
+ * Expired rows stay as history; "ส่งเช็คใหม่" clones them into a fresh 'requested'.
+ */
+export type SourcingStatus = 'requested' | 'quoted' | 'unavailable' | 'paid' | 'working' | 'expired';
+export type SourcingTransport = 'truck' | 'ship';
+export interface SourcingRequest {
+  id: string;
+  user_id: string;
+  maker_id?: string;       // from catalog, or —
+  maker_name: string;      // display name (custom when maker_id absent)
+  franchise_id?: string;
+  franchise_name: string;
+  character_name: string;
+  qty: number;
+  images: string[];        // 1..3, first required
+  note?: string;
+  status: SourcingStatus;
+  created_at: string;
+  // quote (admin)
+  price?: number;          // per unit
+  deposit?: number;        // per unit
+  transport?: SourcingTransport;
+  quoted_at?: string;
+  expires_at?: string;     // TTL for 'quoted' / 'unavailable' (5 days)
+  // payment + start
+  slip_url?: string;
+  paid_at?: string;
+  approved_at?: string;    // เริ่มงาน; start day = +1
+  product_id?: string;     // the hidden product created at approve (status rides on it)
+  resent_from?: string;    // id of the expired row this one was cloned from
 }
 
 /** A promo/announcement slide on the customer home carousel. */
@@ -477,6 +521,8 @@ export interface Database {
   pushSubscriptions: PushSubscription[];
   pushPrefs: PushPref[];
   pushConfig: PushConfigRow[];
+  sourcingRequests: SourcingRequest[];
+  appConfig: AppConfigRow[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];
   settings: ShopSettings;

@@ -32,12 +32,13 @@ export default function ProfilePage() {
 
   // Only ใบพรีของฉัน + คูปอง are live this phase; การแจ้งเตือน is a live toggle rendered
   // specially below; the rest are coming soon.
+  const mySourcing = db.sourcingRequests.filter((r) => r.user_id === CURRENT_USER_ID && !['expired'].includes(r.status)).length;
   const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode; push?: boolean }[] = [
     { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
     { icon: 'tag', label: 'คูปองของฉัน', href: '/coupons', right: myCoupons ? <Pill>{myCoupons}</Pill> : undefined },
+    { icon: 'search', label: 'หาของ', href: '/sourcing', right: mySourcing ? <Pill>{mySourcing}</Pill> : undefined },
     { icon: 'bell', label: 'การแจ้งเตือน', push: true },
     { icon: 'swap', label: 'รายการขาย P2P' },
-    { icon: 'store', label: 'ภาษา' },
     { icon: 'settings', label: 'ธีม' },
   ];
 
