@@ -36,16 +36,22 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
       <div className="px-[11px] pb-3 pt-2.5">
         <div className="mb-[3px] font-mono text-[10px] text-ink-faint">{metaLine(db, product)}</div>
         <div className="line-clamp-2 min-h-[34px] text-[13px] font-semibold leading-tight">{product.series_name}</div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <span className="text-[15px] font-extrabold text-primary-soft">{baht(batch.price_total)}</span>
-          {soldOut ? <span className="text-[11px] text-ink-faint">หมด</span>
-            : lastOne ? <span className="animate-pulse text-[11px] font-extrabold text-[#f87171]">เหลือ 1 ชิ้นสุดท้าย</span>
-            : <span className="animate-pulse text-[11px] font-bold text-[#fbbf24]">สินค้าเหลือน้อย</span>}
-        </div>
-        {/* full-pay batch = ready-to-ship; deposit batch = still a pre-order round */}
-        <div className="mt-0.5 text-[10.5px] font-semibold text-ink-muted2">
-          {fullPay ? 'พร้อมส่ง · จ่ายเต็ม' : `พรีรอบพิเศษ · มัดจำ ${baht(batch.deposit_amount)}`}
-        </div>
+        {soldOut ? (
+          // ปิดราคา/มัดจำเมื่อรอบขายหมด — เหลือแค่ป้ายสถานะ (ไม่โชว์ตัวเลขให้สับสน)
+          <div className="mt-1.5 text-[13px] font-extrabold text-ink-faint">ปิดรอบ · สินค้าหมด</div>
+        ) : (
+          <>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="text-[15px] font-extrabold text-primary-soft">{baht(batch.price_total)}</span>
+              {lastOne ? <span className="animate-pulse text-[11px] font-extrabold text-[#f87171]">เหลือ 1 ชิ้นสุดท้าย</span>
+                : <span className="animate-pulse text-[11px] font-bold text-[#fbbf24]">สินค้าเหลือน้อย</span>}
+            </div>
+            {/* full-pay batch = ready-to-ship; deposit batch = still a pre-order round */}
+            <div className="mt-0.5 text-[10.5px] font-semibold text-ink-muted2">
+              {fullPay ? 'พร้อมส่ง · จ่ายเต็ม' : `พรีรอบพิเศษ · มัดจำ ${baht(batch.deposit_amount)}`}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
