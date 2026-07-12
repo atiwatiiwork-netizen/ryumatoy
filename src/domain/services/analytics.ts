@@ -73,3 +73,12 @@ export function bellAdoption(db: Database): { enabled: number; total: number } {
   const enabled = new Set(db.pushSubscriptions.map((s) => s.user_id).filter((id) => memberIds.has(id) && !adminIds.has(id)));
   return { enabled: enabled.size, total: members.length };
 }
+
+/**
+ * ติดตั้งลงหน้าจอ (PWA) adoption (NOW snapshot): approved members who have opened the app at least once in
+ * standalone (installed_at stamped), out of all approved members. Admin excluded.
+ */
+export function installAdoption(db: Database): { installed: number; total: number } {
+  const members = db.users.filter((u) => !u.is_admin && u.approved !== false);
+  return { installed: members.filter((u) => !!u.installed_at).length, total: members.length };
+}

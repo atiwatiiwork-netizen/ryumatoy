@@ -6,7 +6,8 @@ import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
-import { fillMissingTicketsFor, reclaimOrphanCouponGrants } from '@/data/mutations';
+import { fillMissingTicketsFor, reclaimOrphanCouponGrants, markInstalled } from '@/data/mutations';
+import { isStandalone } from '@/lib/pwa';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
 import { store } from '@/data/store';
@@ -74,6 +75,15 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   }, [db, CURRENT_USER_ID, dispatch, flash]);
   const { needsApproval, isLoggedIn, authReady } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
+  // install-rate: stamp installed_at the first time a logged-in member opens the app in standalone
+  // (home-screen). Idempotent mutation → once-only; own-row write is RLS-safe (ryuma-push-adoption).
+  const marked = useRef(false);
+  useEffect(() => {
+    if (marked.current || !CURRENT_USER_ID || !me || me.installed_at) return;
+    if (!isStandalone()) return;
+    marked.current = true;
+    dispatch(markInstalled(CURRENT_USER_ID));
+  }, [CURRENT_USER_ID, me, dispatch]);
   const isActive = (href: string) =>
     href === '/' ? path === '/' : path.startsWith(href);
 

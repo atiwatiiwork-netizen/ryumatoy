@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { useDatabase } from '@/state/DataProvider';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { ticketsInMonth, topFranchises, topMakers, ticketMonths, bellAdoption, currentYm, type RankRow } from '@/domain/services/analytics';
+import { ticketsInMonth, topFranchises, topMakers, ticketMonths, bellAdoption, installAdoption, currentYm, type RankRow } from '@/domain/services/analytics';
 
 const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return `${THAI_MONTHS[m - 1]} ${y}`; };
@@ -18,10 +18,12 @@ export default function AnalyticsPage() {
   const franchises = useMemo(() => topFranchises(db, tickets), [db, tickets]);
   const makers = useMemo(() => topMakers(db, tickets), [db, tickets]);
   const bell = useMemo(() => bellAdoption(db), [db]);
+  const install = useMemo(() => installAdoption(db), [db]);
 
   const totalTickets = tickets.length;
   const totalPieces = tickets.reduce((s, t) => s + (t.qty || 1), 0);
   const bellPct = bell.total > 0 ? Math.round((bell.enabled / bell.total) * 100) : 0;
+  const installPct = install.total > 0 ? Math.round((install.installed / install.total) * 100) : 0;
 
   return (
     <div>
@@ -51,21 +53,12 @@ export default function AnalyticsPage() {
         <RankCard title="ยอดใบพรี · ค่ายไหนเยอะสุด" emptyText="ยังไม่มีใบพรีเดือนนี้" rows={makers} accent="#60a5fa" />
       </div>
 
-      {/* bell adoption (now snapshot) */}
-      <div className="mt-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
-        <div className="mb-1 flex items-center gap-2 text-base font-bold"><Icon name="bell" size={18} className="text-[#4ade80]" /> การเปิดกระดิ่งแจ้งเตือน <span className="text-[11px] font-normal text-ink-faint">(ปัจจุบัน)</span></div>
-        <div className="mb-3 text-[12.5px] text-ink-faint">สมาชิกที่เปิดรับแจ้งเตือนอย่างน้อย 1 เครื่อง จากสมาชิกที่อนุมัติแล้วทั้งหมด</div>
-        <div className="flex items-end gap-3">
-          <div className="text-[34px] font-extrabold leading-none text-[#4ade80]">{bell.enabled}</div>
-          <div className="pb-1 text-[15px] text-ink-muted2">/ {bell.total} คน</div>
-          <div className="flex-1" />
-          <div className="pb-1 text-2xl font-extrabold text-[#4ade80]">{bellPct}%</div>
-        </div>
-        <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
-          <div className="h-full rounded-full bg-[#16a34a] transition-all" style={{ width: `${bellPct}%` }} />
-        </div>
-        <div className="mt-2 text-[11.5px] text-ink-faint">ยังไม่เปิด {Math.max(0, bell.total - bell.enabled)} คน — กระตุ้นให้ติดตั้งแอปหน้าจอโฮม + เปิดกระดิ่งเพื่อรับข่าวรอบพรี/ของถึง</div>
+      {/* adoption (now snapshot): ลงหน้าจอ + เปิดกระดิ่ง */}
+      <div className="mt-[18px] grid gap-[18px] lg:grid-cols-2">
+        <AdoptionCard icon="home" title="ติดตั้งลงหน้าจอโทรศัพท์" hint="สมาชิกที่เคยเปิดแอปจากไอคอนบนหน้าจอ (PWA) จากสมาชิกอนุมัติทั้งหมด" done={install.installed} total={install.total} pct={installPct} color="#60a5fa" fill="#2563eb" remainText="ยังไม่ติดตั้ง" />
+        <AdoptionCard icon="bell" title="เปิดกระดิ่งแจ้งเตือน" hint="สมาชิกที่เปิดรับแจ้งเตือนอย่างน้อย 1 เครื่อง จากสมาชิกอนุมัติทั้งหมด" done={bell.enabled} total={bell.total} pct={bellPct} color="#4ade80" fill="#16a34a" remainText="ยังไม่เปิด" />
       </div>
+      <div className="mt-2 text-[11.5px] text-ink-faint">💡 ตัวช่วยดันยอด: แบนเนอร์ + ป๊อปอัพในแอปคอยแนะนำคนที่ยังไม่ติดตั้ง/ยังไม่เปิดกระดิ่งอัตโนมัติ (ทุก 3 วัน)</div>
     </div>
   );
 }
@@ -99,6 +92,25 @@ function RankCard({ title, rows, accent, emptyText }: { title: string; rows: Ran
           {rest.length > 0 && <div className="pt-0.5 text-[11.5px] text-ink-faint">+ อีก {rest.length} รายการ · {restTickets} ใบ</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+function AdoptionCard({ icon, title, hint, done, total, pct, color, fill, remainText }: { icon: IconName; title: string; hint: string; done: number; total: number; pct: number; color: string; fill: string; remainText: string }) {
+  return (
+    <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
+      <div className="mb-1 flex items-center gap-2 text-base font-bold"><span style={{ color }}><Icon name={icon} size={18} /></span> {title} <span className="text-[11px] font-normal text-ink-faint">(ปัจจุบัน)</span></div>
+      <div className="mb-3 text-[12.5px] text-ink-faint">{hint}</div>
+      <div className="flex items-end gap-3">
+        <div className="text-[34px] font-extrabold leading-none" style={{ color }}>{done}</div>
+        <div className="pb-1 text-[15px] text-ink-muted2">/ {total} คน</div>
+        <div className="flex-1" />
+        <div className="pb-1 text-2xl font-extrabold" style={{ color }}>{pct}%</div>
+      </div>
+      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: fill }} />
+      </div>
+      <div className="mt-2 text-[11.5px] text-ink-faint">{remainText} {Math.max(0, total - done)} คน</div>
     </div>
   );
 }

@@ -763,6 +763,15 @@ export const removePushSubscriptionByEndpoint = (endpoint: string) => (db: Datab
   pushSubscriptions: db.pushSubscriptions.filter((s) => s.endpoint !== endpoint),
 });
 
+/** Stamp the first time this member opens the app installed to the home screen (PWA standalone) — for
+ *  the admin install-rate metric. Idempotent: only writes once (never overwrites the first timestamp),
+ *  and only touches installed_at on the caller's own row (RLS-safe, unprotected column). */
+export const markInstalled = (userId: string) => (db: Database): Database => {
+  const u = db.users.find((x) => x.id === userId);
+  if (!u || u.installed_at) return db;
+  return { ...db, users: db.users.map((x) => (x.id === userId ? { ...x, installed_at: new Date().toISOString() } : x)) };
+};
+
 /** Save a customer's broadcast preferences (สินค้าใหม่ pushes). Empty arrays = รับทั้งหมด →
  *  the row is dropped entirely (absent row = default-all, keeps the table tiny). */
 export const setPushPrefs = (userId: string, makerIds: string[], franchiseIds: string[]) => (db: Database): Database => {
