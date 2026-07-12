@@ -323,6 +323,24 @@ export const createLegacyStockProduct = (data: {
   return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit })(withProduct);
 };
 
+/**
+ * มีของเพิ่ม → เปิดรอบใหม่ (restock): closes the product's current open round (its buyer log stays
+ * frozen per-batch) and opens a FRESH batch in the same mutation — no half-state where two rounds
+ * are open. Price/deposit default to the previous round's snapshot; label defaults to "รอบ N".
+ */
+export const restockSpecialRound = (productId: string, opts: { qty: number; price?: number; deposit?: number; label?: string }) => (db: Database): Database => {
+  const rounds = db.batches.filter((b) => b.product_id === productId);
+  const last = [...rounds].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+  const price = opts.price && opts.price > 0 ? opts.price : (last?.price_total ?? db.products.find((p) => p.id === productId)?.price_total ?? 0);
+  const deposit = opts.deposit && opts.deposit > 0 ? Math.min(opts.deposit, price) : (last?.deposit_amount ?? price);
+  if (price <= 0 || opts.qty <= 0) return db;
+  const closed = { ...db, batches: db.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)) };
+  return openSpecialRound(productId, {
+    qty: opts.qty, price, deposit, fullPay: deposit >= price,
+    label: opts.label?.trim() || `รอบ ${rounds.length + 1}`, addSurplus: true,
+  })(closed);
+};
+
 /** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
 export const editBatch = (batchId: string, patch: { price?: number; qty?: number; label?: string }) => (db: Database): Database => {
   if (db.tickets.some((t) => t.batch_id === batchId)) return db; // locked once a ticket references it
