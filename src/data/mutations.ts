@@ -1,6 +1,23 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow, SourcingTransport } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
-import { nextTicketNo, unmatchedApprovedItems } from '../domain/services/tickets';
+import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
+import type { TicketNoStart } from '../lib/ticketno';
+
+/** Build a ticket_no allocator for ONE mutation run. If a prefix has a server-reserved start number,
+ *  hand out consecutive numbers from it; otherwise fall back to client counting (nextTicketNo). Pure
+ *  per call (the `used` cursor is local). (ticket_no collision fix — migration v47) */
+function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, when: Date) {
+  const used: Record<string, number> = {};
+  return (abbr: string, pending: { ticket_no: string }[]): string => {
+    const prefix = ticketPrefix(abbr, when);
+    if (startNos && startNos[prefix] != null) {
+      const i = used[prefix] ?? 0;
+      used[prefix] = i + 1;
+      return `${prefix}-${padTicketSeq(startNos[prefix] + i)}`;
+    }
+    return nextTicketNo(db, abbr, when, pending);
+  };
+}
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
@@ -33,7 +50,7 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
 /** Submit a cart as an order. Normally it awaits admin approval (PRD §9 step 5). When `autoApprove`
  *  is set — used for zero-payment orders, e.g. a Diamond member whose deposit is 0 — there is no slip
  *  to verify, so the order is approved and the tickets are issued immediately (customer gets ตั๋วเลย). */
-export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply) {
+export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply, startNos?: TicketNoStart) {
   return (db: Database): Database => {
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
@@ -98,7 +115,7 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     // mintRewards:false — this runs in the CUSTOMER session, which RLS forbids from minting event
     // coupons/awards; minting here would abort the whole flush and lose the tickets. Their rewards
     // are credited by the admin sweep (/admin/events) or the next admin-approved order.
-    return autoApprove ? approveOrder(orderId, { mintRewards: false })(withOrder) : withOrder;
+    return autoApprove ? approveOrder(orderId, { mintRewards: false, startNos })(withOrder) : withOrder;
   };
 }
 
@@ -156,13 +173,15 @@ export const repairTickets = () => (db: Database): Database => {
   return { ...out, tickets: [...issued, ...out.tickets] };
 };
 
-export function approveOrder(orderId: string, opts: { mintRewards?: boolean } = {}) {
+export function approveOrder(orderId: string, opts: { mintRewards?: boolean; startNos?: TicketNoStart } = {}) {
   const mintRewards = opts.mintRewards ?? true;
   return (db: Database): Database => {
     const order = db.orders.find((o) => o.id === orderId);
     if (!order || order.status !== 'pending_approval') return db;
 
-    const now = new Date().toISOString();
+    const when = new Date();
+    const now = when.toISOString();
+    const allocNo = ticketNoAllocator(db, opts.startNos, when);
     // build in a loop (not .map) so each ticket's number accounts for its siblings issued in THIS order
     const newTickets: PreorderTicket[] = [];
     for (const item of order.items) {
@@ -174,7 +193,7 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean } = 
       const unitDeposit = item.unit_deposit ?? variant?.deposit_amount ?? product.deposit_amount;
       newTickets.push({
         id: id('t'),
-        ticket_no: nextTicketNo(db, abbr, new Date(), newTickets),
+        ticket_no: allocNo(abbr, newTickets),
         product_id: product.id,
         variant_id: item.variant_id,
         batch_id: item.batch_id,
@@ -354,9 +373,21 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
   const price = opts.price && opts.price > 0 ? opts.price : (last?.price_total ?? db.products.find((p) => p.id === productId)?.price_total ?? 0);
   const deposit = opts.deposit && opts.deposit > 0 ? Math.min(opts.deposit, price) : (last?.deposit_amount ?? price);
   if (price <= 0 || opts.qty <= 0) return db;
-  const closed = { ...db, batches: db.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)) };
+  const fullPay = deposit >= price;
+  // RESET the product's lifecycle for the fresh round so round-2 buyers don't inherit round-1's
+  // advanced status (which would show them "ถึงไทยแล้ว" + skip the warehouse gate). Old-round tickets
+  // keep their own per-ticket status. fullPay = goods in hand → arrived; else new pre-order → production
+  // (must pass ยืนยันโกดัง again). (audit W#1 — cross-round status bleed)
+  const newStatus: ProductStatus = fullPay ? 'arrived' : 'production';
+  const closed: Database = {
+    ...db,
+    batches: db.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)),
+    products: db.products.map((p) => (p.id === productId
+      ? { ...p, status: newStatus, shipped_at: undefined, eta_note: fullPay ? 'พร้อมส่ง' : 'ผลิต · รอเข้าโกดัง' }
+      : p)),
+  };
   return openSpecialRound(productId, {
-    qty: opts.qty, price, deposit, fullPay: deposit >= price,
+    qty: opts.qty, price, deposit, fullPay,
     label: opts.label?.trim() || `รอบ ${rounds.length + 1}`, addSurplus: true,
   })(closed);
 };
@@ -388,8 +419,11 @@ export const confirmWarehouse = (ticketId: string, opts: { date: string; transpo
   const tickets = db.tickets.map((x) => (x.id === ticketId
     ? { ...x, product_status: 'shipping' as const, warehouse_at: opts.date, warehouse_transport: opts.transport, warehouse_slip: opts.slip ?? x.warehouse_slip }
     : x));
-  const productTickets = tickets.filter((x) => x.product_id === t.product_id);
-  const allMoved = productTickets.length > 0 && productTickets.every((x) => x.product_status !== 'production');
+  // scope "all moved" to the confirmed ticket's ROUND (batch cohort), not the whole product — a product
+  // can hold an old delivered round + a new production round, and confirming the new round must lift the
+  // product without being blocked by (or waiting on) the other round's tickets. (audit W#3)
+  const cohort = tickets.filter((x) => x.product_id === t.product_id && (x.batch_id ?? null) === (t.batch_id ?? null));
+  const allMoved = cohort.length > 0 && cohort.every((x) => x.product_status !== 'production');
   const products = allMoved
     ? db.products.map((p) => (p.id === t.product_id && p.status === 'production'
         // lift the product AND refresh the 'ผลิต · รอเข้าโกดัง' placeholder so the shop detail page
@@ -818,9 +852,10 @@ export const setPushConfig = (key: string, enabled: boolean) => (db: Database): 
  * Diamond auto-approve — orders wrote, tickets didn't) fixes itself the next time they open the app.
  * RLS-legal: a customer may insert their OWN tickets. Snapshot values come from the order item.
  */
-export const fillMissingTicketsFor = (userId: string) => (db: Database): Database => {
+export const fillMissingTicketsFor = (userId: string, startNos?: TicketNoStart) => (db: Database): Database => {
   const missing = unmatchedApprovedItems(db, userId);
   if (missing.length === 0) return db;
+  const allocNo = ticketNoAllocator(db, startNos, new Date());
   const issued: PreorderTicket[] = [];
   for (const { order, item } of missing) {
     const product = db.products.find((p) => p.id === item.product_id);
@@ -830,7 +865,7 @@ export const fillMissingTicketsFor = (userId: string) => (db: Database): Databas
     const unitDeposit = item.unit_deposit ?? product.deposit_amount;
     const when = order.approved_at ?? order.created_at;
     issued.push({
-      id: id('t'), ticket_no: nextTicketNo(db, abbr, new Date(), issued),
+      id: id('t'), ticket_no: allocNo(abbr, issued),
       product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
       owner_id: userId, original_buyer_id: userId, qty: item.qty,
       deposit_paid: item.deposit_amount ?? unitDeposit * item.qty, // line snapshot (rank perk included)

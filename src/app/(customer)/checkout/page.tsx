@@ -13,6 +13,8 @@ import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder } from '@/data/mutations';
+import { reserveTicketNos } from '@/lib/ticketno';
+import { ticketPrefixCounts } from '@/domain/services/tickets';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
@@ -117,8 +119,11 @@ export default function CheckoutPage() {
     // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
     // stay 'paid' and the stock would be held forever.
     if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
-    // Diamond / coupon-covered (payNow 0) → auto-approve so the ticket is issued immediately (no slip to check)
-    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined));
+    // Diamond / coupon-covered (payNow 0) → auto-approve issues the ticket right here in the CUSTOMER
+    // session, where RLS hides other customers' tickets → client numbering would collide. Reserve the
+    // numbers from the server first (migration v47); seed/preview returns {} → mutation falls back.
+    const startNos = noPayment ? await reserveTicketNos(ticketPrefixCounts(db, validLines.map((l) => l.productId))) : undefined;
+    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos));
     cart.clear();
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.

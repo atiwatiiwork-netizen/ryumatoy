@@ -1,18 +1,44 @@
 import type { Database } from '../entities';
+import { franchiseOf } from './catalog';
 
 /**
  * Ticket number generator — `{abbr}-{year}-{month}-{seq}` (PRD §8).
  * Sequence is per-franchise, per-month, padded to 4 digits.
  */
+/** The `{ABBR}-{YYYY}-{MM}` prefix a ticket_no is built on (no trailing dash). One sequence per
+ *  franchise per month. Used by BOTH the client fallback below AND the server RPC reserve path. */
+export function ticketPrefix(franchiseAbbr: string, when = new Date()): string {
+  return `${franchiseAbbr.toUpperCase()}-${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** Pad a sequence int into a ticket_no's 4-digit suffix. */
+export function padTicketSeq(n: number): string {
+  return String(n).padStart(4, '0');
+}
+
+/** How many tickets each prefix will need, from a list of product ids (one ticket per id) — used by the
+ *  UI handler to reserve exactly that many numbers per prefix from the server before issuing. */
+export function ticketPrefixCounts(db: Database, productIds: string[], when = new Date()): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const pid of productIds) {
+    const product = db.products.find((p) => p.id === pid);
+    if (!product) continue;
+    const prefix = ticketPrefix(franchiseOf(db, product)?.abbr ?? 'xx', when);
+    counts[prefix] = (counts[prefix] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** CLIENT fallback numbering (seed/preview, or when a server reserve wasn't available). In a customer
+ *  session this UNDER-counts (RLS hides other customers' tickets) and can collide — production issuance
+ *  reserves numbers from the server RPC instead (see reserveTicketNos / migration v47). */
 export function nextTicketNo(db: Database, franchiseAbbr: string, when = new Date(), pending: { ticket_no: string }[] = []): string {
-  const year = when.getFullYear();
-  const month = String(when.getMonth() + 1).padStart(2, '0');
-  const prefix = `${franchiseAbbr.toUpperCase()}-${year}-${month}-`;
+  const prefix = ticketPrefix(franchiseAbbr, when) + '-';
   // count issued tickets PLUS ones being created in this same batch (pending) — otherwise two tickets
   // of the same franchise issued in one approveOrder collide (ticket_no is UNIQUE in the DB → the
   // second insert fails → later tickets never persist → they vanish from the customer's wallet).
   const seq = [...db.tickets, ...pending].filter((t) => t.ticket_no.startsWith(prefix)).length + 1;
-  return prefix + String(seq).padStart(4, '0');
+  return prefix + padTicketSeq(seq);
 }
 
 /**

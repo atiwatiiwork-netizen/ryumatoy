@@ -10,7 +10,8 @@ import { approveOrder, rejectOrder } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { confirmReservation, releaseReservation } from '@/lib/reserve';
 import { franchiseOf } from '@/domain/services/catalog';
-import { nextTicketNo } from '@/domain/services/tickets';
+import { nextTicketNo, ticketPrefixCounts } from '@/domain/services/tickets';
+import { reserveTicketNos } from '@/lib/ticketno';
 
 export default function SlipApprovalPage() {
   const { id } = useParams<{ id: string }>();
@@ -37,7 +38,9 @@ export default function SlipApprovalPage() {
 
   const approve = async () => {
     const grantsBefore = db.couponGrants.filter((g) => g.user_id === order.user_id).length;
-    dispatch(approveOrder(order.id));
+    // reserve server ticket numbers so the counter stays authoritative across sessions (migration v47)
+    const startNos = await reserveTicketNos(ticketPrefixCounts(db, order.items.map((it) => it.product_id)));
+    dispatch(approveOrder(order.id, { startNos }));
     // read the post-mutation state synchronously (no-op mutation) — approveOrder may have just
     // auto-minted event reward coupons; the diff tells us whether to send the 🎁 push too
     let grantsAfter = grantsBefore;

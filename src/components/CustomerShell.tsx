@@ -8,7 +8,8 @@ import { useToast } from '@/state/ToastProvider';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { fillMissingTicketsFor, reclaimOrphanCouponGrants, markInstalled } from '@/data/mutations';
 import { isStandalone } from '@/lib/pwa';
-import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { unmatchedApprovedItems, ticketPrefixCounts } from '@/domain/services/tickets';
+import { reserveTicketNos } from '@/lib/ticketno';
 import { orphanUsedGrants } from '@/domain/services/coupons';
 import { store } from '@/data/store';
 import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
@@ -56,11 +57,16 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   const healed = useRef(false);
   useEffect(() => {
     if (healed.current || !CURRENT_USER_ID) return;
-    const missing = unmatchedApprovedItems(db, CURRENT_USER_ID).length;
-    if (missing === 0) return;
+    const missingItems = unmatchedApprovedItems(db, CURRENT_USER_ID);
+    if (missingItems.length === 0) return;
     healed.current = true;
-    dispatch(fillMissingTicketsFor(CURRENT_USER_ID));
-    flash(`กู้คืนใบพรีที่หายไป ${missing} ใบแล้ว ✓`);
+    // reserve server ticket numbers first — this self-heal runs in the CUSTOMER session, where client
+    // numbering would collide behind RLS (the very bug that lost the tickets). (migration v47)
+    (async () => {
+      const startNos = await reserveTicketNos(ticketPrefixCounts(db, missingItems.map((m) => m.item.product_id)));
+      dispatch(fillMissingTicketsFor(CURRENT_USER_ID, startNos));
+      flash(`กู้คืนใบพรีที่หายไป ${missingItems.length} ใบแล้ว ✓`);
+    })();
   }, [db, CURRENT_USER_ID, dispatch, flash]);
   // SELF-HEAL #2: coupons burned by a split flush (grant 'used' but its order/final-payment never
   // persisted) come back automatically too.
