@@ -73,16 +73,20 @@ export function InstallBellNudge({ userId }: { userId: string }) {
     try { await deferred.prompt(); const c = await deferred.userChoice; if (c.outcome === 'accepted') { setInstalled(true); setDeferred(null); flash('กำลังติดตั้ง… เปิดจากไอคอน Ryuma ได้เลย'); } /* dismissed → keep deferred so they can retry one-tap */ }
     catch { /* prompt failed → keep deferred */ }
   };
+  // install-FIRST: on a phone the bell is only offered AFTER the app is installed + opened from the icon
+  // (iOS *requires* it; on Android we enforce it too so every opt-in lands on the home screen). Desktop
+  // has no home-screen step → the bell is available directly.
+  const bellBlocked = isMobile && !installed;
+
   const doBell = async () => {
     if (busy) return;
+    if (bellBlocked) { flash('ติดตั้งลงหน้าจอโฮมก่อน แล้วเปิด Ryuma จากไอคอน จึงเปิดกระดิ่งได้'); return; }
     if (!pushSupported()) { flash(platform === 'ios' ? 'iPhone: ติดตั้งลงหน้าจอโฮมก่อน แล้วเปิดจากไอคอน' : 'อุปกรณ์นี้ยังไม่รองรับการแจ้งเตือน'); return; }
     setBusy(true);
     try { await enablePush(userId, dispatch); setBellOn(true); flash('เปิดกระดิ่งแล้ว 🔔 รับข่าวก่อนใครเลย'); }
     catch (e) { flash((e as Error).message === 'denied' ? 'ไม่ได้รับอนุญาต — เปิดได้ใน ตั้งค่า > การแจ้งเตือน' : 'เปิดกระดิ่งไม่สำเร็จ'); }
     finally { setBusy(false); }
   };
-
-  const iosBlockedBell = platform === 'ios' && !installed; // iOS เปิดกระดิ่งไม่ได้จนกว่าจะติดตั้ง
 
   return (
     <>
@@ -117,29 +121,38 @@ export function InstallBellNudge({ userId }: { userId: string }) {
                 {installed ? (
                   <div className="text-[12px] text-[#4ade80]">ติดตั้งแล้ว ✓</div>
                 ) : platform === 'ios' ? (
-                  <ol className="ml-4 list-decimal space-y-0.5 text-[12px] leading-relaxed text-ink-muted2">
-                    <li>แตะปุ่ม <b className="text-ink">แชร์</b> ▵ ด้านล่างจอ Safari</li>
-                    <li>เลื่อนหา <b className="text-ink">“เพิ่มลงในหน้าจอโฮม”</b></li>
-                    <li>เปิด <b className="text-ink">Ryuma</b> จากไอคอนบนหน้าจอ</li>
-                  </ol>
+                  <>
+                    <IosInstallVisual />
+                    <ol className="ml-4 list-decimal space-y-0.5 text-[12px] leading-relaxed text-ink-muted2">
+                      <li>แตะปุ่ม <b className="text-ink">แชร์</b> ด้านล่างจอ Safari</li>
+                      <li>เลื่อนหา <b className="text-ink">“เพิ่มลงในหน้าจอโฮม”</b></li>
+                      <li>เปิด <b className="text-ink">Ryuma</b> จากไอคอนบนหน้าจอ แล้วมากดเปิดกระดิ่ง</li>
+                    </ol>
+                  </>
                 ) : deferred ? (
-                  <button onClick={doInstall} className="rounded-lg bg-[#2563eb] px-4 py-2 text-[13px] font-bold text-white">📲 ติดตั้งแอปเลย</button>
+                  <>
+                    <button onClick={doInstall} className="mb-1.5 rounded-lg bg-[#2563eb] px-4 py-2 text-[13px] font-bold text-white">📲 ติดตั้งแอปเลย (แตะเดียว)</button>
+                    <div className="text-[11px] text-ink-faint">ติดตั้งเสร็จ → เปิด Ryuma จากไอคอนบนหน้าจอ แล้วมากดเปิดกระดิ่ง</div>
+                  </>
                 ) : (
-                  <ol className="ml-4 list-decimal space-y-0.5 text-[12px] leading-relaxed text-ink-muted2">
-                    <li>แตะเมนู <b className="text-ink">⋮</b> มุมขวาบนของ Chrome</li>
-                    <li>เลือก <b className="text-ink">“ติดตั้งแอป” / “เพิ่มลงในหน้าจอหลัก”</b></li>
-                    <li>เปิด <b className="text-ink">Ryuma</b> จากไอคอน</li>
-                  </ol>
+                  <>
+                    <AndroidInstallVisual />
+                    <ol className="ml-4 list-decimal space-y-0.5 text-[12px] leading-relaxed text-ink-muted2">
+                      <li>แตะเมนู <b className="text-ink">⋮</b> มุมขวาบนของ Chrome</li>
+                      <li>เลือก <b className="text-ink">“ติดตั้งแอป” / “เพิ่มลงในหน้าจอหลัก”</b></li>
+                      <li>เปิด <b className="text-ink">Ryuma</b> จากไอคอน แล้วมากดเปิดกระดิ่ง</li>
+                    </ol>
+                  </>
                 )}
               </Step>
             )}
 
-            {/* ขั้นเปิดกระดิ่ง */}
-            <Step done={bellOn} n={isMobile ? 2 : 1} title="เปิดกระดิ่งแจ้งเตือน">
+            {/* ขั้นเปิดกระดิ่ง — บนมือถือ ล็อกไว้จนกว่าจะติดตั้ง + เปิดจากไอคอน (install-first) */}
+            <Step done={bellOn} n={isMobile ? 2 : 1} title="เปิดกระดิ่งแจ้งเตือน" locked={bellBlocked}>
               {bellOn ? (
                 <div className="text-[12px] text-[#4ade80]">เปิดอยู่แล้ว ✓ เยี่ยมมาก!</div>
-              ) : iosBlockedBell ? (
-                <div className="text-[12px] leading-relaxed text-[#fbbf24]">ทำขั้นที่ 1 ให้เสร็จก่อน แล้วเปิด Ryuma จากไอคอน จึงจะกดเปิดกระดิ่งได้ (ข้อจำกัดของ iPhone)</div>
+              ) : bellBlocked ? (
+                <div className="text-[12px] leading-relaxed text-[#fbbf24]">🔒 ทำขั้นที่ 1 ให้เสร็จก่อน แล้ว<b className="text-ink">เปิด Ryuma จากไอคอน</b>บนหน้าจอ จึงจะกดเปิดกระดิ่งได้</div>
               ) : (
                 <button onClick={doBell} disabled={busy} className="rounded-lg bg-[#16a34a] px-4 py-2 text-[13px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังเปิด…' : '🔔 เปิดกระดิ่งเลย'}</button>
               )}
@@ -155,13 +168,64 @@ export function InstallBellNudge({ userId }: { userId: string }) {
   );
 }
 
-function Step({ n, title, done, children }: { n: number; title: string; done: boolean; children: React.ReactNode }) {
+function Step({ n, title, done, locked, children }: { n: number; title: string; done: boolean; locked?: boolean; children: React.ReactNode }) {
   return (
-    <div className="mb-3 flex gap-3 rounded-xl border border-subtle bg-surface-3/50 p-3">
-      <span className={cx('grid h-6 w-6 shrink-0 place-items-center rounded-full text-[12px] font-bold', done ? 'bg-[#16a34a] text-white' : 'bg-surface-4 text-ink-muted2')}>{done ? '✓' : n}</span>
+    <div className={cx('mb-3 flex gap-3 rounded-xl border border-subtle bg-surface-3/50 p-3', locked && 'opacity-70')}>
+      <span className={cx('grid h-6 w-6 shrink-0 place-items-center rounded-full text-[12px] font-bold', done ? 'bg-[#16a34a] text-white' : locked ? 'bg-surface-4 text-ink-faint' : 'bg-surface-4 text-ink-muted2')}>{done ? '✓' : locked ? '🔒' : n}</span>
       <div className="min-w-0 flex-1">
         <div className="mb-1 text-[13px] font-bold">{title}</div>
         {children}
+      </div>
+    </div>
+  );
+}
+
+/** iOS: illustrate แชร์ → เพิ่มลงในหน้าจอโฮม (the two taps users can't find). Inline SVG = self-contained
+ *  (works offline in the PWA, CSP-safe, no external asset). */
+function IosInstallVisual() {
+  return (
+    <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#2563eb]/35 bg-[#2563eb]/[0.08] p-2.5">
+      <div className="flex flex-col items-center gap-1">
+        <div className="grid h-10 w-10 place-items-center rounded-xl border border-[#2563eb]/50 bg-[#2563eb]/[0.14]">
+          <svg width="18" height="22" viewBox="0 0 18 22" fill="none" aria-hidden>
+            <path d="M9 2 L9 13" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M5.5 5 L9 1.8 L12.5 5" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M4 9 H3.2 A1.7 1.7 0 0 0 1.5 10.7 V18.3 A1.7 1.7 0 0 0 3.2 20 H14.8 A1.7 1.7 0 0 0 16.5 18.3 V10.7 A1.7 1.7 0 0 0 14.8 9 H14" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </div>
+        <span className="text-[9.5px] font-bold text-[#93c5fd]">1. แชร์</span>
+      </div>
+      <Icon name="plus" size={13} className="shrink-0 rotate-90 text-ink-faint" />
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-ink-faint text-ink-muted2">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+            <rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M7 4 V10 M4 7 H10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="text-[11px] font-semibold leading-tight">2. เพิ่มลงในหน้าจอโฮม</span>
+      </div>
+    </div>
+  );
+}
+
+/** Android (no native prompt): illustrate เมนู ⋮ → ติดตั้งแอป. */
+function AndroidInstallVisual() {
+  return (
+    <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#2563eb]/35 bg-[#2563eb]/[0.08] p-2.5">
+      <div className="flex flex-col items-center gap-1">
+        <div className="grid h-10 w-10 place-items-center rounded-xl border border-[#2563eb]/50 bg-[#2563eb]/[0.14] text-lg font-black leading-none text-[#60a5fa]">⋮</div>
+        <span className="text-[9.5px] font-bold text-[#93c5fd]">1. เมนู</span>
+      </div>
+      <Icon name="plus" size={13} className="shrink-0 rotate-90 text-ink-faint" />
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-ink-faint text-ink-muted2">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+            <rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M7 4 V10 M4 7 H10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="text-[11px] font-semibold leading-tight">2. ติดตั้งแอป</span>
       </div>
     </div>
   );
