@@ -453,6 +453,21 @@ export interface PushPref {
 /** Generic app config row (key → jsonb) — for settings that must NOT ride on shop_settings'
  *  fixed column list (adding columns there breaks every settings save until the migration runs).
  *  First user: sourcing transport ETA ranges {truck_min,truck_max,ship_min,ship_max}. */
+/** Event ภารกิจ (mission quest) — customer completes 3 checks (มีใบพรี / ลงหน้าจอ / เปิดกระดิ่ง) and
+ *  submits ONCE; admin reviews (proof screenshot when the install couldn't be system-verified) and
+ *  approves → reward coupon granted in the ADMIN session (RLS: customers never mint coupons, DNA rule 7).
+ *  Config (title/window/reward) lives in app_config key 'mission_event' — no schema change to campaigns. */
+export type MissionStatus = 'pending' | 'approved' | 'rejected';
+export interface MissionSubmission {
+  id: string;
+  event_key: string; // 'mission_event' (future events can reuse the table)
+  user_id: string;
+  status: MissionStatus;
+  proof_url?: string; // screenshot fallback when installed_at wasn't stamped
+  created_at: string;
+  approved_at?: string;
+}
+
 export interface AppConfigRow {
   key: string;
   value: Record<string, unknown>;
@@ -536,6 +551,7 @@ export interface Database {
   pushPrefs: PushPref[];
   pushConfig: PushConfigRow[];
   sourcingRequests: SourcingRequest[];
+  missionSubmissions: MissionSubmission[];
   appConfig: AppConfigRow[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];

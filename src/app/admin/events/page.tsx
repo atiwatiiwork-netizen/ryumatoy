@@ -9,6 +9,7 @@ import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
 import { genId, upsertCampaign, deleteCampaign, grantRewardsSweep } from '@/data/mutations';
 import { campaignLive, sortedTiers } from '@/domain/services/campaigns';
+import { MissionAdmin } from './MissionAdmin';
 import type { Campaign, CampaignTier, CouponScope } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -232,6 +233,8 @@ export default function AdminEventsPage() {
           )}
         </Panel>
       </div>
+
+      <MissionAdmin />
 
       <PricingGuide />
     </div>

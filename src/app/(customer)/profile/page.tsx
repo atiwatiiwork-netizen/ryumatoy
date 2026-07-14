@@ -9,6 +9,7 @@ import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge } from '@/components/ui';
 import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
 import { usableGrantsFor } from '@/domain/services/coupons';
+import { missionLive, missionSubmissionFor } from '@/domain/services/missions';
 import { RankPerksButton } from '@/components/RankModals';
 import { AuthScreen } from '@/components/AuthScreen';
 import { EventProgress } from '@/components/EventBits';
@@ -36,6 +37,7 @@ export default function ProfilePage() {
   const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode; push?: boolean }[] = [
     { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
     { icon: 'tag', label: 'คูปองของฉัน', href: '/coupons', right: myCoupons ? <Pill>{myCoupons}</Pill> : undefined },
+    { icon: 'heart', label: 'Event ภารกิจ', href: '/missions', right: missionLive(db) && missionSubmissionFor(db, CURRENT_USER_ID)?.status !== 'approved' ? <span className="animate-pulse rounded-full bg-[#d4af37]/[0.2] px-2 py-0.5 text-[10.5px] font-bold text-[#f1d27a]">🎁 มีกิจกรรม!</span> : undefined },
     { icon: 'search', label: 'หาของ', href: '/sourcing', right: mySourcing ? <Pill>{mySourcing}</Pill> : undefined },
     { icon: 'bell', label: 'การแจ้งเตือน', push: true },
     { icon: 'swap', label: 'รายการขาย P2P' },

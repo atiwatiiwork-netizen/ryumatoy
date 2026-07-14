@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, PushSubscription as PushSubscriptionRow, SourcingTransport } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
@@ -633,6 +633,49 @@ export const grantCouponToRank = (couponId: string, rank: RankName) => (db: Data
 export const revokeGrant = (grantId: string) => (db: Database): Database => ({
   ...db,
   couponGrants: db.couponGrants.map((g) => (g.id === grantId && g.status === 'active' ? { ...g, status: 'revoked' as const } : g)),
+});
+
+// ── Event ภารกิจ (mission quest — ryuma-event-spec) ─────────────────────────
+import { MISSION_KEY, missionConfig as readMissionConfig, missionSubmissionFor, type MissionConfig } from '../domain/services/missions';
+
+/** Save the mission-event config (app_config key → jsonb; no schema change). Admin session. */
+export const setMissionConfig = (cfg: MissionConfig) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: MISSION_KEY, value: cfg as unknown as Record<string, unknown> }, ...db.appConfig.filter((c) => c.key !== MISSION_KEY)],
+});
+
+/** Customer submits the completed quest — ONCE per event: a pending/approved submission blocks another
+ *  (a REJECTED one doesn't, so they can fix the proof and resubmit). Status always starts 'pending'
+ *  (matches the RLS insert policy). */
+export const submitMission = (userId: string, proofUrl?: string) => (db: Database): Database => {
+  const latest = missionSubmissionFor(db, userId);
+  if (latest && latest.status !== 'rejected') return db;
+  const sub: MissionSubmission = {
+    id: id('ms'), event_key: MISSION_KEY, user_id: userId, status: 'pending',
+    proof_url: proofUrl || undefined, created_at: new Date().toISOString(),
+  };
+  return { ...db, missionSubmissions: [sub, ...db.missionSubmissions] };
+};
+
+/** Admin approves a submission → mark approved + grant the reward coupon. Runs in the ADMIN session
+ *  only (RLS: customers can't update submissions or mint grants — DNA rule 7). Idempotent twice over:
+ *  the status guard stops a double-approve, and grantCoupon itself skips a user already holding an
+ *  active copy of the reward. */
+export const approveMission = (submissionId: string) => (db: Database): Database => {
+  const sub = db.missionSubmissions.find((s) => s.id === submissionId);
+  if (!sub || sub.status !== 'pending') return db;
+  const cfg = readMissionConfig(db);
+  const marked: Database = {
+    ...db,
+    missionSubmissions: db.missionSubmissions.map((s) => (s.id === submissionId ? { ...s, status: 'approved' as const, approved_at: new Date().toISOString() } : s)),
+  };
+  return cfg?.reward_coupon_id ? grantCoupon(cfg.reward_coupon_id, [sub.user_id])(marked) : marked;
+};
+
+/** Admin rejects (e.g. proof screenshot ไม่ใช่ของจริง) — customer sees the state and can resubmit. */
+export const rejectMission = (submissionId: string) => (db: Database): Database => ({
+  ...db,
+  missionSubmissions: db.missionSubmissions.map((s) => (s.id === submissionId && s.status === 'pending' ? { ...s, status: 'rejected' as const } : s)),
 });
 
 // ── Events / กิจกรรม ─────────────────────────────────────────────────────────
