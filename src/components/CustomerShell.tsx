@@ -19,7 +19,7 @@ import { PreviewSwitcher } from './PreviewSwitcher';
 import { RankCongrats } from './RankModals';
 import { CouponReceived } from './CouponTicket';
 import { ProfileGate } from './ProfileGate';
-import { PublicLanding } from './PublicLanding';
+import { OnboardGate } from './OnboardGate';
 import { InstallBellNudge } from './InstallBellNudge';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
@@ -97,7 +97,8 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   // shop. Wait for the session to restore first so logged-in members never flash the login screen.
   if (canLogin) {
     if (!authReady) return <div className="grid min-h-screen place-items-center bg-base"><img src="/ryuma-logo.png" alt="" width={44} height={44} className="animate-pulse rounded-xl opacity-80" /></div>;
-    if (!isLoggedIn) return <PublicLanding />;
+    // anonymous first-touch: onboard (install-to-home-screen first) then the login/signup landing
+    if (!isLoggedIn) return <OnboardGate />;
     // suspended (กันสปาย): the catalog RLS already hides everything — show a clear notice instead of an empty shop
     if (me?.suspended) {
       return (
