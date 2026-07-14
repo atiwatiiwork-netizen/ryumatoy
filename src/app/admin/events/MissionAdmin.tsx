@@ -10,6 +10,7 @@ import { MissionQuestCard } from '@/components/MissionQuest';
 import { missionConfig, missionInWindow, missionStateFor, type MissionConfig } from '@/domain/services/missions';
 import { setMissionConfig, approveMission, rejectMission, createCoupon } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
+import { uploadImage } from '@/lib/upload';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -35,6 +36,14 @@ export function MissionAdmin() {
   });
   const set = <K extends keyof MissionConfig>(k: K, v: MissionConfig[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const reward = db.coupons.find((c) => c.id === draft.reward_coupon_id);
+  const [banBusy, setBanBusy] = useState(false);
+  const onBanner = async (file?: File) => {
+    if (!file) return;
+    setBanBusy(true);
+    try { set('banner_url', await uploadImage(file, 'banner')); flash('อัปแบนเนอร์ภารกิจแล้ว ✓'); }
+    catch { flash('อัปโหลดไม่สำเร็จ'); }
+    finally { setBanBusy(false); }
+  };
 
   // preview toggles — admin can flip each quest state to see every look of the card
   const [pv, setPv] = useState({ hasTicket: true, installed: false, bellOn: true });
@@ -83,6 +92,17 @@ export function MissionAdmin() {
         <div className="flex flex-col gap-3">
           <Field label="ชื่อกิจกรรม"><input className={inputCls} value={draft.title} onChange={(e) => set('title', e.target.value)} /></Field>
           <Field label="คำอธิบายสั้น"><input className={inputCls} value={draft.blurb ?? ''} onChange={(e) => set('blurb', e.target.value)} /></Field>
+          <div>
+            <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">แบนเนอร์ภารกิจ (โชว์บนหน้า Event ภารกิจ ของลูกค้า)</div>
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-accent bg-surface-3 p-2.5">
+              {draft.banner_url
+                ? <img src={draft.banner_url} alt="" className="h-14 w-28 rounded-lg object-cover" />
+                : <div className="grid h-14 w-28 place-items-center rounded-lg bg-surface-4 text-ink-faint">{banBusy ? <Icon name="box" size={18} className="animate-pulse" /> : <Icon name="camera" size={18} />}</div>}
+              <span className="text-[12px] text-ink-faint">{draft.banner_url ? 'เปลี่ยนรูป' : 'แตะอัปโหลด (แนวนอน, เอารูปที่ใส่ข้อความแล้ว)'}</span>
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => onBanner(e.target.files?.[0])} />
+            </label>
+            {draft.banner_url && <button onClick={() => set('banner_url', undefined)} className="mt-1 text-[11px] font-semibold text-[#f87171]">ลบแบนเนอร์</button>}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="วันเริ่ม"><input type="date" className={inputCls} value={draft.starts_at} onChange={(e) => set('starts_at', e.target.value)} /></Field>
             <Field label="วันสิ้นสุด (รวมทั้งวัน)"><input type="date" className={inputCls} value={draft.ends_at} onChange={(e) => set('ends_at', e.target.value)} /></Field>

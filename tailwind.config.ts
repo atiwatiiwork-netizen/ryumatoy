@@ -77,8 +77,14 @@ const config: Config = {
           '0%,100%': { transform: 'translateY(0)' },
           '50%': { transform: 'translateY(-5px)' },
         },
+        // แบนเนอร์ Event: ไฟกระพริบ = gradient วิ่งรอบกรอบ + เต้นสว่าง
+        pulseGlow: {
+          '0%,100%': { backgroundPosition: '0% 50%', opacity: '.9', filter: 'blur(3px)' },
+          '50%': { backgroundPosition: '100% 50%', opacity: '.5', filter: 'blur(6px)' },
+        },
       },
       animation: {
+        pulseGlow: 'pulseGlow 1.8s ease-in-out infinite',
         pulseRed: 'pulseRed 2.2s infinite',
         couponShine: 'couponShine 2.6s ease-in-out infinite',
         twinkle: 'twinkle 1.9s ease-in-out infinite',

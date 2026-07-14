@@ -15,6 +15,7 @@ export const MISSION_KEY = 'mission_event';
 export interface MissionConfig {
   title: string;
   blurb?: string;
+  banner_url?: string; // แบนเนอร์กิจกรรม (โชว์บนหน้า /missions ของลูกค้า) — คนละตัวกับแบนเนอร์ Campaign
   starts_at: string; // YYYY-MM-DD (inclusive)
   ends_at: string;   // YYYY-MM-DD (inclusive, whole day)
   reward_coupon_id: string;
@@ -29,6 +30,7 @@ export function missionConfig(db: Database): MissionConfig | null {
   return {
     title: v.title,
     blurb: typeof v.blurb === 'string' ? v.blurb : undefined,
+    banner_url: typeof v.banner_url === 'string' ? v.banner_url : undefined,
     starts_at: String(v.starts_at ?? ''),
     ends_at: String(v.ends_at ?? ''),
     reward_coupon_id: String(v.reward_coupon_id ?? ''),

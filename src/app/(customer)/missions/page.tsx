@@ -64,16 +64,29 @@ export default function MissionsPage() {
           <div className="mt-1 text-[12.5px] text-ink-faint">เปิดกระดิ่งไว้ มีกิจกรรมใหม่จะแจ้งเตือนทันที</div>
         </div>
       ) : !state ? null : (
-        <MissionQuestCard
-          cfg={live}
-          rewardValue={reward?.value ?? 0}
-          flags={state}
-          proofUrl={proofUrl}
-          busy={busy}
-          onProofFile={onProofFile}
-          onEnableBell={onEnableBell}
-          onSubmit={onSubmit}
-        />
+        <>
+          {live.banner_url && (
+            // แบนเนอร์กิจกรรม + ไฟกระพริบ (glow วิ่งรอบกรอบ) — เรียกความสนใจก่อนเข้าเควส
+            <div className="relative mb-4 overflow-hidden rounded-2xl">
+              <div className="animate-pulseGlow absolute -inset-[2px] rounded-2xl bg-gradient-to-r from-[#d4af37] via-[#dc2626] to-[#d4af37] bg-[length:200%_100%]" />
+              <img src={live.banner_url} alt={live.title} className="relative w-full rounded-2xl object-cover" />
+              <span className="absolute left-2 top-2 animate-pulse rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-extrabold text-[#f1d27a] backdrop-blur-sm">✨ กิจกรรมพิเศษ</span>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center bg-gradient-to-t from-black/70 to-transparent pb-2 pt-6">
+                <span className="animate-pulse text-[12.5px] font-bold text-white drop-shadow">👇 ทำภารกิจด้านล่าง รับคูปองเลย!</span>
+              </div>
+            </div>
+          )}
+          <MissionQuestCard
+            cfg={live}
+            rewardValue={reward?.value ?? 0}
+            flags={state}
+            proofUrl={proofUrl}
+            busy={busy}
+            onProofFile={onProofFile}
+            onEnableBell={onEnableBell}
+            onSubmit={onSubmit}
+          />
+        </>
       )}
     </div>
   );
