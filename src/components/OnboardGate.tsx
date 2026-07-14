@@ -53,7 +53,7 @@ export function OnboardGate() {
   }, []);
 
   if (screen === 'wait') return <Splash />;
-  if (screen === 'inapp') return <OpenInBrowser kind={kind} onSkip={() => { sessionStorage.setItem(INAPP_SKIP_KEY, '1'); setScreen('landing'); }} />;
+  if (screen === 'inapp') return <OpenInBrowser kind={kind} platform={platform} onSkip={() => { sessionStorage.setItem(INAPP_SKIP_KEY, '1'); setScreen('landing'); }} />;
   if (screen === 'install') return <InstallFirst platform={platform} deferred={deferred} onInstalled={() => setScreen('landing')} onSkip={() => { localStorage.setItem(SKIP_KEY, '1'); setScreen('landing'); }} />;
   return <PublicLanding />;
 }
@@ -75,30 +75,51 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** LINE/FB/IG webview → tell them to reopen in the real browser (only place install + push work). */
-function OpenInBrowser({ kind, onSkip }: { kind?: InAppKind; onSkip: () => void }) {
+/** LINE/FB/IG webview → reopen in the real browser (only place install + push work).
+ *  Android: an intent:// link escapes the webview to the default browser in ONE tap.
+ *  iOS: Apple gives NO way to open Safari from a webview → guide to the app's ⋯ menu + offer copy-link.
+ *  The ⋯/menu button sits at the RIGHT — but top or bottom depends on the app/OS, so we don't hard-code it. */
+function OpenInBrowser({ kind, platform, onSkip }: { kind?: InAppKind; platform: Platform; onSkip: () => void }) {
   const { flash } = useToast();
   const appName = kind === 'line' ? 'LINE' : kind === 'facebook' ? 'Facebook' : kind === 'instagram' ? 'Instagram' : 'แอปนี้';
-  const menuHint = kind === 'line'
-    ? 'แตะปุ่ม ⋯ มุมขวาบน → “เปิดในเบราว์เซอร์อื่น”'
-    : 'แตะปุ่ม ⋯ (เมนู) → “เปิดในเบราว์เซอร์ / Open in browser”';
-  const url = typeof window !== 'undefined' ? window.location.origin : 'https://ryumatoy.vercel.app';
+  const host = typeof window !== 'undefined' ? window.location.host : 'ryumatoy.vercel.app';
+  const path = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+  const httpsUrl = `https://${host}${path}`;
+  const androidIntent = `intent://${host}${path}#Intent;scheme=https;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(httpsUrl)};end`;
+  const browser = platform === 'ios' ? 'Safari' : 'Chrome';
   return (
     <Frame>
       <div className="rounded-3xl border border-subtle bg-surface-2 p-6">
-        <div className="mb-1 text-center text-xl font-extrabold">เปิดใน Safari / Chrome ก่อนนะ 🌐</div>
-        <div className="mb-4 text-center text-[13px] leading-relaxed text-ink-muted2">คุณกำลังเปิดจาก{appName} — ในนี้<b className="text-ink"> ลงหน้าจอ + รับแจ้งเตือนไม่ได้</b> เปิดในเบราว์เซอร์แล้วจะใช้ได้เต็มที่</div>
-        <div className="mb-4 rounded-xl border border-[#2563eb]/35 bg-[#2563eb]/[0.08] p-3.5">
-          <div className="mb-1.5 text-[12px] font-bold text-[#bcd3f5]">วิธีทำ</div>
-          <div className="text-[12.5px] leading-relaxed text-ink-muted2">{menuHint}</div>
-          <div className="mt-1 text-[12.5px] leading-relaxed text-ink-muted2">แล้ววางลิงก์นี้ในเบราว์เซอร์ (ถ้าจำเป็น):</div>
-        </div>
-        <button
-          onClick={async () => flash((await copyText(url)) ? 'คัดลอกลิงก์แล้ว ✓ ไปวางใน Safari/Chrome' : 'คัดลอกไม่สำเร็จ')}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563eb] py-3 text-sm font-bold text-white"
-        >
-          <Icon name="copy" size={17} /> คัดลอกลิงก์ร้าน
-        </button>
+        <div className="mb-1 text-center text-xl font-extrabold">เปิดใน {browser} ก่อนนะ 🌐</div>
+        <div className="mb-4 text-center text-[13px] leading-relaxed text-ink-muted2">ตอนนี้เปิดจาก{appName} — ในนี้<b className="text-ink"> ลงหน้าจอ + รับแจ้งเตือนไม่ได้</b> เปิดในเบราว์เซอร์แล้วใช้ได้เต็มที่</div>
+
+        {platform === 'android' ? (
+          <>
+            {/* Android: one-tap escape to the default browser */}
+            <a href={androidIntent} className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563eb] py-3.5 text-sm font-bold text-white">
+              <Icon name="share" size={17} /> เปิดใน Chrome เลย (แตะเดียว)
+            </a>
+            <div className="text-center text-[11.5px] leading-relaxed text-ink-faint">ถ้าไม่เด้ง → แตะปุ่ม <b className="text-ink">⋯ / เมนู</b> (มุมขวา บนหรือล่าง) → <b className="text-ink">“เปิดในเบราว์เซอร์”</b></div>
+          </>
+        ) : (
+          <>
+            {/* iOS: can't auto-open Safari → guide to the app's own menu */}
+            <div className="mb-3 rounded-xl border border-[#2563eb]/35 bg-[#2563eb]/[0.08] p-3.5">
+              <div className="mb-1.5 text-[12px] font-bold text-[#bcd3f5]">วิธีเปิดใน Safari (2 ขั้น)</div>
+              <ol className="ml-4 list-decimal space-y-1 text-[12.5px] leading-relaxed text-ink-muted2">
+                <li>แตะปุ่ม <b className="text-ink">⋯</b> หรือ <b className="text-ink">เมนู</b> — อยู่<b className="text-ink">มุมขวา</b> (บนหรือล่าง แล้วแต่แอป)</li>
+                <li>เลือก <b className="text-ink">“เปิดในเบราว์เซอร์” / “เปิดใน Safari”</b></li>
+              </ol>
+            </div>
+            <button
+              onClick={async () => flash((await copyText(httpsUrl)) ? 'คัดลอกลิงก์แล้ว ✓ เปิด Safari แล้ววางได้เลย' : 'คัดลอกไม่สำเร็จ')}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-surface-3 py-2.5 text-[13px] font-bold text-ink-muted2"
+            >
+              <Icon name="copy" size={16} /> หรือ คัดลอกลิงก์ไปวางเอง
+            </button>
+          </>
+        )}
+
         <button onClick={onSkip} className="mt-3 w-full text-center text-[12.5px] font-semibold text-ink-faint">ข้ามไปก่อน (ดู/สมัครในนี้) →</button>
       </div>
     </Frame>

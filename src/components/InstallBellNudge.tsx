@@ -125,7 +125,7 @@ export function InstallBellNudge({ userId }: { userId: string }) {
                 ) : inApp ? (
                   <div className="text-[12px] leading-relaxed text-[#fbbf24]">
                     ตอนนี้เปิดจากในแอป (LINE/เฟซบุ๊ก) — <b className="text-ink">ลงหน้าจอ + เปิดกระดิ่งไม่ได้</b><br />
-                    แตะปุ่ม <b className="text-ink">⋯</b> มุมขวาบน → <b className="text-ink">“เปิดในเบราว์เซอร์ / Safari”</b> ก่อน แล้วค่อยติดตั้ง
+                    แตะปุ่ม <b className="text-ink">⋯ / เมนู</b> (มุมขวา บนหรือล่าง แล้วแต่แอป) → <b className="text-ink">“เปิดในเบราว์เซอร์ / Safari”</b> ก่อน แล้วค่อยติดตั้ง
                   </div>
                 ) : platform === 'ios' ? (
                   <>
