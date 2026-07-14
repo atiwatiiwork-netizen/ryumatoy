@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { pushSupported, currentPushSubscription, enablePush } from '@/lib/push';
-import { detectPlatform, isStandalone, type Platform } from '@/lib/pwa';
+import { detectPlatform, isStandalone, inAppBrowser, type Platform } from '@/lib/pwa';
 import { Icon } from './Icon';
 import { cx } from './ui';
 
@@ -31,6 +31,7 @@ export function InstallBellNudge({ userId }: { userId: string }) {
   const [open, setOpen] = useState(false);
   const [bannerOff, setBannerOff] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inApp, setInApp] = useState(false); // LINE/FB/IG webview → can't install/push → guide to a real browser
 
   const recheck = async () => {
     setInstalled(isStandalone());
@@ -41,6 +42,7 @@ export function InstallBellNudge({ userId }: { userId: string }) {
 
   useEffect(() => {
     setPlatform(detectPlatform());
+    setInApp(inAppBrowser().inApp);
     setBannerOff(sessionStorage.getItem(BANNER_KEY) === '1');
     const onBIP = (e: Event) => { e.preventDefault(); setDeferred(e as BIPEvent); };
     const onInstalled = () => { setInstalled(true); setDeferred(null); };
@@ -120,6 +122,11 @@ export function InstallBellNudge({ userId }: { userId: string }) {
               <Step done={installed} n={1} title="ติดตั้งลงหน้าจอโทรศัพท์">
                 {installed ? (
                   <div className="text-[12px] text-[#4ade80]">ติดตั้งแล้ว ✓</div>
+                ) : inApp ? (
+                  <div className="text-[12px] leading-relaxed text-[#fbbf24]">
+                    ตอนนี้เปิดจากในแอป (LINE/เฟซบุ๊ก) — <b className="text-ink">ลงหน้าจอ + เปิดกระดิ่งไม่ได้</b><br />
+                    แตะปุ่ม <b className="text-ink">⋯</b> มุมขวาบน → <b className="text-ink">“เปิดในเบราว์เซอร์ / Safari”</b> ก่อน แล้วค่อยติดตั้ง
+                  </div>
                 ) : platform === 'ios' ? (
                   <>
                     <IosInstallVisual />

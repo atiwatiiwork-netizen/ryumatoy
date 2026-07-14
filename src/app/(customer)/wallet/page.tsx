@@ -8,7 +8,7 @@ import { baht, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, cx } from '@/components/ui';
-import { manufacturerOf } from '@/domain/services/catalog';
+import { manufacturerOf, productLabel, lineImage } from '@/domain/services/catalog';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { MyCoupons } from '@/components/CouponTicket';
 import type { PreorderTicket } from '@/domain/entities';
@@ -79,15 +79,15 @@ export default function WalletPage() {
           </div>
           <div className="flex flex-col gap-2.5">
             {g.tickets.map((t) => {
-              const product = db.products.find((p) => p.id === t.product_id)!;
               const due = t.remaining_amount - t.remaining_paid;
+              const img = lineImage(db, t.product_id, t.variant_id);
               return (
                 <Link key={t.id} href={`/wallet/${t.ticket_no}`} className="flex overflow-hidden rounded-card border border-subtle bg-surface-2">
                   <div className="w-1" style={{ background: STATUS_FILL[t.product_status as StatusKey] }} />
                   <div className="flex min-w-0 flex-1 gap-3 p-3">
                     <div className="h-[66px] w-[66px] flex-shrink-0 overflow-hidden rounded-[10px] border border-subtle">
-                      {product?.images?.[0]
-                        ? <img src={product.images[0]} alt="" className="h-full w-full object-cover" />
+                      {img
+                        ? <img src={img} alt="" className="h-full w-full object-cover" />
                         : <div className="grid h-full w-full place-items-center bg-stripe"><Icon name="box" size={26} className="text-primary-soft/25" /></div>}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -95,7 +95,7 @@ export default function WalletPage() {
                         <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
                         <StatusBadge status={(t.status === 'paid_full' ? 'paid_full' : t.product_status) as StatusKey} />
                       </div>
-                      <div className="my-1.5 text-[13px] font-semibold leading-tight">{product?.series_name}</div>
+                      <div className="my-1.5 text-[13px] font-semibold leading-tight">{productLabel(db, t.product_id, t.variant_id)}</div>
                       <div className="flex items-center justify-between">
                         <span className={cx('text-[12.5px] font-semibold', due > 0 ? 'text-primary-soft' : 'text-[#4ade80]')}>{due > 0 ? `ค้าง ${baht(due)}` : 'จ่ายครบแล้ว ✓'}</span>
                         <Icon name="qr" size={18} className="text-ink-faint" />

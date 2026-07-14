@@ -9,7 +9,7 @@ import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProgressBar, QrPanel, TicketQr, cx } from '@/components/ui';
-import { manufacturerNameOf, franchiseOf } from '@/domain/services/catalog';
+import { manufacturerNameOf, franchiseOf, productLabel, lineImage } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
@@ -42,6 +42,7 @@ export default function TicketDetailPage() {
   if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
 
   const product = db.products.find((p) => p.id === ticket.product_id)!;
+  const ticketImg = lineImage(db, ticket.product_id, ticket.variant_id); // honour the picked variant's image
   const pct = paidPercent(ticket.deposit_paid, ticket.remaining_amount, ticket.remaining_paid);
   const due = ticket.remaining_amount - ticket.remaining_paid;
   const isShipped = ticket.status === 'shipped';
@@ -101,9 +102,11 @@ export default function TicketDetailPage() {
       </div>
 
       <div className="mb-3.5 flex items-center gap-3 rounded-card border border-subtle bg-surface-2 p-3">
-        <div className="grid h-[52px] w-[52px] place-items-center rounded-[10px] bg-stripe"><Icon name="box" size={22} className="text-primary-soft/25" /></div>
-        <div>
-          <div className="text-[13.5px] font-semibold">{product.series_name}</div>
+        <div className="grid h-[52px] w-[52px] shrink-0 place-items-center overflow-hidden rounded-[10px] bg-stripe">
+          {ticketImg ? <img src={ticketImg} alt="" className="h-full w-full object-cover" /> : <Icon name="box" size={22} className="text-primary-soft/25" />}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-semibold">{productLabel(db, ticket.product_id, ticket.variant_id)}</div>
           <div className="text-[11.5px] text-ink-faint">{manufacturerNameOf(db, product)} · {franchiseOf(db, product)?.name}</div>
         </div>
       </div>

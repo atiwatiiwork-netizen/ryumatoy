@@ -43,6 +43,28 @@ export function variantsOf(db: Database, productId: string): ProductVariant[] {
   return db.variants.filter((v) => v.product_id === productId);
 }
 
+/** The picked variant of a line/ticket/order-item, if any. */
+export function variantOf(db: Database, variantId?: string): ProductVariant | undefined {
+  return variantId ? db.variants.find((v) => v.id === variantId) : undefined;
+}
+
+/** Canonical display label for anything that references a product + optional variant (cart line,
+ *  order item, ticket): "SeriesName · VariantName". ONE place so every surface (wallet, cart, checkout,
+ *  admin) shows the picked แบบ consistently — a variant that appears in the cart must also appear in the
+ *  wallet + on the ticket. (fixes: variant A missing on the wallet) */
+export function productLabel(db: Database, productId: string, variantId?: string): string {
+  const p = db.products.find((x) => x.id === productId);
+  const v = variantOf(db, variantId);
+  return `${p?.series_name ?? ''}${v?.name ? ` · ${v.name}` : ''}`;
+}
+
+/** Image for a product line honouring the picked variant: the variant's own image first, else the
+ *  product's, else any variant image on the product. */
+export function lineImage(db: Database, productId: string, variantId?: string): string | undefined {
+  const p = db.products.find((x) => x.id === productId);
+  return variantOf(db, variantId)?.image_url ?? p?.images?.[0] ?? db.variants.find((v) => v.product_id === productId && v.image_url)?.image_url;
+}
+
 /** Product is still taking bookings via an OPEN board → shown in shop, but NOT yet eligible for the
  *  production queue (the board must be closed first). Prevents a board product being finalized twice. */
 export function inOpenBoard(db: Database, p: Product): boolean {
