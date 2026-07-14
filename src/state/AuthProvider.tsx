@@ -63,35 +63,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // One unified session handler for both Facebook (admin) and phone+PIN (customer).
   useEffect(() => {
     if (!supabase) return;
+    let settled = false;
+    const finishReady = () => { if (!settled) { settled = true; setReady(true); } };
+    // FAIL-SAFE against the "resume hang": when a backgrounded PWA is discarded by the OS and reopened,
+    // the page reloads and restores the session over a possibly-stalled network. If getSession/adopt
+    // hangs, the loading screen would spin forever (customer must force-close + reopen). So: (1) clear
+    // the spinner as soon as the session is KNOWN — before the heavier user-row + store loads — and
+    // (2) a 6s watchdog clears it no matter what. Data/identity fill in via the background reload.
+    const watchdog = setTimeout(finishReady, 6000);
+
     const adopt = async (session: Session | null) => {
       const u = session?.user ?? null;
       setAuthUser(u);
+      finishReady(); // session resolved → render the app now; the loads below run in the background
       if (isFacebook(u) && u) {
         const m = u.user_metadata ?? {};
         dispatch(ensureAuthUser({ id: u.id, display_name: (m.full_name || m.name || 'ลูกค้าใหม่') as string, facebook_id: (m.provider_id || m.sub) as string | undefined, avatar_url: (m.avatar_url || m.picture) as string | undefined }));
       }
-      // Don't clobber a known id with null: right after signUp the session exists
-      // but the linked users row may be written a beat later (signup_v2/link_auth).
-      let r1 = await resolveAppUser(u);
-      // self-heal: a valid session that resolves to nothing means users.auth_id was
-      // never linked (e.g. logged in during the v21-before-v23 window) → the app would
-      // hang forever. Link it by the phone in the synthetic email, then re-resolve.
-      if (u && !isFacebook(u) && !r1 && !signingUp.current) {
-        try { await supabase?.rpc('ryuma_link_self'); } catch { /* RPC may not exist yet */ }
-        r1 = await resolveAppUser(u);
-      }
-      if (r1 || !u) setAppUserId(r1);
-      // reload the store only when the identity actually changes (not on token refresh)
-      const uid = u?.id ?? null;
-      if (uid !== prevUid.current) {
-        prevUid.current = uid;
-        await store.reload();
-        if (u) { const r2 = await resolveAppUser(u); if (r2) setAppUserId(r2); } // row may have just appeared
+      try {
+        // Don't clobber a known id with null: right after signUp the session exists
+        // but the linked users row may be written a beat later (signup_v2/link_auth).
+        let r1 = await resolveAppUser(u);
+        // self-heal: a valid session that resolves to nothing means users.auth_id was
+        // never linked (e.g. logged in during the v21-before-v23 window) → the app would
+        // hang forever. Link it by the phone in the synthetic email, then re-resolve.
+        if (u && !isFacebook(u) && !r1 && !signingUp.current) {
+          try { await supabase?.rpc('ryuma_link_self'); } catch { /* RPC may not exist yet */ }
+          r1 = await resolveAppUser(u);
+        }
+        if (r1 || !u) setAppUserId(r1);
+        // reload the store only when the identity actually changes (not on token refresh)
+        const uid = u?.id ?? null;
+        if (uid !== prevUid.current) {
+          prevUid.current = uid;
+          await store.reload();
+          if (u) { const r2 = await resolveAppUser(u); if (r2) setAppUserId(r2); } // row may have just appeared
+        }
+      } catch (err) {
+        console.error('[auth] adopt failed (app still usable; data will refresh)', err);
       }
     };
-    supabase.auth.getSession().then(({ data }) => adopt(data.session)).finally(() => setReady(true));
+    supabase.auth.getSession().then(({ data }) => adopt(data.session)).catch(finishReady).finally(finishReady);
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => adopt(s));
-    return () => sub.subscription.unsubscribe();
+    return () => { clearTimeout(watchdog); sub.subscription.unsubscribe(); };
   }, [dispatch, resolveAppUser]);
 
   const currentUserId = appUserId ?? (hasSupabase ? '' : CURRENT_USER_ID);

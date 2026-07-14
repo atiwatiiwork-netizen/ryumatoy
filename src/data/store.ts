@@ -15,6 +15,16 @@ import { SEED_DATABASE } from './seed';
  */
 export type Mutation = (db: Database) => Database;
 
+/** Reject if a promise doesn't settle in time — so a stalled network on resume can't hang a load
+ *  forever (the app then falls back to seed/keeps current data and the next poll retries). */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+  ]);
+}
+const LOAD_TIMEOUT = 12_000;
+
 export class Store {
   private db: Database = structuredClone(SEED_DATABASE);
   private lastSynced: Database = this.db;
@@ -45,7 +55,7 @@ export class Store {
     // leave the logged-in user's own row missing (me = undefined → stuck loading).
     const seq = ++this.reloadSeq;
     try {
-      const data = await this.adapter.load();
+      const data = await withTimeout(this.adapter.load(), LOAD_TIMEOUT, 'initial load');
       if (seq === this.reloadSeq) {
         this.db = data;
         this.lastSynced = data;
@@ -53,8 +63,8 @@ export class Store {
     } catch (err) {
       console.error('[store] load failed — using in-memory seed', err);
     }
-    this.ready = true;
-    this.emit();
+    this.ready = true; // ALWAYS become ready (even on timeout) so the UI never hangs; a later
+    this.emit();       // reloadIfIdle (poll/focus) recovers the real data once the network is back
   };
 
   update = (mutation: Mutation): Database => {
@@ -99,9 +109,11 @@ export class Store {
     const seq = ++this.reloadSeq;
     let data: Database;
     try {
-      data = await this.adapter.load();
+      data = await withTimeout(this.adapter.load(), LOAD_TIMEOUT, 'reload');
     } catch (err) {
       console.error('[store] reload failed', err);
+      this.ready = true; // don't leave the store un-ready on a stalled reload (would block reloadIfIdle)
+      this.emit();
       return;
     }
     if (seq !== this.reloadSeq) return; // superseded by a newer reload
@@ -123,9 +135,9 @@ export class Store {
     const seq = ++this.reloadSeq;
     let data: Database;
     try {
-      data = await this.adapter.load();
+      data = await withTimeout(this.adapter.load(), LOAD_TIMEOUT, 'idle reload');
     } catch {
-      return; // transient network error → just skip this tick
+      return; // transient network error / timeout → just skip this tick, the next poll retries
     }
     if (seq !== this.reloadSeq || this.db !== before) return; // superseded or a local write landed
     this.db = data;
