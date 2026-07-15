@@ -15,7 +15,7 @@ import { PreviewSwitcher } from './PreviewSwitcher';
 export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const db = useDatabase();
-  const { isAdmin, isLoggedIn, signInFacebook } = useAuth();
+  const { isAdmin, isLoggedIn, authReady, signInFacebook } = useAuth();
   const { flash } = useToast();
   // a failed background save (schema drift, RLS, etc.) must not vanish silently → toast it here.
   useEffect(() => {
@@ -23,6 +23,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
     return () => { store.onPersistError = undefined; };
   }, [flash]);
 
+  // Wait for the session restore before deciding lock-vs-admin — otherwise every resume/reload flashes
+  // the Facebook login screen (isLoggedIn is momentarily false), and a stalled getSession would strand
+  // the admin on it. authReady is watchdog-bounded so this never hangs. (resume — same as CustomerShell)
+  if (canLogin && !authReady) return <div className="grid min-h-screen place-items-center bg-base"><img src="/ryuma-logo.png" alt="" width={44} height={44} className="animate-pulse rounded-xl opacity-80" /></div>;
   // lock the admin panel to admin Facebook accounts on live (preview/dev stays open)
   if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
