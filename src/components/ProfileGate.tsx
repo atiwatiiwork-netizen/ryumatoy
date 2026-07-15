@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useAuth } from '@/state/AuthProvider';
 import { updateUser } from '@/data/mutations';
+import { store } from '@/data/store';
 import { Icon } from './Icon';
 import { cx } from './ui';
 
@@ -18,6 +19,18 @@ export function ProfileGate() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [line, setLine] = useState('');
+
+  // SELF-HEAL the "กำลังโหลดบัญชี…" hang: logged-in but our own row didn't arrive — happens when the
+  // data reload stalled on a resume (frozen PWA reopened over a flaky network). Instead of sitting on
+  // the overlay until the user leaves + returns (focus-reload), actively re-pull a few times. Retry via
+  // the `tick` state so the effect re-fires even while `me` stays undefined. (resume "stuck loading")
+  const stuck = isLoggedIn && !me;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!stuck || tick >= 5) return;
+    const t = setTimeout(() => { void store.reload().finally(() => setTick((n) => n + 1)); }, tick === 0 ? 800 : 2000);
+    return () => clearTimeout(t);
+  }, [stuck, tick]);
 
   // logged in but the user's own row hasn't loaded yet → clean loading, never the
   // wrong gate. (Under RLS the row loads once the session-aware fetch completes.)
