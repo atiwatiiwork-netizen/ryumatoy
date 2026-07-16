@@ -108,6 +108,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { clearTimeout(watchdog); sub.subscription.unsubscribe(); };
   }, [dispatch, resolveAppUser]);
 
+  // SELF-HEAL the "กำลังโหลดบัญชี…" hang at its ROOT: the session restored (authUser set) but our
+  // app-user id never resolved — resolveAppUser's network call stalled on a resume, so currentUserId
+  // stays '' and `me` is undefined forever (products loaded fine, only identity is missing → the overlay
+  // hangs until the user force-closes + reopens). adopt() runs once per auth event and doesn't retry, so
+  // re-resolve here on a short loop until the id lands. (ryuma-bugs: resume stuck loading account)
+  useEffect(() => {
+    if (!supabase || !authUser || appUserId) return;
+    let cancelled = false, tries = 0;
+    const run = async () => {
+      if (cancelled || tries >= 6) return;
+      tries++;
+      try {
+        let r = await resolveAppUser(authUser);
+        if (!r && !isFacebook(authUser) && !signingUp.current) {
+          try { await supabase!.rpc('ryuma_link_self'); } catch { /* RPC may not exist */ }
+          r = await resolveAppUser(authUser);
+        }
+        if (r) { await store.reload(); if (!cancelled) setAppUserId((await resolveAppUser(authUser)) || r); return; }
+      } catch { /* network flake → retry below */ }
+      if (!cancelled) setTimeout(run, 2000);
+    };
+    const t = setTimeout(run, 900);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [authUser, appUserId, resolveAppUser]);
+
   const currentUserId = appUserId ?? (hasSupabase ? '' : CURRENT_USER_ID);
   const me = db.users.find((u) => u.id === currentUserId);
   const isLoggedIn = authUser != null;
