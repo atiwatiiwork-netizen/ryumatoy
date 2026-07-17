@@ -8,6 +8,7 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
+import { memosDue } from '@/domain/services/sourcing';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
 import { repairTickets } from '@/data/mutations';
@@ -49,6 +50,8 @@ export default function AdminDashboardPage() {
     .filter((p) => p.status === 'shipping')
     .map((p) => ({ p, eta: computeEta(db.settings, p.shipped_at) }))
     .filter((x) => x.eta?.arrivingSoon);
+  // memo หาของนอกระบบ (แชทเฟส/โทร) ที่เข้าช่วงคาดว่าถึงแล้ว — เตือนให้ไปทวงเช็ค
+  const memoDue = memosDue(db);
 
   return (
     <div>
@@ -103,6 +106,14 @@ export default function AdminDashboardPage() {
           <Icon name="payments" size={18} />
           <span className="flex-1 text-sm font-bold">ส่วนต่างรอตรวจสอบ {pendingRP.length} รายการ</span>
           <span className="text-[13px] text-ink-muted2">ไปที่ สลิป/ออเดอร์ →</span>
+        </button>
+      )}
+
+      {memoDue.length > 0 && (
+        <button onClick={() => router.push('/admin/sourcing')} className="mb-[22px] flex w-full items-center gap-2.5 rounded-2xl border border-[#8b5cf6]/45 bg-surface-2 p-4 text-left text-[#c4b5fd]">
+          <Icon name="search" size={18} />
+          <span className="flex-1 text-sm font-bold">📒 หาของนอกระบบถึงช่วงคาดแล้ว {memoDue.length} รายการ — ทวงเช็ค!</span>
+          <span className="text-[13px] text-ink-muted2">ไปที่ หาของ →</span>
         </button>
       )}
 

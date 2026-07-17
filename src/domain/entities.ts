@@ -453,6 +453,27 @@ export interface PushPref {
 /** Generic app config row (key → jsonb) — for settings that must NOT ride on shop_settings'
  *  fixed column list (adding columns there breaks every settings save until the migration runs).
  *  First user: sourcing transport ETA ranges {truck_min,truck_max,ship_min,ship_max}. */
+/** หาของนอกระบบ (admin memo) — ดีลหาของที่คุยกันทางแชทเฟส/โทร (ลูกค้าไม่มีบัญชีในแอป) จดกันลืม:
+ *  รูป + ชื่อสินค้า + ราคา/มัดจำ + ขนส่ง (ETA นับจาก started_at ด้วย config เดียวกับระบบหาของ) +
+ *  ชื่อลูกค้า + ลิงก์เฟส. ADMIN-ONLY ทั้งตาราง (ลูกค้าไม่เห็น) — คนละตัวกับ SourcingRequest ในระบบ. */
+export type SourcingMemoStatus = 'active' | 'done';
+export interface SourcingMemo {
+  id: string;
+  product_name: string;
+  image_url?: string;
+  price?: number;          // ราคาเต็ม (บาท) ตามที่ตกลงในแชท
+  deposit?: number;        // มัดจำที่เก็บแล้ว
+  qty: number;
+  customer_name: string;
+  fb_link?: string;        // ลิงก์เฟสลูกค้า (เปิดแชทต่อได้ทันที)
+  transport?: SourcingTransport; // รถ/เรือ → ETA คร่าวๆ
+  started_at: string;      // YYYY-MM-DD วันเริ่มนับ (วันที่จด/มัดจำ) = จุดเริ่ม ETA
+  note?: string;           // เช่น รายชื่อคนจองหลายคน "1. Suthep 2. Jirapat"
+  status: SourcingMemoStatus;
+  created_at: string;
+  done_at?: string;
+}
+
 /** Event ภารกิจ (mission quest) — customer completes 3 checks (มีใบพรี / ลงหน้าจอ / เปิดกระดิ่ง) and
  *  submits ONCE; admin reviews (proof screenshot when the install couldn't be system-verified) and
  *  approves → reward coupon granted in the ADMIN session (RLS: customers never mint coupons, DNA rule 7).
@@ -551,6 +572,7 @@ export interface Database {
   pushPrefs: PushPref[];
   pushConfig: PushConfigRow[];
   sourcingRequests: SourcingRequest[];
+  sourcingMemos: SourcingMemo[];
   missionSubmissions: MissionSubmission[];
   appConfig: AppConfigRow[];
   rankTiers: RankTier[];

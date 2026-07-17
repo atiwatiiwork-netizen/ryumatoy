@@ -11,6 +11,7 @@ import { genId, upsertManufacturer, upsertFranchise, quoteSourcing, unavailableS
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { sourcingStatusOf, sourcingEtaConfig, transportRange, transportLabel, sourcingEtaLabel, expiringToday, sourcingDaysLeft } from '@/domain/services/sourcing';
 import type { SourcingRequest, SourcingTransport } from '@/domain/entities';
+import { SourcingMemos } from './SourcingMemos';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -48,6 +49,9 @@ export default function AdminSourcingPage() {
         {expiring.length > 0 && <button onClick={remindExpiring} className="rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.1] px-3.5 py-2 text-[12.5px] font-bold text-[#fbbf24]">🔔 เตือนหมดอายุวันนี้ ({expiring.length})</button>}
         <EtaConfig />
       </div>
+
+      {/* memo หาของนอกระบบ (แชทเฟส/โทร) — คนละคิวกับด้านล่างซึ่งมาจากลูกค้าในแอป */}
+      <SourcingMemos />
 
       <Group title={`🔎 รอตอบ (${requested.length})`} tone="red" empty={requested.length === 0 ? 'ไม่มีเรื่องค้างตอบ' : undefined}>
         {requested.map((r) => <RequestRow key={r.id} r={r} />)}

@@ -1,4 +1,4 @@
-import type { Database, SourcingRequest, SourcingTransport } from '../entities';
+import type { Database, SourcingRequest, SourcingMemo, SourcingTransport } from '../entities';
 
 /**
  * ระบบหาของ helpers — TTL, ETA from the transport config, status buckets. (ryuma-sourcing-spec)
@@ -65,4 +65,39 @@ export function watchlistOf(db: Database, userId: string, now: Date = new Date()
 /** Requests that expire TODAY (daysLeft 0) — targets for the admin's "เตือนวันสุดท้าย" push button. */
 export function expiringToday(db: Database, now: Date = new Date()): SourcingRequest[] {
   return db.sourcingRequests.filter((r) => sourcingDaysLeft(r, now) === 0 && !sourcingExpired(r, now));
+}
+
+// ── หาของนอกระบบ (admin memos — แชทเฟส/โทร) ─────────────────────────────────
+/** ETA window of a memo: started_at + the SAME transport config the in-app sourcing uses. */
+export function memoEta(db: Database, m: SourcingMemo): { min: Date; max: Date } | null {
+  if (!m.transport || !m.started_at) return null;
+  const start = new Date(`${m.started_at}T00:00:00`);
+  if (isNaN(start.getTime())) return null;
+  const { min, max } = transportRange(db, m.transport);
+  return { min: new Date(start.getTime() + min * 86400000), max: new Date(start.getTime() + max * 86400000) };
+}
+
+/** Where a memo stands vs its ETA — drives the reminder chips:
+ *  none (no transport) · coming (before window) · due (inside window = ของน่าจะถึงแล้ว ทวงเช็ค) ·
+ *  overdue (past window = เลยกำหนด รีบตาม). */
+export type MemoPhase = 'none' | 'coming' | 'due' | 'overdue';
+export function memoPhase(db: Database, m: SourcingMemo, now: Date = new Date()): MemoPhase {
+  const eta = memoEta(db, m);
+  if (!eta) return 'none';
+  if (now.getTime() < eta.min.getTime()) return 'coming';
+  if (now.getTime() <= eta.max.getTime() + 86400000 - 1) return 'due'; // max วันนั้นนับทั้งวัน
+  return 'overdue';
+}
+
+export function memoEtaLabel(db: Database, m: SourcingMemo): string {
+  const eta = memoEta(db, m);
+  if (!eta || !m.transport) return '';
+  const d = (x: Date) => x.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+  return `${transportLabel(m.transport)} · คาดถึง ${d(eta.min)} – ${d(eta.max)}`;
+}
+
+/** Active memos that have entered/passed their ETA window — the "แจ้งเตือน" list (sourcing page +
+ *  Dashboard alert card). */
+export function memosDue(db: Database, now: Date = new Date()): SourcingMemo[] {
+  return db.sourcingMemos.filter((m) => m.status === 'active' && (memoPhase(db, m, now) === 'due' || memoPhase(db, m, now) === 'overdue'));
 }

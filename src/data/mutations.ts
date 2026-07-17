@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
@@ -850,6 +850,33 @@ export const approveSourcingStart = (requestId: string) => (db: Database): Datab
 export const setSourcingEta = (value: { truck_min: number; truck_max: number; ship_min: number; ship_max: number }) => (db: Database): Database => ({
   ...db,
   appConfig: [{ key: 'sourcing_eta', value }, ...db.appConfig.filter((c) => c.key !== 'sourcing_eta')],
+});
+
+// ── หาของนอกระบบ (admin memos — แชทเฟส/โทร; ADMIN session only, RLS v49) ────
+/** จดดีลหาของนอกระบบ (กันลืม). started_at = วันเริ่มนับ ETA (default วันนี้). */
+export const addSourcingMemo = (data: Omit<SourcingMemo, 'id' | 'status' | 'created_at' | 'done_at'>) => (db: Database): Database => ({
+  ...db,
+  sourcingMemos: [
+    { ...data, qty: Math.max(1, data.qty || 1), id: id('sm'), status: 'active', created_at: new Date().toISOString() },
+    ...db.sourcingMemos,
+  ],
+});
+
+/** แก้รายละเอียด memo (แก้ได้ทุกช่อง — เป็นสมุดจดของแอดมินเอง). */
+export const updateSourcingMemo = (memoId: string, patch: Partial<Omit<SourcingMemo, 'id' | 'created_at'>>) => (db: Database): Database => ({
+  ...db,
+  sourcingMemos: db.sourcingMemos.map((m) => (m.id === memoId ? { ...m, ...patch } : m)),
+});
+
+/** ปิดงาน (ของถึง/ส่งมอบแล้ว) — เก็บเป็นประวัติ ไม่ลบ. */
+export const doneSourcingMemo = (memoId: string) => (db: Database): Database => ({
+  ...db,
+  sourcingMemos: db.sourcingMemos.map((m) => (m.id === memoId && m.status === 'active' ? { ...m, status: 'done' as const, done_at: new Date().toISOString() } : m)),
+});
+
+export const deleteSourcingMemo = (memoId: string) => (db: Database): Database => ({
+  ...db,
+  sourcingMemos: db.sourcingMemos.filter((m) => m.id !== memoId),
 });
 
 // ── Web Push subscriptions ───────────────────────────────────────────────────
