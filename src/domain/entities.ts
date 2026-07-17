@@ -457,22 +457,29 @@ export interface PushPref {
  *  รูป + ชื่อสินค้า + ราคา/มัดจำ + ขนส่ง (ETA นับจาก started_at ด้วย config เดียวกับระบบหาของ) +
  *  ชื่อลูกค้า + ลิงก์เฟส. ADMIN-ONLY ทั้งตาราง (ลูกค้าไม่เห็น) — คนละตัวกับ SourcingRequest ในระบบ. */
 export type SourcingMemoStatus = 'active' | 'done';
+/** ลูกค้าหนึ่งคนในดีล (สินค้าเดียวจองกันหลายคนได้ เช่น "5 ชิ้น 1.Suthep 2.Jirapat"). fb ไม่บังคับ. */
+export interface MemoCustomer { name: string; fb_link?: string }
 export interface SourcingMemo {
   id: string;
   product_name: string;
   image_url?: string;
-  price?: number;          // ราคาเต็ม (บาท) ตามที่ตกลงในแชท
-  deposit?: number;        // มัดจำที่เก็บแล้ว
+  price?: number;          // ราคาเต็ม (บาท) ต่อคน ตามที่ตกลงในแชท
+  deposit?: number;        // มัดจำที่เก็บแล้ว ต่อคน
   qty: number;
-  customer_name: string;
-  fb_link?: string;        // ลิงก์เฟสลูกค้า (เปิดแชทต่อได้ทันที)
+  customer_name: string;   // legacy + คนแรกของ customers (คง not-null ใน DB)
+  fb_link?: string;        // legacy + ลิงก์เฟสคนแรก
+  customers?: MemoCustomer[]; // รายชื่อคนจองทั้งหมด (jsonb, v50) — ไม่มี = ใช้ customer_name เดี่ยว
   transport?: SourcingTransport; // รถ/เรือ → ETA คร่าวๆ
   started_at: string;      // YYYY-MM-DD วันเริ่มนับ (วันที่จด/มัดจำ) = จุดเริ่ม ETA
-  note?: string;           // เช่น รายชื่อคนจองหลายคน "1. Suthep 2. Jirapat"
+  note?: string;
   status: SourcingMemoStatus;
   created_at: string;
   done_at?: string;
 }
+
+/** รายชื่อลูกค้าของ memo — map รายการเก่า (คนเดียว) เป็น array ให้อัตโนมัติ. */
+export const memoCustomersOf = (m: SourcingMemo): MemoCustomer[] =>
+  m.customers && m.customers.length ? m.customers : [{ name: m.customer_name, fb_link: m.fb_link }];
 
 /** Event ภารกิจ (mission quest) — customer completes 3 checks (มีใบพรี / ลงหน้าจอ / เปิดกระดิ่ง) and
  *  submits ONCE; admin reviews (proof screenshot when the install couldn't be system-verified) and

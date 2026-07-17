@@ -9,17 +9,20 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { addSourcingMemo, updateSourcingMemo, doneSourcingMemo, deleteSourcingMemo } from '@/data/mutations';
 import { memoPhase, memoEtaLabel, memosDue } from '@/domain/services/sourcing';
+import { memoCustomersOf } from '@/domain/entities';
 import type { SourcingMemo, SourcingTransport } from '@/domain/entities';
+import { MemoTicketsModal } from './MemoTickets';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const today = () => new Date().toISOString().slice(0, 10);
 const fmtD = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 
+type CustRow = { name: string; fb: string };
 type Draft = {
   id?: string; product_name: string; image_url?: string; price: string; deposit: string; qty: string;
-  customer_name: string; fb_link: string; transport: '' | SourcingTransport; started_at: string; note: string;
+  customers: CustRow[]; transport: '' | SourcingTransport; started_at: string; note: string;
 };
-const fresh = (): Draft => ({ product_name: '', image_url: undefined, price: '', deposit: '', qty: '1', customer_name: '', fb_link: '', transport: '', started_at: today(), note: '' });
+const fresh = (): Draft => ({ product_name: '', image_url: undefined, price: '', deposit: '', qty: '1', customers: [{ name: '', fb: '' }], transport: '', started_at: today(), note: '' });
 
 /**
  * หาของนอกระบบ (Memo) — ดีลที่คุยกันทางแชทเฟส/โทร (ลูกค้าไม่มีบัญชีในแอป) จดกันลืมแทนการจดในแชท:
@@ -34,6 +37,7 @@ export function SourcingMemos() {
   const [draft, setDraft] = useState<Draft>(fresh());
   const [busy, setBusy] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const [ticketFor, setTicketFor] = useState<SourcingMemo | null>(null); // 🎫 modal ออกตั๋วทีละคน
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
 
   const active = db.sourcingMemos.filter((m) => m.status === 'active').sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -48,25 +52,32 @@ export function SourcingMemos() {
     finally { setBusy(false); }
   };
 
+  const setCust = (i: number, patch: Partial<CustRow>) => setDraft((d) => ({ ...d, customers: d.customers.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+  const addCust = () => setDraft((d) => ({ ...d, customers: [...d.customers, { name: '', fb: '' }] }));
+  const removeCust = (i: number) => setDraft((d) => ({ ...d, customers: d.customers.length > 1 ? d.customers.filter((_, j) => j !== i) : d.customers }));
+
   const save = () => {
     if (!draft.product_name.trim()) return flash('ใส่ชื่อสินค้าก่อน');
-    if (!draft.customer_name.trim()) return flash('ใส่ชื่อลูกค้าก่อน');
+    // ใส่ได้หลายคนทีเดียว — เอาเฉพาะแถวที่มีชื่อ (FB ไม่บังคับ)
+    const customers = draft.customers.map((c) => ({ name: c.name.trim(), fb_link: c.fb.trim() || undefined })).filter((c) => c.name);
+    if (customers.length === 0) return flash('ใส่ชื่อลูกค้าอย่างน้อย 1 คน');
     const data = {
       product_name: draft.product_name.trim(), image_url: draft.image_url,
       price: Number(draft.price) > 0 ? Number(draft.price) : undefined,
       deposit: Number(draft.deposit) > 0 ? Number(draft.deposit) : undefined,
       qty: Math.max(1, Number(draft.qty) || 1),
-      customer_name: draft.customer_name.trim(), fb_link: draft.fb_link.trim() || undefined,
+      customers,
+      customer_name: customers[0].name, fb_link: customers[0].fb_link, // mirror คนแรก (legacy/not-null)
       transport: draft.transport || undefined, started_at: draft.started_at || today(),
       note: draft.note.trim() || undefined,
     };
     if (draft.id) { dispatch(updateSourcingMemo(draft.id, data)); flash('แก้ไขแล้ว ✓'); }
-    else { dispatch(addSourcingMemo(data)); flash('จดรายการแล้ว ✓'); }
+    else { dispatch(addSourcingMemo(data)); flash(`จดรายการแล้ว ✓ (${customers.length} คน)`); }
     setDraft(fresh()); setOpen(false);
   };
 
   const edit = (m: SourcingMemo) => {
-    setDraft({ id: m.id, product_name: m.product_name, image_url: m.image_url, price: m.price != null ? String(m.price) : '', deposit: m.deposit != null ? String(m.deposit) : '', qty: String(m.qty), customer_name: m.customer_name, fb_link: m.fb_link ?? '', transport: m.transport ?? '', started_at: m.started_at, note: m.note ?? '' });
+    setDraft({ id: m.id, product_name: m.product_name, image_url: m.image_url, price: m.price != null ? String(m.price) : '', deposit: m.deposit != null ? String(m.deposit) : '', qty: String(m.qty), customers: memoCustomersOf(m).map((c) => ({ name: c.name, fb: c.fb_link ?? '' })), transport: m.transport ?? '', started_at: m.started_at, note: m.note ?? '' });
     setOpen(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -100,8 +111,21 @@ export function SourcingMemos() {
               </div>
             </div>
             <div className="flex flex-col gap-3">
-              <input className={inputCls} value={draft.customer_name} onChange={(e) => set('customer_name', e.target.value)} placeholder="ชื่อลูกค้า * (ตามเฟส)" />
-              <input className={inputCls} value={draft.fb_link} onChange={(e) => set('fb_link', e.target.value)} placeholder="ลิงก์ Facebook ลูกค้า (วางจากแชท)" />
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11.5px] font-semibold text-ink-muted">ลูกค้า (ใส่ได้หลายคนทีเดียว · FB ไม่บังคับ)</span>
+                  <button onClick={addCust} className="text-[11.5px] font-bold text-primary-soft">＋ เพิ่มลูกค้า</button>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {draft.customers.map((c, i) => (
+                    <div key={i} className="flex gap-1.5">
+                      <input className={cx(inputCls, 'flex-[2]')} value={c.name} onChange={(e) => setCust(i, { name: e.target.value })} placeholder={`ชื่อลูกค้า ${i + 1} *`} />
+                      <input className={cx(inputCls, 'flex-[3]')} value={c.fb} onChange={(e) => setCust(i, { fb: e.target.value })} placeholder="ลิงก์ Facebook (ไม่บังคับ)" />
+                      {draft.customers.length > 1 && <button onClick={() => removeCust(i)} aria-label="ลบคน" className="shrink-0 rounded-lg border border-subtle bg-surface-3 px-2.5 text-[#f87171]">✕</button>}
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <select className={inputCls} value={draft.transport} onChange={(e) => set('transport', e.target.value as Draft['transport'])}>
                   <option value="">— ขนส่ง (ยังไม่รู้) —</option>
@@ -133,10 +157,10 @@ export function SourcingMemos() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13.5px] font-bold">{m.product_name}{m.qty > 1 && <span className="ml-1 text-[11px] font-semibold text-ink-faint">×{m.qty}</span>}</div>
-                    <div className="text-[12px] text-ink-muted2">
-                      {m.fb_link
-                        ? <a href={m.fb_link} target="_blank" rel="noreferrer" className="font-semibold text-[#60a5fa] underline-offset-2 hover:underline">👤 {m.customer_name} ↗</a>
-                        : <span>👤 {m.customer_name}</span>}
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {memoCustomersOf(m).map((c, i) => c.fb_link
+                        ? <a key={i} href={c.fb_link} target="_blank" rel="noreferrer" className="rounded-md bg-[#2563eb]/[0.12] px-1.5 py-0.5 text-[11px] font-semibold text-[#60a5fa] underline-offset-2 hover:underline">👤 {c.name} ↗</a>
+                        : <span key={i} className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[11px] font-semibold text-ink-muted2">👤 {c.name}</span>)}
                     </div>
                     <div className="mt-0.5 text-[11.5px] text-ink-faint">
                       {m.price != null && <>ราคา <b className="text-ink">{baht(m.price)}</b></>}
@@ -156,7 +180,8 @@ export function SourcingMemos() {
                 </div>
                 {m.note && <div className="mt-1.5 rounded-lg bg-surface-3/60 px-2 py-1 text-[11.5px] text-ink-muted2">📝 {m.note}</div>}
                 <div className="mt-2 flex gap-1.5">
-                  <button onClick={() => { dispatch(doneSourcingMemo(m.id)); flash(`ปิดงาน ${m.product_name} ✓`); }} className="flex-1 rounded-lg bg-[#16a34a] py-1.5 text-[11.5px] font-bold text-white">✓ ของถึง/จบงาน</button>
+                  <button onClick={() => setTicketFor(m)} className="flex-1 rounded-lg border border-[#d4af37]/50 bg-[#d4af37]/[0.12] py-1.5 text-[11.5px] font-bold text-[#f1d27a]">🎫 ออกตั๋ว ({memoCustomersOf(m).length})</button>
+                  <button onClick={() => { dispatch(doneSourcingMemo(m.id)); flash(`ปิดงาน ${m.product_name} ✓`); }} className="flex-1 rounded-lg bg-[#16a34a] py-1.5 text-[11.5px] font-bold text-white">✓ จบงาน</button>
                   <button onClick={() => edit(m)} className="rounded-lg border border-subtle bg-surface-3 px-2.5 text-[11.5px] font-semibold text-ink-muted2">แก้</button>
                   <button onClick={() => { if (confirm(`ลบ "${m.product_name}" (${m.customer_name})?`)) { dispatch(deleteSourcingMemo(m.id)); flash('ลบแล้ว'); } }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 text-[11.5px] font-semibold text-[#f87171]">ลบ</button>
                 </div>
@@ -165,6 +190,8 @@ export function SourcingMemos() {
           })}
         </div>
       )}
+
+      {ticketFor && <MemoTicketsModal memo={ticketFor} onClose={() => setTicketFor(null)} />}
 
       {done.length > 0 && (
         <div className="mt-3 border-t border-hair pt-2">
