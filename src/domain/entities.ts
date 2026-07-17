@@ -84,6 +84,7 @@ export interface Product {
   depth_cm?: number;
   has_variants: boolean;
   stock_origin?: 'preorder' | 'manual'; // admin-only: in-stock came from a pre-order conversion vs. created new
+  stock_cond?: StockCond; // สภาพสินค้า in-stock (มือ1/2, กล่อง, การ์ด, แตกหัก) — v51; ไม่มี = ยังไม่ระบุ
   status: ProductStatus;
   // Shipping (set when the lot leaves China → status 'shipping'):
   tracking_no?: string;
@@ -453,6 +454,19 @@ export interface PushPref {
 /** Generic app config row (key → jsonb) — for settings that must NOT ride on shop_settings'
  *  fixed column list (adding columns there breaks every settings save until the migration runs).
  *  First user: sourcing transport ETA ranges {truck_min,truck_max,ship_min,ship_max}. */
+/** สภาพสินค้า In-Stock (เจ้าของ spec 2026-07-17): มือ1/มือ2 + กล่องสี/กล่องน้ำตาล (ติ๊กแยก — บางชิ้น
+ *  มีกล่องสีแต่กล่องน้ำตาลเป็นของอื่น) + มีการ์ด + ไม่มีแตกหัก. มือ2 มีนโยบาย "ถึงมือแตกหัก ชดเชย 250
+ *  ทุกกรณี" (โชว์อัตโนมัติ) และทุกชิ้น in-stock = ราคารวมส่งแล้ว. เก็บเป็น jsonb (v51). */
+export interface StockCond {
+  hand: 1 | 2;        // มือ 1 / มือ 2
+  box_color: boolean; // กล่องสี
+  box_brown: boolean; // กล่องน้ำตาล
+  card: boolean;      // มีการ์ด
+  intact: boolean;    // ไม่มีแตกหัก
+}
+/** ของตัดจากใบพรี (ผลิตใหม่ถึงไทย) = auto มือ 1 ครบทุกอย่าง. */
+export const NEW_STOCK_COND: StockCond = { hand: 1, box_color: true, box_brown: true, card: true, intact: true };
+
 /** หาของนอกระบบ (admin memo) — ดีลหาของที่คุยกันทางแชทเฟส/โทร (ลูกค้าไม่มีบัญชีในแอป) จดกันลืม:
  *  รูป + ชื่อสินค้า + ราคา/มัดจำ + ขนส่ง (ETA นับจาก started_at ด้วย config เดียวกับระบบหาของ) +
  *  ชื่อลูกค้า + ลิงก์เฟส. ADMIN-ONLY ทั้งตาราง (ลูกค้าไม่เห็น) — คนละตัวกับ SourcingRequest ในระบบ. */

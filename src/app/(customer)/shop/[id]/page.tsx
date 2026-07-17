@@ -19,6 +19,7 @@ import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 import { EventProgress } from '@/components/EventBits';
+import { StockCondCard } from '@/components/StockCond';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -119,10 +120,15 @@ export default function ProductDetailPage() {
         </div>
       )}
 
-      <div className="mb-[18px] flex items-center gap-2.5 rounded-xl border border-[#2563eb]/30 bg-[#2563eb]/10 px-[13px] py-[11px]">
-        <Icon name="truck" size={18} className="text-[#60a5fa]" />
-        <span className="text-[13px] text-[#bcd3f5]">กำหนดการ: {product.eta_note}</span>
-      </div>
+      {product.is_stock ? (
+        // พร้อมส่ง: การ์ดสภาพสินค้า (มือ1/2 + กล่อง/การ์ด/แตกหัก + รวมส่ง + นโยบายชดเชยมือ2)
+        <StockCondCard cond={product.stock_cond} />
+      ) : (
+        <div className="mb-[18px] flex items-center gap-2.5 rounded-xl border border-[#2563eb]/30 bg-[#2563eb]/10 px-[13px] py-[11px]">
+          <Icon name="truck" size={18} className="text-[#60a5fa]" />
+          <span className="text-[13px] text-[#bcd3f5]">กำหนดการ: {product.eta_note}</span>
+        </div>
+      )}
 
       {/* live-event blurb + personal progress (pre-order only; renders nothing when no event) */}
       {!product.is_stock && <div className="mb-[18px] -mt-1"><EventProgress variant="inline" /></div>}

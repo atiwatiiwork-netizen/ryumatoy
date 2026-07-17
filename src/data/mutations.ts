@@ -1,4 +1,5 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond } from '../domain/entities';
+import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
@@ -1213,11 +1214,18 @@ export const convertToInStock = (productId: string, price: number) => (db: Datab
   return {
     ...db,
     products: db.products.map((x) => (x.id === productId
-      ? { ...x, is_stock: true, stock_qty: surplus, surplus_qty: 0, price_total: price, deposit_amount: price, status: 'open', eta_note: 'พร้อมส่ง', stock_origin: 'preorder' as const }
+      // ตัดจากใบพรี (ผลิตใหม่เพิ่งถึงไทย) → auto สภาพ "มือ 1" ครบทุกอย่าง (เจ้าของ spec 2026-07-17)
+      ? { ...x, is_stock: true, stock_qty: surplus, surplus_qty: 0, price_total: price, deposit_amount: price, status: 'open', eta_note: 'พร้อมส่ง', stock_origin: 'preorder' as const, stock_cond: x.stock_cond ?? NEW_STOCK_COND }
       : x)),
     stockAdditions: [{ id: id('sa'), product_id: productId, qty: surplus, note: 'แปลงจากพรี (ส่วนเกิน)', created_at: now }, ...db.stockAdditions],
   };
 };
+
+/** ตั้ง/แก้สภาพสินค้า in-stock (มือ1/2, กล่องสี/น้ำตาล, การ์ด, แตกหัก) — admin. */
+export const setStockCond = (productId: string, cond: StockCond) => (db: Database): Database => ({
+  ...db,
+  products: db.products.map((p) => (p.id === productId ? { ...p, stock_cond: cond } : p)),
+});
 
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →

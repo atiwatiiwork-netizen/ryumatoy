@@ -9,7 +9,8 @@ import { cx } from '@/components/ui';
 import { franchiseOf, canConvertToInStock, outstandingTickets, stockAdditionsOf } from '@/domain/services/catalog';
 import { availableFor, reservedHeld } from '@/domain/services/reservations';
 import { roundTo50 } from '@/domain/services/pricing';
-import { convertToInStock, restockInStock, removeProduct } from '@/data/mutations';
+import { convertToInStock, restockInStock, removeProduct, setStockCond } from '@/data/mutations';
+import { StockCondPicker } from '@/components/StockCond';
 import type { Product } from '@/domain/entities';
 import { StockBulkAdd } from './StockBulkAdd';
 
@@ -148,6 +149,11 @@ function ManageRow({ product: p }: { product: Product }) {
       </div>
       {open && (
         <div className="mt-2 grid gap-3 rounded-xl border border-subtle bg-surface-3 p-3 lg:grid-cols-2">
+          {/* สภาพสินค้า (มือ1/2 · กล่อง · การ์ด · แตกหัก) — บันทึกทันทีที่แตะ */}
+          <div className="lg:col-span-2">
+            <div className="mb-1.5 text-[12px] font-semibold text-ink-muted">สภาพสินค้า (ลูกค้าเห็นในหน้าสินค้า{p.stock_cond?.hand === 2 ? ' · มือ 2 โชว์ชดเชยแตกหัก 250฿ อัตโนมัติ' : ''})</div>
+            <StockCondPicker compact value={p.stock_cond} onChange={(c) => { dispatch(setStockCond(p.id, c)); flash('บันทึกสภาพแล้ว ✓'); }} />
+          </div>
           {/* restock */}
           <div>
             <div className="mb-1.5 text-[12px] font-semibold text-ink-muted">เติมสต๊อก / แก้ราคา</div>

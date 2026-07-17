@@ -77,6 +77,8 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
       <div className="relative">
         <ProductThumb isStock={product.is_stock} radius="rounded-none" src={mainSrc} srcB={splitSrc} />
         {inClosingBoard && <span className="absolute left-2 top-2 rounded-md bg-[#16a34a] px-1.5 py-0.5 text-[9px] font-extrabold text-white">ใกล้ปิดพรี</span>}
+        {/* มือ 2 ต้องเห็นตั้งแต่การ์ด (มือ 1 = ค่าปกติ ไม่ติดป้ายให้รก) */}
+        {product.is_stock && product.stock_cond?.hand === 2 && <span className="absolute left-2 top-2 rounded-md bg-[#d97706] px-1.5 py-0.5 text-[9px] font-extrabold text-white">มือ 2</span>}
         {soldOut && <span className="absolute inset-0 grid place-items-center bg-black/45 text-[13px] font-extrabold text-white">สินค้าหมด</span>}
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>

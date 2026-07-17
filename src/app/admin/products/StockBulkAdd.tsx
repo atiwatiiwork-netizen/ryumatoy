@@ -10,13 +10,15 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { seriesForFranchise } from '@/domain/services/catalog';
 import { genId, bulkCreateStock } from '@/data/mutations';
-import type { Product } from '@/domain/entities';
+import { StockCondPicker } from '@/components/StockCond';
+import { NEW_STOCK_COND } from '@/domain/entities';
+import type { Product, StockCond } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-2.5 py-2 text-sm text-ink outline-none focus:border-accent';
 const DRAFT_KEY = 'ryuma_stock_bulk_draft';
 
 interface Row { key: string; image?: string; name: string; series_id: string; height: string; price: string; stock: string }
-interface Shared { manufacturer_id: string; franchise_id: string }
+interface Shared { manufacturer_id: string; franchise_id: string; cond?: StockCond }
 
 /** Bulk add IN-STOCK (พร้อมส่ง) products. Shared ค่าย/เรื่อง; per-row image/name/series/สูง/ราคา/สต๊อก.
  *  Rows come from uploading images OR pulling from an existing product (reuse ชื่อ/รูป/สูง/ซีรีย์). */
@@ -88,6 +90,7 @@ export function StockBulkAdd({ onDone }: { onDone: () => void }) {
         is_stock: true, stock_qty: Number(r.stock) || 0,
         height_cm: r.height ? Number(r.height) : undefined,
         has_variants: false, status: 'open', created_at: new Date().toISOString(),
+        stock_cond: sd.cond ?? NEW_STOCK_COND, // สภาพจากค่าเริ่มต้นร่วม (default มือ 1 ครบ)
       };
     });
     dispatch(bulkCreateStock(products));
@@ -113,6 +116,11 @@ export function StockBulkAdd({ onDone }: { onDone: () => void }) {
         <div className="grid gap-2 sm:grid-cols-2">
           <select className={inputCls} value={sd.manufacturer_id} onChange={(e) => setSd((d) => ({ ...d, manufacturer_id: e.target.value }))}>{db.manufacturers.map((m) => <option key={m.id} value={m.id}>ค่าย · {m.name}</option>)}</select>
           <select className={inputCls} value={sd.franchise_id} onChange={(e) => setSd((d) => ({ ...d, franchise_id: e.target.value }))}>{db.franchises.map((f) => <option key={f.id} value={f.id}>เรื่อง · {f.name}</option>)}</select>
+        </div>
+        {/* สภาพสินค้า (ใช้กับทุกแถวที่สร้างรอบนี้ — แก้รายตัวได้ทีหลังในแท็บจัดการสต๊อก) */}
+        <div className="mt-2.5">
+          <div className="mb-1 text-[11px] font-semibold text-ink-faint">สภาพสินค้า (ใช้ทั้งชุดนี้) · มือ 2 = ลูกค้าเห็นนโยบายชดเชยแตกหัก 250฿ อัตโนมัติ</div>
+          <StockCondPicker value={sd.cond ?? NEW_STOCK_COND} onChange={(cond) => setSd((d) => ({ ...d, cond }))} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">
