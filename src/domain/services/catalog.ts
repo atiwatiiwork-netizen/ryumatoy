@@ -49,13 +49,17 @@ export function variantOf(db: Database, variantId?: string): ProductVariant | un
 }
 
 /** Canonical display label for anything that references a product + optional variant (cart line,
- *  order item, ticket): "SeriesName · VariantName". ONE place so every surface (wallet, cart, checkout,
- *  admin) shows the picked แบบ consistently — a variant that appears in the cart must also appear in the
- *  wallet + on the ticket. (fixes: variant A missing on the wallet) */
+ *  order item, ticket): "SeriesName · VariantName - ค่าย". ONE place so every surface (wallet, cart,
+ *  checkout, admin) shows the picked แบบ consistently — and ALWAYS ends with the maker, because the
+ *  same character exists from several ค่าย and bare names are indistinguishable (owner 2026-07-16).
+ *  (fixes: variant A missing on the wallet; same-character-different-maker confusion) */
 export function productLabel(db: Database, productId: string, variantId?: string): string {
   const p = db.products.find((x) => x.id === productId);
   const v = variantOf(db, variantId);
-  return `${p?.series_name ?? ''}${v?.name ? ` · ${v.name}` : ''}`;
+  const maker = p ? manufacturerOf(db, p)?.name : undefined;
+  const base = `${p?.series_name ?? ''}${v?.name ? ` · ${v.name}` : ''}`;
+  // append " - ค่าย" unless the name already carries it (avoid "Deidara - GEM - GEM")
+  return maker && !base.toLowerCase().includes(maker.toLowerCase()) ? `${base} - ${maker}` : base;
 }
 
 /** Image for a product line honouring the picked variant: the variant's own image first, else the

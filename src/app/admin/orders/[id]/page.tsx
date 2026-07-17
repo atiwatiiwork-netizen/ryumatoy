@@ -9,7 +9,7 @@ import { Button, RankBadge } from '@/components/ui';
 import { approveOrder, rejectOrder } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { confirmReservation, releaseReservation } from '@/lib/reserve';
-import { franchiseOf } from '@/domain/services/catalog';
+import { franchiseOf, productLabel } from '@/domain/services/catalog';
 import { nextTicketNo, ticketPrefixCounts } from '@/domain/services/tickets';
 import { reserveTicketNos } from '@/lib/ticketno';
 
@@ -100,16 +100,12 @@ export default function SlipApprovalPage() {
           </div>
 
           <div className="mb-3.5 flex flex-col gap-2.5">
-            {order.items.map((item) => {
-              const p = db.products.find((pp) => pp.id === item.product_id);
-              const v = db.variants.find((vv) => vv.id === item.variant_id);
-              return (
-                <div key={item.id} className="flex justify-between gap-2.5 text-[13px]">
-                  <span className="text-ink-muted2">{p?.series_name}{v ? ` · ${v.name}` : ''} ×{item.qty}</span>
-                  <span className="font-semibold">{baht(item.deposit_amount)}</span>
-                </div>
-              );
-            })}
+            {order.items.map((item) => (
+              <div key={item.id} className="flex justify-between gap-2.5 text-[13px]">
+                <span className="text-ink-muted2">{productLabel(db, item.product_id, item.variant_id)} ×{item.qty}</span>
+                <span className="font-semibold">{baht(item.deposit_amount)}</span>
+              </div>
+            ))}
           </div>
 
           <div className="mb-3 rounded-xl bg-surface-3 p-3.5">

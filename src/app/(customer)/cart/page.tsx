@@ -5,6 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
+import { productLabel } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
 import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
@@ -55,11 +56,11 @@ export default function CartPage() {
           // line photo: the chosen แบบ's own image first, else the product photo
           const img = variant?.image_url ?? product.images[0] ?? db.variants.find((v) => v.product_id === product.id && v.image_url)?.image_url;
           return (
-            <div key={l.productId + (l.variantId ?? '')} className="flex gap-3 rounded-card border border-subtle bg-surface-2 p-[11px]">
+            <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')} className="flex gap-3 rounded-card border border-subtle bg-surface-2 p-[11px]">
               <ProductThumb isStock={product.is_stock} size={72} showRibbon={false} src={img} />
               <div className="min-w-0 flex-1">
                 <div className="flex justify-between gap-2">
-                  <div className="text-[13px] font-semibold leading-tight">{product.series_name}{variant ? ` · ${variant.name}` : ''}</div>
+                  <div className="text-[13px] font-semibold leading-tight">{productLabel(db, l.productId, l.variantId)}</div>
                   <button onClick={() => cart.remove(l.productId, l.variantId)} className="text-ink-faint"><Icon name="x" size={16} /></button>
                 </div>
                 <span className={cx('mt-1.5 inline-block rounded-md px-2 py-0.5 text-[10.5px] font-semibold', isPre ? 'bg-[#16a34a]/[0.14] text-[#4ade80]' : 'bg-[#2563eb]/[0.14] text-[#60a5fa]')}>

@@ -9,7 +9,7 @@ import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, ProgressBar, QrPanel, TicketQr, cx } from '@/components/ui';
-import { manufacturerNameOf, franchiseOf, productLabel, lineImage } from '@/domain/services/catalog';
+import { franchiseOf, productLabel, lineImage } from '@/domain/services/catalog';
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
@@ -107,7 +107,8 @@ export default function TicketDetailPage() {
         </div>
         <div className="min-w-0">
           <div className="text-[13.5px] font-semibold">{productLabel(db, ticket.product_id, ticket.variant_id)}</div>
-          <div className="text-[11.5px] text-ink-faint">{manufacturerNameOf(db, product)} · {franchiseOf(db, product)?.name}</div>
+          {/* title ลงท้ายด้วยค่ายแล้ว (productLabel) → บรรทัดรองเหลือแค่เรื่อง กันซ้ำ */}
+          <div className="text-[11.5px] text-ink-faint">{franchiseOf(db, product)?.name}</div>
         </div>
       </div>
 

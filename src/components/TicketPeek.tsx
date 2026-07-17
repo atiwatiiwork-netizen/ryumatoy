@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { PreorderTicket } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
+import { productLabel } from '@/domain/services/catalog';
 import { baht } from '@/lib/theme';
 import { Icon } from './Icon';
 
@@ -16,7 +17,6 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
   const [big, setBig] = useState<string | null>(null);
   const p = db.products.find((x) => x.id === t.product_id);
   const batch = t.batch_id ? db.batches.find((b) => b.id === t.batch_id) : undefined;
-  const variant = t.variant_id ? db.variants.find((v) => v.id === t.variant_id) : undefined;
   const buyer = db.users.find((u) => u.id === t.owner_id);
   const due = t.remaining_amount - t.remaining_paid;
 
@@ -42,8 +42,7 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
           <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink-faint"><Icon name="x" size={15} /></button>
         </div>
         <div className="mb-3 text-[15px] font-extrabold leading-tight">
-          {p?.series_name ?? '—'}
-          {variant && <span className="text-[12px] font-semibold text-ink-muted2"> · {variant.name}</span>}
+          {p ? productLabel(db, p.id, t.variant_id) : '—'}
           {batch && <span className="text-[12px] font-semibold text-ink-faint"> · {batch.label}</span>}
         </div>
 

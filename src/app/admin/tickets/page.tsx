@@ -7,6 +7,7 @@ import { Icon } from '@/components/Icon';
 import { ProductThumb, cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import type { PreorderTicket, Product } from '@/domain/entities';
+import { productLabel } from '@/domain/services/catalog';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const due = (t: PreorderTicket) => t.remaining_amount - t.remaining_paid;
@@ -127,6 +128,7 @@ export default function AdminTicketsPage() {
 }
 
 function ProductTicketCard({ product, tickets, open, onToggle }: { product: Product; tickets: PreorderTicket[]; open: boolean; onToggle: () => void }) {
+  const db = useDatabase();
   const owing = tickets.reduce((s, t) => s + Math.max(0, due(t)), 0);
   const pieces = tickets.reduce((s, t) => s + t.qty, 0);
   return (
@@ -136,7 +138,7 @@ function ProductTicketCard({ product, tickets, open, onToggle }: { product: Prod
         <span className="absolute right-2 top-2 rounded-md bg-cta px-2 py-0.5 text-[10.5px] font-extrabold text-white">{tickets.length} ใบ</span>
       </div>
       <div className="px-[11px] pb-3 pt-2">
-        <div className="line-clamp-2 min-h-[34px] text-[12.5px] font-semibold leading-tight">{product.series_name}</div>
+        <div className="line-clamp-2 min-h-[34px] text-[12.5px] font-semibold leading-tight">{productLabel(db, product.id)}</div>
         <div className="mt-1 flex items-center justify-between text-[11px]">
           <span className="text-ink-faint">{pieces} ตัว</span>
           {owing > 0
@@ -153,7 +155,7 @@ function BuyerList({ entry, onPick }: { entry: { product: Product; tickets: Preo
   const db = useDatabase();
   return (
     <div className="mt-3 rounded-xl border border-primary-soft/40 bg-surface-2 p-3">
-      <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนพรี {entry.product.series_name} ({entry.tickets.length} ใบ) · แตะรายชื่อดูรายละเอียดตั๋ว</div>
+      <div className="mb-2 text-[12px] font-semibold text-ink-muted">คนพรี {productLabel(db, entry.product.id)} ({entry.tickets.length} ใบ) · แตะรายชื่อดูรายละเอียดตั๋ว</div>
       <div className="flex flex-col divide-y divide-hair">
         {entry.tickets.map((t) => {
           const owner = db.users.find((u) => u.id === t.owner_id);

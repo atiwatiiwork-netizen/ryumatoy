@@ -15,6 +15,7 @@ import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts } from '@/domain/services/tickets';
+import { productLabel } from '@/domain/services/catalog';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
@@ -158,7 +159,7 @@ export default function CheckoutPage() {
           const variant = db.variants.find((v) => v.id === l.variantId);
           return (
             <div key={l.productId + (l.variantId ?? '')} className="flex justify-between gap-2.5 py-1 text-[13px]">
-              <span className="text-ink-muted2">{product.series_name}{variant ? ` · ${variant.name}` : ''} ×{l.qty}</span>
+              <span className="text-ink-muted2">{productLabel(db, l.productId, l.variantId)} ×{l.qty}</span>
               <span className="font-semibold">{baht(unitDeposit(l) * l.qty)}</span>
             </div>
           );
