@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, DeliveryMethod } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
@@ -1092,6 +1092,58 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
       : t,
   ),
 });
+
+// ── การรับของ (delivery choice, ryuma delivery spec 2026-07-19) ────────────
+
+/**
+ * Customer picks HOW to receive the goods (after paid full + arrived / in-stock).
+ * Re-choosing is allowed while the admin hasn't accepted yet (resets requested_at);
+ * once accepted the choice is locked. Custom method requires all 3 fields.
+ */
+export const chooseDelivery = (ticketId: string, userId: string, method: DeliveryMethod, custom?: { name: string; phone: string; address: string }) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t || t.owner_id !== userId || t.status === 'shipped') return db;
+  if (t.remaining_paid < t.remaining_amount) return db; // ยังจ่ายไม่ครบ = ยังเลือกไม่ได้
+  if (t.delivery?.accepted_at) return db; // แอดมินยืนยันแล้ว ห้ามสลับเอง (ให้ทักแอดมิน)
+  if (method === 'custom' && !(custom?.name.trim() && custom.phone.trim() && custom.address.trim())) return db;
+  return {
+    ...db,
+    tickets: db.tickets.map((x) => (x.id === ticketId
+      ? {
+          ...x,
+          delivery: {
+            method,
+            ...(method === 'custom' ? { name: custom!.name.trim(), phone: custom!.phone.trim(), address: custom!.address.trim() } : {}),
+            requested_at: new Date().toISOString(),
+          },
+        }
+      : x)),
+  };
+};
+
+/** Admin accepts a delivery request → registered/custom enter the parcel queue; courier/pickup wait for closeDelivery. */
+export const acceptDelivery = (ticketId: string) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t?.delivery || t.delivery.accepted_at || t.status === 'shipped') return db;
+  return {
+    ...db,
+    tickets: db.tickets.map((x) => (x.id === ticketId ? { ...x, delivery: { ...x.delivery!, accepted_at: new Date().toISOString() } } : x)),
+  };
+};
+
+/** Admin closes a courier/pickup job (ของออกจากมือแล้ว) → ticket done ('shipped', no parcel no). */
+export const closeDelivery = (ticketId: string) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t?.delivery?.accepted_at || t.delivery.closed_at || t.status === 'shipped') return db;
+  if (t.delivery.method !== 'courier' && t.delivery.method !== 'pickup') return db; // แบบส่งพัสดุจบด้วย setParcel เท่านั้น
+  const now = new Date().toISOString();
+  return {
+    ...db,
+    tickets: db.tickets.map((x) => (x.id === ticketId
+      ? { ...x, delivery: { ...x.delivery!, closed_at: now }, status: 'shipped' as const, shipped_out_at: now }
+      : x)),
+  };
+};
 
 /**
  * Close the pre-order round for the given products → status 'production'.

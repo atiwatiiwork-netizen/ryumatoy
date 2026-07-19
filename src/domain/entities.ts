@@ -200,6 +200,22 @@ export interface Order {
   items: OrderItem[];
 }
 
+/** วิธีรับของ ที่ลูกค้าเลือกหลังจ่ายครบ + ของถึงไทย/พร้อมส่ง (ryuma delivery spec 2026-07-19).
+ *  ทุกวิธีต้องผ่านแอดมินกด Accept ก่อน: registered/custom → เข้าคิว "รอแจ้งเลขพัสดุ" (setParcel จบงาน),
+ *  courier (ลูกค้าเรียกรถเข้ารับที่ร้าน) / pickup (มารับเอง) → แอดมินกดปิดงานเองเมื่อของออกจากมือ.
+ *  เก็บเป็น jsonb บน preorder_tickets (v52) — ตั๋วเก่าที่ไม่มี = flow เดิม (ส่งตามที่อยู่ที่ลงทะเบียน). */
+export type DeliveryMethod = 'registered' | 'custom' | 'courier' | 'pickup';
+export interface TicketDelivery {
+  method: DeliveryMethod;
+  // custom เท่านั้น: 3 ช่อง ชื่อ/เบอร์/ที่อยู่ (registered อ่านสดจาก users ตอนพิมพ์ใบปะหน้า)
+  name?: string;
+  phone?: string;
+  address?: string;
+  requested_at: string;
+  accepted_at?: string; // แอดมินกด Accept แล้ว
+  closed_at?: string;   // courier/pickup: แอดมินกดปิดงาน (ตั๋ว → shipped)
+}
+
 export interface PreorderTicket {
   id: string;
   ticket_no: string; // OP-2026-06-0001
@@ -226,6 +242,8 @@ export interface PreorderTicket {
   warehouse_at?: string;                    // ISO date the piece entered the China warehouse
   warehouse_transport?: SourcingTransport;  // รถ/เรือ read from the table's ล๊อต column
   warehouse_slip?: string;                  // the warehouse-table screenshot (evidence, admin-only)
+  // ── การรับของ (delivery choice) — jsonb v52; ไม่มี = ตั๋วเก่า ใช้ flow เดิม ──
+  delivery?: TicketDelivery;
   created_at: string;
   approved_at?: string;
 }

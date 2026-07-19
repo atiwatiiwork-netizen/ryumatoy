@@ -13,13 +13,15 @@ import { franchiseOf, productLabel, lineImage } from '@/domain/services/catalog'
 import { paidPercent } from '@/domain/services/tickets';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
-import { submitRemainingPayment } from '@/data/mutations';
+import { submitRemainingPayment, chooseDelivery } from '@/data/mutations';
+import { deliveryReady, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
+import { store } from '@/data/store';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
-import type { ProductStatus } from '@/domain/entities';
+import type { ProductStatus, PreorderTicket, DeliveryMethod } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
   { key: 'open', label: 'เปิดจอง' },
@@ -134,6 +136,14 @@ export default function TicketDetailPage() {
         </div>
       )}
 
+      {/* รับเอง/รถเข้ารับ ที่แอดมินปิดงานแล้ว (ไม่มีเลขพัสดุ) → จบงานเหมือนกัน */}
+      {isShipped && !ticket.parcel_no && (ticket.delivery?.method === 'courier' || ticket.delivery?.method === 'pickup') && (
+        <div className="mb-3.5 flex items-center gap-2.5 rounded-card border border-[#16a34a]/35 bg-[#16a34a]/[0.1] px-4 py-3">
+          <Icon name="check" size={18} className="text-[#4ade80]" />
+          <div className="text-[13px] text-[#4ade80]"><b>รับของเรียบร้อยแล้ว ✓</b> · {DELIVERY_METHOD_LABEL[ticket.delivery.method]}</div>
+        </div>
+      )}
+
       <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-4">
         <div className="mb-2 flex justify-between text-[13px]"><span className="text-[#4ade80]">มัดจำที่จ่ายแล้ว ✓</span><span className="font-bold">{baht(ticket.deposit_paid)}</span></div>
         <div className="mb-3 flex justify-between text-[13px]"><span className="text-ink-muted">ส่วนต่างคงเหลือ</span><span className={cx('font-bold', due > 0 ? 'text-primary-soft' : 'text-[#4ade80]')}>{due > 0 ? baht(due) : 'จ่ายครบ'}</span></div>
@@ -209,11 +219,107 @@ export default function TicketDetailPage() {
         </div>
       ) : null}
 
+      {/* จ่ายครบ + ของถึงไทย/พร้อมส่ง → เลือกวิธีรับของ (ryuma delivery spec) */}
+      {deliveryReady(db, ticket) && <DeliverySection ticket={ticket} />}
+
       <div className="flex gap-2.5">
         <Button variant="outline" icon="swap" onClick={resell}>ลงขาย P2P</Button>
         {canPay && !pendingRP && !paying && (
           <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ── เลือกวิธีรับของ (หลังจ่ายครบ + ของถึงไทย/พร้อมส่ง) ─────────────────────
+   4 ทาง: ส่งตามที่อยู่ที่ลงทะเบียน (default) / ที่อยู่ใหม่ 3 ช่อง / เรียกรถเข้ารับ / มารับเอง.
+   ทุกทางส่งเป็น "คำขอ" รอแอดมิน Accept — ก่อน Accept เปลี่ยนใจได้. */
+function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const CURRENT_USER_ID = useCurrentUserId();
+  const me = db.users.find((u) => u.id === CURRENT_USER_ID);
+
+  const d = ticket.delivery;
+  const [choosing, setChoosing] = useState(false);
+  const [method, setMethod] = useState<DeliveryMethod>('registered');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [addr, setAddr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const METHODS: { key: DeliveryMethod; icon: 'truck' | 'home' | 'box' | 'user'; label: string; sub: string }[] = [
+    { key: 'registered', icon: 'truck', label: 'ส่งพัสดุ ตามที่อยู่ที่ลงทะเบียนไว้', sub: me?.shipping_address ? me.shipping_address : 'ยังไม่มีที่อยู่ในระบบ — เลือก "ที่อยู่ใหม่" แทน' },
+    { key: 'custom', icon: 'home', label: 'ส่งพัสดุ ที่อยู่ใหม่', sub: 'กรอก ชื่อ / เบอร์ / ที่อยู่' },
+    { key: 'courier', icon: 'box', label: 'เรียกรถเข้ามารับเอง', sub: 'ส่งคำขอ → รอแอดมินยืนยันวันที่สะดวก' },
+    { key: 'pickup', icon: 'user', label: 'เข้ามารับด้วยตัวเอง', sub: 'ส่งคำขอ → รอแอดมินยืนยัน แล้วนัดเวลา' },
+  ];
+
+  const submit = async () => {
+    if (method === 'registered' && !me?.shipping_address?.trim()) return flash('ยังไม่มีที่อยู่ในระบบ — เลือก "ที่อยู่ใหม่" แทน');
+    if (method === 'custom' && !(name.trim() && phone.trim() && addr.trim())) return flash('กรอก ชื่อ / เบอร์ / ที่อยู่ ให้ครบ');
+    setBusy(true);
+    dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method, method === 'custom' ? { name, phone, address: addr } : undefined));
+    try { await store.flush(); } catch { /* persist error surface via onPersistError */ }
+    setBusy(false);
+    notifyAdminLine(`📦 คำขอรับของใหม่: ${ticket.ticket_no} · ${DELIVERY_METHOD_LABEL[method]}`);
+    flash('ส่งคำขอแล้ว · รอแอดมินยืนยัน');
+    setChoosing(false);
+  };
+
+  // ── มีคำขอแล้ว → แสดงสถานะ ──
+  if (d && !choosing) {
+    if (!d.accepted_at) {
+      return (
+        <div className="mb-4 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-3">
+          <div className="flex items-center gap-2 text-[13px] font-bold text-[#fbbf24]"><Icon name="truck" size={17} /> ส่งคำขอรับของแล้ว · รอแอดมินยืนยัน</div>
+          <div className="mt-1 text-[12.5px] text-ink-muted2">{DELIVERY_METHOD_LABEL[d.method]}{d.method === 'custom' && d.address ? ` · ${d.name} ${d.phone}` : ''}</div>
+          <button onClick={() => { setMethod(d.method); setName(d.name ?? ''); setPhone(d.phone ?? ''); setAddr(d.address ?? ''); setChoosing(true); }} className="mt-1.5 text-[12px] text-ink-faint underline">เปลี่ยนวิธีรับของ</button>
+        </div>
+      );
+    }
+    // Accept แล้ว
+    const accepted = d.method === 'registered' || d.method === 'custom'
+      ? { text: 'ยืนยันแล้ว · กำลังแพ็คของ รอแจ้งเลขพัสดุ', sub: d.method === 'custom' ? `ส่งที่: ${d.name} ${d.phone} · ${d.address}` : `ส่งตามที่อยู่ที่ลงทะเบียนไว้` }
+      : d.method === 'courier'
+        ? { text: 'ยืนยันแล้ว · เรียกรถเข้ามารับได้เลย', sub: 'แจ้งรอบรถ/เวลากับแอดมินทางแชทได้เลย' }
+        : { text: 'ยืนยันแล้ว · เข้ามารับของได้เลย', sub: 'นัดวัน-เวลากับแอดมินทางแชทได้เลย' };
+    return (
+      <div className="mb-4 rounded-card border border-[#2563eb]/35 bg-[#2563eb]/[0.1] px-4 py-3">
+        <div className="flex items-center gap-2 text-[13px] font-bold text-[#60a5fa]"><Icon name="check" size={17} /> {accepted.text}</div>
+        <div className="mt-1 text-[12px] text-ink-muted2">{DELIVERY_METHOD_LABEL[d.method]} · {accepted.sub}</div>
+      </div>
+    );
+  }
+
+  // ── ยังไม่เลือก (หรือกดเปลี่ยน) → ตัวเลือก 4 ทาง ──
+  return (
+    <div className="mb-4 rounded-card border border-[#16a34a]/35 bg-surface-2 p-4">
+      <div className="mb-1 flex items-center gap-2 text-sm font-bold text-[#4ade80]"><Icon name="truck" size={17} /> ของพร้อมส่งแล้ว! เลือกวิธีรับของ</div>
+      <div className="mb-3 text-[12px] text-ink-faint">เลือกได้ 1 ทาง · ส่งคำขอแล้วรอแอดมินยืนยัน</div>
+      <div className="flex flex-col gap-2">
+        {METHODS.map((m) => (
+          <button key={m.key} onClick={() => setMethod(m.key)}
+            className={cx('rounded-xl border px-3.5 py-2.5 text-left', method === m.key ? 'border-accent bg-[#b91c1c]/[0.1]' : 'border-subtle bg-surface-3')}>
+            <div className={cx('flex items-center gap-2 text-[13px] font-bold', method === m.key ? 'text-primary-soft' : 'text-ink')}>
+              <Icon name={m.icon} size={15} /> {m.label} {m.key === 'registered' && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-semibold text-ink-muted2">แนะนำ</span>}
+            </div>
+            <div className="mt-0.5 line-clamp-2 pl-[23px] text-[11.5px] text-ink-faint">{m.sub}</div>
+          </button>
+        ))}
+      </div>
+      {method === 'custom' && (
+        <div className="mt-3 flex flex-col gap-2">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ชื่อผู้รับ *" className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="เบอร์โทร *" className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+          <textarea value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="ที่อยู่จัดส่ง *" className="h-20 w-full resize-none rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+        </div>
+      )}
+      <div className="mt-3 flex gap-2.5">
+        {d && <Button variant="ghost" onClick={() => setChoosing(false)}>ยกเลิก</Button>}
+        <Button disabled={busy} onClick={submit}>{busy ? 'กำลังส่ง…' : 'ยืนยันวิธีรับของ'}</Button>
       </div>
     </div>
   );
