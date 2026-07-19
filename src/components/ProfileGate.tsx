@@ -32,6 +32,26 @@ export function ProfileGate() {
     return () => clearTimeout(t);
   }, [stuck, tick]);
 
+  // LAST RESORT: a WEDGED supabase client (bad resume → its internal lock deadlocks) makes every
+  // request it fires hang — in-page retries can never fix that (observed live: even signOut's await
+  // hung, the logout button "did nothing"). Only a page reload builds a fresh client + sockets, and it
+  // reliably clears the state ("ออกแล้วเข้าใหม่หาย"). Auto-reload after ~9s, guarded against loops
+  // (max 2 bursts / 2 min — if the network is truly down, the overlay stays with a manual button).
+  useEffect(() => {
+    if (!stuck) return;
+    const t = setTimeout(() => {
+      try {
+        const g = JSON.parse(sessionStorage.getItem('ryuma_stuck_reload') ?? '{"n":0,"ts":0}') as { n: number; ts: number };
+        const stale = Date.now() - g.ts > 120_000;
+        if (g.n < 2 || stale) {
+          sessionStorage.setItem('ryuma_stuck_reload', JSON.stringify({ n: stale ? 1 : g.n + 1, ts: Date.now() }));
+          window.location.reload();
+        }
+      } catch { window.location.reload(); }
+    }, 9000);
+    return () => clearTimeout(t);
+  }, [stuck]);
+
   // logged in but the user's own row hasn't loaded yet → clean loading, never the
   // wrong gate. (Under RLS the row loads once the session-aware fetch completes.)
   // Placed AFTER all hooks so hook order stays stable (Rules of Hooks).
@@ -41,7 +61,10 @@ export function ProfileGate() {
         <div className="flex flex-col items-center gap-3 text-ink-muted2">
           <Icon name="box" size={30} className="animate-pulse text-primary-soft" />
           <div className="text-[13px]">กำลังโหลดบัญชี…</div>
-          <button onClick={() => signOut()} className="mt-1 text-[12px] text-ink-faint underline">ค้างนานเกินไป? ออกจากระบบ</button>
+          <div className="text-[11px] text-ink-faint">ถ้าไม่มา ระบบจะรีเฟรชให้เองใน 9 วินาที</div>
+          {/* reload = ทางเดียวที่แก้ client ค้างตายได้ (สร้างการเชื่อมต่อใหม่ทั้งชุด) */}
+          <button onClick={() => window.location.reload()} className="mt-1 rounded-xl bg-cta px-6 py-2.5 text-[13px] font-bold text-white">🔄 รีเฟรชแอป</button>
+          <button onClick={async () => { await signOut(); window.location.reload(); }} className="text-[11.5px] text-ink-faint underline">ยังไม่หาย? ออกจากระบบ</button>
         </div>
       </div>
     );

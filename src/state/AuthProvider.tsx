@@ -223,7 +223,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signInWithOAuth({ provider: 'facebook', options: { redirectTo: window.location.origin + '/profile', scopes: 'public_profile' } });
   };
   const signOut = async () => {
-    if (supabase) await supabase.auth.signOut();
+    // WEDGED-CLIENT SAFE: never await the auth client — on a bad resume its internal lock can deadlock
+    // and signOut() hangs forever (observed live: the logout button "did nothing"). Fire it best-effort
+    // with a short race, then clear the persisted session OURSELVES so the logout always sticks.
+    if (supabase) {
+      try { await Promise.race([supabase.auth.signOut(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* hung/failed — storage clear below still logs out */ }
+    }
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('sb-') && k.includes('-auth-token')) localStorage.removeItem(k);
+      }
+    } catch { /* private mode */ }
     setAuthUser(null);
     setAppUserId(null);
   };
