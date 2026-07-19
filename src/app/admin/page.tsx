@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -11,7 +12,7 @@ import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipp
 import { memosDue } from '@/domain/services/sourcing';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
-import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo } from '@/domain/services/delivery';
+import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
 import type { ProductStatus, PreorderTicket } from '@/domain/entities';
@@ -23,6 +24,8 @@ export default function AdminDashboardPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  // ล็อตเดินทางที่ถูกกดกางดูรายละเอียด (ข้อมูลสินค้า + ลิสลูกค้า + สถานะรายคน)
+  const [openLot, setOpenLot] = useState<string | null>(null);
   // "ข้อมูลขาดจาก split flush" watchdog — three failure shapes of the non-atomic multi-table save:
   const lostTickets = unmatchedApprovedItems(db); // approved item, no ticket
   const lostPeople = new Set(lostTickets.map((x) => x.order.user_id)).size;
@@ -112,7 +115,7 @@ export default function AdminDashboardPage() {
           <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
           <div className="grid gap-2.5 lg:grid-cols-2">
             {inTransit.map(({ p, eta, buyers, pieces }) => (
-              <button key={p.id} onClick={() => router.push('/admin/production')} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
+              <button key={p.id} onClick={() => setOpenLot((cur) => (cur === p.id ? null : p.id))} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', openLot === p.id ? 'border-accent bg-[#b91c1c]/[0.08]' : eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
                 <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
                   {p.images[0]
                     ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
@@ -127,10 +130,13 @@ export default function AdminDashboardPage() {
                     </div>
                   )}
                 </div>
-                <Icon name="qr" size={16} className="shrink-0 rotate-90 text-ink-faint" />
+                <span className="shrink-0 text-[11px] font-bold text-ink-faint">{openLot === p.id ? '▲ ปิด' : '▼ ลูกค้า'}</span>
               </button>
             ))}
           </div>
+          {openLot && inTransit.some((x) => x.p.id === openLot) && (
+            <LotDetail productId={openLot} onGoUpdate={() => router.push('/admin/products')} />
+          )}
         </div>
       )}
 
@@ -220,6 +226,73 @@ export default function AdminDashboardPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * รายละเอียดล็อตเดินทาง (กดการ์ดแล้วกาง): ข้อมูลสินค้า + ลิสลูกค้าในรอบนี้ + สถานะรายคน
+ * (ยังไม่ชำระ / ชำระแล้วรอส่ง / ส่งเรียบร้อย) — เจ้าของ 2026-07-19.
+ */
+function LotDetail({ productId, onGoUpdate }: { productId: string; onGoUpdate: () => void }) {
+  const db = useDatabase();
+  const p = db.products.find((x) => x.id === productId);
+  if (!p) return null;
+  // รอบที่กำลังเดินทางของสินค้านี้ (ตั๋วรอบเก่าที่จบไปแล้วไม่ปน)
+  const cohort = db.tickets.filter((t) => t.product_id === productId && t.product_status === 'shipping');
+  const stateOf = (t: PreorderTicket) =>
+    t.status === 'shipped' ? 2 : ticketPaidFull(t) ? 1 : 0; // 0 ยังไม่ชำระ · 1 รอส่ง · 2 เสร็จ
+  const rows = [...cohort].sort((a, b) => stateOf(a) - stateOf(b)); // งานค้างเงินขึ้นก่อน
+  const paidCount = cohort.filter((t) => stateOf(t) >= 1).length;
+  const dueSum = cohort.reduce((s, t) => s + Math.max(0, t.remaining_amount - t.remaining_paid), 0);
+  const CHIP = [
+    { cls: 'bg-[#b91c1c]/20 text-[#f87171]', label: 'ยังไม่ชำระเงิน' },
+    { cls: 'bg-[#d97706]/20 text-[#fbbf24]', label: 'ชำระแล้ว · รอส่ง' },
+    { cls: 'bg-[#16a34a]/20 text-[#4ade80]', label: 'ส่งเรียบร้อย ✓' },
+  ];
+  return (
+    <div className="mt-3 rounded-xl border border-accent/40 bg-surface-3 p-4">
+      {/* 1) ข้อมูลสินค้า */}
+      <div className="mb-3 flex items-center gap-3">
+        <div className="h-[64px] w-[64px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+          {p.images[0]
+            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={26} className="text-primary-soft/25" /></div>}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[14.5px] font-bold">{productLabel(db, p.id)}</div>
+          <div className="mt-0.5 text-[11.5px] text-ink-faint">
+            ราคา {baht(p.price_total)} · มัดจำ {baht(p.deposit_amount)}
+            {p.shipped_at ? ` · ออกจากจีน ${new Date(p.shipped_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}` : ''}
+            {p.tracking_no ? <span className="font-mono"> · Track {p.tracking_no}</span> : null}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] font-bold">
+            <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">ลูกค้า {cohort.length} คน</span>
+            <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ชำระแล้ว {paidCount}/{cohort.length}</span>
+            {dueSum > 0 && <span className="rounded-md bg-[#b91c1c]/15 px-1.5 py-0.5 text-[#f87171]">ค้างรวม {baht(dueSum)}</span>}
+          </div>
+        </div>
+      </div>
+      {/* 2) ลิสลูกค้า + 3) สถานะรายคน */}
+      <div className="flex flex-col gap-1.5">
+        {rows.length === 0 && <div className="py-2 text-[12.5px] text-ink-faint">ไม่มีตั๋วในรอบเดินทางนี้</div>}
+        {rows.map((t) => {
+          const u = db.users.find((x) => x.id === t.owner_id);
+          const st = stateOf(t);
+          const due = Math.max(0, t.remaining_amount - t.remaining_paid);
+          return (
+            <div key={t.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{u?.display_name ?? '—'}{t.qty > 1 ? <span className="text-ink-faint"> ×{t.qty}</span> : null}</span>
+              <span className="font-mono text-[10.5px] text-ink-faint">{t.ticket_no}</span>
+              {st === 0 && <span className="text-[11.5px] font-bold text-[#f87171]">ค้าง {baht(due)}</span>}
+              <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-bold', CHIP[st].cls)}>{CHIP[st].label}</span>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={onGoUpdate} className="mt-3 w-full rounded-xl border border-[#2563eb]/45 bg-[#2563eb]/[0.12] py-2.5 text-[13px] font-bold text-[#8fb8f0]">
+        ของถึงไทยแล้ว? ไปเลื่อนสถานะล็อตที่ Pre-Order →
+      </button>
     </div>
   );
 }
