@@ -56,8 +56,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const resolveAppUser = useCallback(async (u: SupaUser | null): Promise<string | null> => {
     if (!supabase || !u) return null;
     if (isFacebook(u)) return u.id;
-    const { data } = await supabase.from('users').select('id').eq('auth_id', u.id).maybeSingle();
-    return (data?.id as string | undefined) ?? null;
+    // TIMEOUT-bounded: on a resume with a dead socket a fetch can hang forever without erroring —
+    // an un-bounded await here froze the identity retry loop on its first attempt (customer stuck on
+    // "กำลังโหลดบัญชี" until force-close). Time out → null → caller retries / local fallback covers.
+    try {
+      const q = supabase.from('users').select('id').eq('auth_id', u.id).maybeSingle();
+      const { data } = await Promise.race([
+        q,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('resolve timed out')), 8000)),
+      ]);
+      return (data?.id as string | undefined) ?? null;
+    } catch {
+      return null;
+    }
   }, []);
 
   // One unified session handler for both Facebook (admin) and phone+PIN (customer).
@@ -133,7 +144,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; clearTimeout(t); };
   }, [authUser, appUserId, resolveAppUser]);
 
-  const currentUserId = appUserId ?? (hasSupabase ? '' : CURRENT_USER_ID);
+  // LOCAL identity fallback (ZERO network): once the store's session-aware load holds our own users
+  // row, the app-user id is derivable straight from db (auth_id ↔ session uid; FB admin: users.id =
+  // auth uid). This makes the overlay independent of any hanging fetch — the store recovers by its own
+  // timeout+poll (products appear), and identity then resolves instantly from memory. (resume hang #4)
+  const localAppUserId = authUser
+    ? (db.users.find((u) => u.auth_id === authUser.id)?.id ?? (isFacebook(authUser) ? authUser.id : undefined))
+    : undefined;
+  // solidify the local resolution into state so effects keyed on appUserId settle too
+  useEffect(() => {
+    if (!appUserId && localAppUserId) setAppUserId(localAppUserId);
+  }, [appUserId, localAppUserId]);
+
+  const currentUserId = appUserId ?? localAppUserId ?? (hasSupabase ? '' : CURRENT_USER_ID);
   const me = db.users.find((u) => u.id === currentUserId);
   const isLoggedIn = authUser != null;
   const isAdmin = isLoggedIn && (ADMIN_IDS.includes(currentUserId) || me?.is_admin === true);
