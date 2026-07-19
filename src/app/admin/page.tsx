@@ -9,6 +9,7 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
+import { warehouseEtaLabel } from '@/domain/services/warehouse';
 import { memosDue } from '@/domain/services/sourcing';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
@@ -51,12 +52,19 @@ export default function AdminDashboardPage() {
   const maxCount = Math.max(1, ...statusCounts.map((s) => s.count));
 
   // ── หมวดใหญ่ 1: สินค้าเดินทางออกจากจีน / ใกล้ถึงไทย (การ์ดมีรูป, เจ้าของ 2026-07-19) ──
-  // ล็อตที่กำลังเดินทาง = สินค้า status 'shipping' + จำนวนตั๋ว/ชิ้นที่อยู่บนรถ/เรือรอบนั้น
+  // ล็อตที่กำลังเดินทาง: สินค้า status 'shipping' หรือ มีตั๋วที่ยืนยันโกดังจีนแล้ว (ระบบโกดัง flip
+  // รายใบ — สินค้าอาจยังค้าง 'production' จนกว่าจะครบรอบ แต่ของบางใบออกเดินทางแล้วจริง ต้องเห็นที่นี่)
   const inTransit = db.products
-    .filter((p) => p.status === 'shipping')
+    .filter((p) => !p.is_stock && (p.status === 'shipping' || db.tickets.some((t) => t.product_id === p.id && t.product_status === 'shipping')))
     .map((p) => {
       const cohort = db.tickets.filter((t) => t.product_id === p.id && t.product_status === 'shipping');
-      return { p, eta: computeEta(db.settings, p.shipped_at), buyers: cohort.length, pieces: cohort.reduce((s, t) => s + t.qty, 0) };
+      const waiting = p.status !== 'shipping' // ล็อตออกบางส่วน (โกดังยืนยันรายใบ ยังไม่ครบรอบ)
+        ? db.tickets.filter((t) => t.product_id === p.id && t.product_status === 'production').length
+        : 0;
+      // ETA: ระดับล็อต (shipped_at) ก่อน — ไม่มีก็ใช้ของตั๋วที่ยืนยันโกดังใบแรก (รถ/เรือ + วันเข้าโกดัง)
+      const eta = computeEta(db.settings, p.shipped_at);
+      const whTicket = !eta ? cohort.find((t) => t.warehouse_at) : undefined;
+      return { p, eta, whEta: whTicket ? warehouseEtaLabel(db, whTicket) : '', waiting, buyers: cohort.length, pieces: cohort.reduce((s, t) => s + t.qty, 0) };
     })
     .sort((a, b) => Number(b.eta?.arrivingSoon ?? false) - Number(a.eta?.arrivingSoon ?? false));
   const soonCount = inTransit.filter((x) => x.eta?.arrivingSoon).length;
@@ -114,7 +122,7 @@ export default function AdminDashboardPage() {
           </div>
           <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
           <div className="grid gap-2.5 lg:grid-cols-2">
-            {inTransit.map(({ p, eta, buyers, pieces }) => (
+            {inTransit.map(({ p, eta, whEta, waiting, buyers, pieces }) => (
               <button key={p.id} onClick={() => setOpenLot((cur) => (cur === p.id ? null : p.id))} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', openLot === p.id ? 'border-accent bg-[#b91c1c]/[0.08]' : eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
                 <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
                   {p.images[0]
@@ -123,10 +131,14 @@ export default function AdminDashboardPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)}</div>
-                  <div className="mt-0.5 text-[11.5px] text-ink-faint">คนพรี {buyers} · {pieces} ชิ้น{p.tracking_no ? <span className="font-mono"> · {p.tracking_no}</span> : null}</div>
-                  {eta && (
-                    <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', eta.arrivingSoon ? 'bg-[#dc2626]/20 text-[#f87171]' : 'bg-[#2563eb]/15 text-[#8fb8f0]')}>
-                      🚚 คาดถึง {etaRangeLabel(eta)} {etaDaysLabel(eta)}{eta.arrivingSoon ? ' · ใกล้ถึง!' : ''}
+                  <div className="mt-0.5 text-[11.5px] text-ink-faint">
+                    คนพรี {buyers} · {pieces} ชิ้น
+                    {waiting > 0 && <span className="text-[#fbbf24]"> · ออกแล้วบางส่วน (รออีก {waiting} ใบ)</span>}
+                    {p.tracking_no ? <span className="font-mono"> · {p.tracking_no}</span> : null}
+                  </div>
+                  {(eta || whEta) && (
+                    <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', eta?.arrivingSoon ? 'bg-[#dc2626]/20 text-[#f87171]' : 'bg-[#2563eb]/15 text-[#8fb8f0]')}>
+                      {eta ? <>🚚 คาดถึง {etaRangeLabel(eta)} {etaDaysLabel(eta)}{eta.arrivingSoon ? ' · ใกล้ถึง!' : ''}</> : whEta}
                     </div>
                   )}
                 </div>
@@ -240,6 +252,10 @@ function LotDetail({ productId, onGoUpdate }: { productId: string; onGoUpdate: (
   if (!p) return null;
   // รอบที่กำลังเดินทางของสินค้านี้ (ตั๋วรอบเก่าที่จบไปแล้วไม่ปน)
   const cohort = db.tickets.filter((t) => t.product_id === productId && t.product_status === 'shipping');
+  // ล็อตออกบางส่วน (ยืนยันโกดังรายใบ): ใบที่ยังรอออกจากจีน โชว์แยกท้ายลิสต์
+  const waitingRows = p.status !== 'shipping'
+    ? db.tickets.filter((t) => t.product_id === productId && t.product_status === 'production')
+    : [];
   const stateOf = (t: PreorderTicket) =>
     t.status === 'shipped' ? 2 : ticketPaidFull(t) ? 1 : 0; // 0 ยังไม่ชำระ · 1 รอส่ง · 2 เสร็จ
   const rows = [...cohort].sort((a, b) => stateOf(a) - stateOf(b)); // งานค้างเงินขึ้นก่อน
@@ -275,7 +291,7 @@ function LotDetail({ productId, onGoUpdate }: { productId: string; onGoUpdate: (
       </div>
       {/* 2) ลิสลูกค้า + 3) สถานะรายคน */}
       <div className="flex flex-col gap-1.5">
-        {rows.length === 0 && <div className="py-2 text-[12.5px] text-ink-faint">ไม่มีตั๋วในรอบเดินทางนี้</div>}
+        {rows.length === 0 && waitingRows.length === 0 && <div className="py-2 text-[12.5px] text-ink-faint">ไม่มีตั๋วในรอบเดินทางนี้</div>}
         {rows.map((t) => {
           const u = db.users.find((x) => x.id === t.owner_id);
           const st = stateOf(t);
@@ -286,6 +302,17 @@ function LotDetail({ productId, onGoUpdate }: { productId: string; onGoUpdate: (
               <span className="font-mono text-[10.5px] text-ink-faint">{t.ticket_no}</span>
               {st === 0 && <span className="text-[11.5px] font-bold text-[#f87171]">ค้าง {baht(due)}</span>}
               <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-bold', CHIP[st].cls)}>{CHIP[st].label}</span>
+            </div>
+          );
+        })}
+        {/* ใบที่ยังไม่ออกจากจีน (ล็อตยืนยันโกดังรายใบ ยังไม่ครบรอบ) */}
+        {waitingRows.map((t) => {
+          const u = db.users.find((x) => x.id === t.owner_id);
+          return (
+            <div key={t.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2 opacity-60">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{u?.display_name ?? '—'}{t.qty > 1 ? <span className="text-ink-faint"> ×{t.qty}</span> : null}</span>
+              <span className="font-mono text-[10.5px] text-ink-faint">{t.ticket_no}</span>
+              <span className="rounded-md bg-white/[0.07] px-2 py-0.5 text-[10.5px] font-bold text-ink-muted2">⏳ รอออกจากโกดังจีน</span>
             </div>
           );
         })}
