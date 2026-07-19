@@ -1093,6 +1093,29 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
   ),
 });
 
+/**
+ * "ถึงไทยแล้ว" สำหรับพรีรอบพิเศษ — เลื่อนเฉพาะตั๋วของรอบ (batch) นั้น เป็น 'arrived'
+ * (ห้ามใช้ setProductStatus ตรงๆ: มัน cascade ทุกตั๋วของ SKU → bleed ข้ามรอบ, บทเรียน B1/W#2).
+ * สินค้า (SKU) ยกเป็น 'arrived' เฉพาะเมื่อไม่เหลือตั๋วรอบอื่นที่ยังผลิต/เดินทางอยู่.
+ */
+export const arriveSpecialRound = (batchId: string) => (db: Database): Database => {
+  const cohort = db.tickets.filter((t) => t.batch_id === batchId && ['production', 'shipping'].includes(t.product_status));
+  if (cohort.length === 0) return db;
+  const pid = cohort[0].product_id;
+  const ids = new Set(cohort.map((t) => t.id));
+  const tickets = db.tickets.map((t) => (ids.has(t.id) ? { ...t, product_status: 'arrived' as const } : t));
+  const othersMoving = tickets.some((t) => t.product_id === pid && ['production', 'shipping'].includes(t.product_status));
+  return {
+    ...db,
+    tickets,
+    // ยก SKU เป็น arrived เฉพาะเมื่อ (1) ไม่มีตั๋วรอบอื่นกำลังเดิน และ (2) ตัว SKU อยู่ระหว่างผลิต/เดินทาง
+    // — SKU ที่ยัง 'open' (พรีปกติยังรับจองอยู่) ห้ามโดนปิดหน้าจองเพราะรอบพิเศษถึงก่อน
+    products: othersMoving ? db.products : db.products.map((p) => (p.id === pid && (p.status === 'production' || p.status === 'shipping')
+      ? { ...p, status: 'arrived' as const, eta_note: 'ถึงไทยแล้ว' }
+      : p)),
+  };
+};
+
 // ── การรับของ (delivery choice, ryuma delivery spec 2026-07-19) ────────────
 
 /**

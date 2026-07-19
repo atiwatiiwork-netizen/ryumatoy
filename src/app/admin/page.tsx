@@ -69,6 +69,31 @@ export default function AdminDashboardPage() {
     .sort((a, b) => Number(b.eta?.arrivingSoon ?? false) - Number(a.eta?.arrivingSoon ?? false));
   const soonCount = inTransit.filter((x) => x.eta?.arrivingSoon).length;
 
+  /** การ์ดล็อต 1 ใบ (ใช้ทั้ง group ใกล้ถึงไทย และ ขบวนทั้งหมด) — กดกาง LotDetail. */
+  const renderLotCard = ({ p, eta, whEta, waiting, buyers, pieces }: (typeof inTransit)[number]) => (
+    <button key={p.id} onClick={() => setOpenLot((cur) => (cur === p.id ? null : p.id))} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', openLot === p.id ? 'border-accent bg-[#b91c1c]/[0.08]' : eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
+      <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+        {p.images[0]
+          ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+          : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)}</div>
+        <div className="mt-0.5 text-[11.5px] text-ink-faint">
+          คนพรี {buyers} · {pieces} ชิ้น
+          {waiting > 0 && <span className="text-[#fbbf24]"> · ออกแล้วบางส่วน (รออีก {waiting} ใบ)</span>}
+          {p.tracking_no ? <span className="font-mono"> · {p.tracking_no}</span> : null}
+        </div>
+        {(eta || whEta) && (
+          <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', eta?.arrivingSoon ? 'bg-[#dc2626]/20 text-[#f87171]' : 'bg-[#2563eb]/15 text-[#8fb8f0]')}>
+            {eta ? <>🚚 คาดถึง {etaRangeLabel(eta)} {etaDaysLabel(eta)}{eta.arrivingSoon ? ' · ใกล้ถึง!' : ''}</> : whEta}
+          </div>
+        )}
+      </div>
+      <span className="shrink-0 text-[11px] font-bold text-ink-faint">{openLot === p.id ? '▲ ปิด' : '▼ ลูกค้า'}</span>
+    </button>
+  );
+
   // ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง (คิวการรับของทั้ง 3 ขั้น รวมที่เดียว) ──
   const dReq = deliveryRequests(db);
   const dParcel = parcelQueue(db);
@@ -121,31 +146,24 @@ export default function AdminDashboardPage() {
             {soonCount > 0 && <span className="rounded-full bg-[#dc2626] px-2 py-0.5 text-[11px] font-extrabold text-white">ใกล้ถึง {soonCount}</span>}
           </div>
           <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
-          <div className="grid gap-2.5 lg:grid-cols-2">
-            {inTransit.map(({ p, eta, whEta, waiting, buyers, pieces }) => (
-              <button key={p.id} onClick={() => setOpenLot((cur) => (cur === p.id ? null : p.id))} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', openLot === p.id ? 'border-accent bg-[#b91c1c]/[0.08]' : eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
-                <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
-                  {p.images[0]
-                    ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
-                    : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)}</div>
-                  <div className="mt-0.5 text-[11.5px] text-ink-faint">
-                    คนพรี {buyers} · {pieces} ชิ้น
-                    {waiting > 0 && <span className="text-[#fbbf24]"> · ออกแล้วบางส่วน (รออีก {waiting} ใบ)</span>}
-                    {p.tracking_no ? <span className="font-mono"> · {p.tracking_no}</span> : null}
-                  </div>
-                  {(eta || whEta) && (
-                    <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', eta?.arrivingSoon ? 'bg-[#dc2626]/20 text-[#f87171]' : 'bg-[#2563eb]/15 text-[#8fb8f0]')}>
-                      {eta ? <>🚚 คาดถึง {etaRangeLabel(eta)} {etaDaysLabel(eta)}{eta.arrivingSoon ? ' · ใกล้ถึง!' : ''}</> : whEta}
-                    </div>
-                  )}
-                </div>
-                <span className="shrink-0 text-[11px] font-bold text-ink-faint">{openLot === p.id ? '▲ ปิด' : '▼ ลูกค้า'}</span>
-              </button>
-            ))}
-          </div>
+
+          {/* group ใกล้ถึงไทย แยกชัดจากขบวนทั้งหมด (เจ้าของ 2026-07-20) */}
+          {soonCount > 0 && (
+            <div className="mb-3 rounded-xl border border-[#dc2626]/45 bg-[#dc2626]/[0.07] p-3">
+              <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-[#f87171]">🔴 ใกล้ถึงไทย ({soonCount}) — เตรียมรับของ</div>
+              <div className="grid gap-2.5 lg:grid-cols-2">
+                {inTransit.filter((x) => x.eta?.arrivingSoon).map(renderLotCard)}
+              </div>
+            </div>
+          )}
+          {inTransit.some((x) => !x.eta?.arrivingSoon) && (
+            <>
+              {soonCount > 0 && <div className="mb-2 text-[12px] font-bold text-ink-muted">🚢 กำลังเดินทางทั้งหมด ({inTransit.length - soonCount})</div>}
+              <div className="grid gap-2.5 lg:grid-cols-2">
+                {inTransit.filter((x) => !x.eta?.arrivingSoon).map(renderLotCard)}
+              </div>
+            </>
+          )}
           {openLot && inTransit.some((x) => x.p.id === openLot) && (
             <LotDetail productId={openLot} onGoUpdate={() => router.push('/admin/products')} />
           )}

@@ -9,8 +9,8 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
-import { franchiseOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus } from '@/data/mutations';
+import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
+import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound } from '@/data/mutations';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
 import { ocrImage } from '@/lib/ocr';
@@ -373,17 +373,37 @@ function SurplusRow({ product: p }: { product: Product }) {
 }
 
 // ── Open rounds management + history ────────────────────────────────────────
+// การ์ดรูปสไตล์ "หาของนอกระบบ" + group ตามค่าย (เจ้าของ 2026-07-20)
 function OpenRounds() {
   const db = useDatabase();
   const open = db.batches.filter((b) => b.status === 'open').sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  // group ด้วยค่ายของสินค้า (คงลำดับใหม่→เก่าในกลุ่ม)
+  const groups: { makerId: string; makerName: string; logo?: string; batches: ProductBatch[] }[] = [];
+  for (const b of open) {
+    const p = db.products.find((x) => x.id === b.product_id);
+    const mk = p ? manufacturerOf(db, p) : undefined;
+    const id = mk?.id ?? 'none';
+    let g = groups.find((x) => x.makerId === id);
+    if (!g) { g = { makerId: id, makerName: mk?.name ?? 'อื่นๆ', logo: mk?.logo_url, batches: [] }; groups.push(g); }
+    g.batches.push(b);
+  }
   return (
     <div className="mb-6">
       <div className="mb-2 text-[15px] font-bold">รอบที่เปิดอยู่ ({open.length})</div>
-      <div className="rounded-2xl border border-subtle bg-surface-2 p-2 lg:p-4">
-        {open.length === 0 ? <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีรอบเปิดอยู่</div> : (
-          <div className="flex flex-col divide-y divide-hair">{open.map((b) => <RoundRow key={b.id} batch={b} />)}</div>
-        )}
-      </div>
+      {open.length === 0 ? (
+        <div className="rounded-2xl border border-subtle bg-surface-2 py-6 text-center text-[13px] text-ink-faint">ยังไม่มีรอบเปิดอยู่</div>
+      ) : groups.map((g) => (
+        <div key={g.makerId} className="mb-4">
+          <div className="mb-2 flex items-center gap-2 text-[12.5px] font-bold text-ink-muted">
+            {g.logo ? <img src={g.logo} alt="" className="h-5 w-5 rounded-full object-cover" /> : <Icon name="store" size={15} className="text-primary-soft" />}
+            {g.makerName}
+            <span className="text-ink-faint">· {g.batches.length} รอบ</span>
+          </div>
+          <div className="grid gap-2.5 lg:grid-cols-2">
+            {g.batches.map((b) => <RoundRow key={b.id} batch={b} />)}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -395,9 +415,7 @@ function History() {
   return (
     <div className="mb-6">
       <div className="mb-2 text-[15px] font-bold text-ink-muted">ประวัติรอบที่ปิดแล้ว ({closed.length})</div>
-      <div className="rounded-2xl border border-subtle bg-surface-2 p-2 lg:p-4">
-        <div className="flex flex-col divide-y divide-hair">{closed.map((b) => <RoundRow key={b.id} batch={b} readOnly />)}</div>
-      </div>
+      <div className="grid gap-2.5 lg:grid-cols-2">{closed.map((b) => <RoundRow key={b.id} batch={b} readOnly />)}</div>
     </div>
   );
 }
@@ -425,6 +443,34 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [el, setEl] = useState(b.label);
   const saveEdit = () => { dispatch(editBatch(b.id, { price: Number(ep) || undefined, qty: Number(eq) || undefined, label: el })); flash('แก้ไขรอบแล้ว'); setEdit(false); };
 
+  // ── สถานะการเดินทางของรอบนี้ (นับจากตั๋วในรอบ ไม่ใช่ตัว SKU — กันข้ามรอบ) ──
+  const moving = tickets.filter((t) => ['production', 'shipping'].includes(t.product_status));
+  const nProd = tickets.filter((t) => t.product_status === 'production').length;
+  const nShip = tickets.filter((t) => t.product_status === 'shipping').length;
+  const nArr = tickets.filter((t) => ['arrived', 'delivered'].includes(t.product_status) || t.status === 'shipped').length;
+  // SF ค่าย→โกดังจีน (ใช้เทียบกับตารางโกดังใน section ยืนยันโกดังด้านบน)
+  const [sf, setSf] = useState(p?.sf_code ?? '');
+  const saveSf = () => {
+    if (!p || !sf.trim()) return flash('ใส่รหัสชิปปิ้งก่อน');
+    dispatch(setProductSf(p.id, sf.trim()));
+    flash('บันทึกรหัสชิปปิ้งแล้ว — รอเทียบตารางโกดัง ✓');
+  };
+  // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้
+  const doArrive = () => {
+    const owners = [...new Set(moving.map((t) => t.owner_id))];
+    if (!confirm(`ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`)) return;
+    dispatch(arriveSpecialRound(b.id));
+    if (p && pushEnabled(db, 'lot_arrived')) {
+      const seen = new Set<string>();
+      for (const t of moving) {
+        if (seen.has(t.owner_id)) continue;
+        seen.add(t.owner_id);
+        sendPush(subsForUsers(db, [t.owner_id]), { title: '🇹🇭 ของถึงไทยแล้ว!', body: `${productLabel(db, p.id)} — ${t.remaining_amount > t.remaining_paid ? 'ชำระส่วนต่างเพื่อรับของได้เลย' : 'เลือกวิธีรับของได้เลย'}`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+      }
+    }
+    flash(`ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
+  };
+
   // มีของเพิ่ม → เปิดรอบใหม่ (แสดงเมื่อรอบนี้ขายหมด หรือเป็นรอบที่ปิดไปแล้ว)
   const [restock, setRestock] = useState(false);
   const [rq, setRq] = useState('');
@@ -445,20 +491,49 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   };
 
   return (
-    <div className={cx('px-2 py-3', readOnly && 'opacity-75')}>
-      <div className="flex flex-wrap items-center gap-2">
-        <button onClick={() => setOpen((v) => !v)} className="flex min-w-[150px] flex-1 items-center gap-2 text-left">
-          <Icon name="chevronRight" size={15} className={cx('text-ink-faint transition-transform', open && 'rotate-90')} />
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span></span>
-            <span className="block font-mono text-[11px] text-ink-faint">เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}</span>
-          </span>
-        </button>
+    <div className={cx('rounded-xl border border-subtle bg-surface-2 p-3.5', readOnly && 'opacity-75')}>
+      {/* การ์ดรูปสไตล์ "หาของนอกระบบ": รูป + ชื่อ + ราคา + chips สถานะรอบ */}
+      <div className="flex items-start gap-3">
+        <div className="h-[64px] w-[64px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+          {p?.images[0]
+            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={24} className="text-primary-soft/25" /></div>}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-bold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span></div>
+          <div className="mt-0.5 font-mono text-[11px] text-ink-faint">เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10.5px] font-bold">
+            {fullPay ? <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ของอยู่ไทย · พร้อมส่ง</span> : (<>
+              {nProd > 0 && <span className="rounded-md bg-[#d97706]/15 px-1.5 py-0.5 text-[#fbbf24]">ผลิต/รอโกดัง {nProd}</span>}
+              {nShip > 0 && <span className="rounded-md bg-[#2563eb]/15 px-1.5 py-0.5 text-[#60a5fa]">เดินทาง {nShip}</span>}
+              {nArr > 0 && <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ถึงไทย {nArr}</span>}
+              {p?.sf_code && <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 font-mono text-ink-muted2">SF {p.sf_code.slice(0, 14)}</span>}
+            </>)}
+          </div>
+        </div>
+      </div>
+
+      {/* ปุ่มแอ็กชันแถวเดียว (สไตล์การ์ด memo) */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.1] px-3 py-1.5 text-[12px] font-bold text-[#f1d27a]">🎫 ลูกค้า ({tickets.length}) {open ? '▲' : '▼'}</button>
+        {!readOnly && !fullPay && moving.length > 0 && (
+          <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">🇹🇭 ถึงไทยแล้ว ({moving.length})</button>
+        )}
         {(soldOut || readOnly) && !restock && <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRestock(true); }} className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">➕ มีของเพิ่ม</button>}
         {!readOnly && noBuyers && !edit && <button onClick={() => { setEp(String(b.price_total)); setEq(String(b.stock_qty)); setEl(b.label); setEdit(true); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">แก้ไข</button>}
         {!readOnly && noBuyers && <button onClick={() => { if (confirm('ยกเลิกรอบนี้? (ยังไม่มีคนซื้อ)')) { dispatch(removeBatch(b.id)); flash('ยกเลิกรอบแล้ว'); } }} className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-2.5 py-1.5 text-[12px] font-semibold text-primary-soft">ยกเลิก</button>}
         {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
       </div>
+
+      {/* รหัสชิปปิ้งค่าย→โกดังจีน (ไว้เทียบตารางโกดังใน "ยืนยันเข้าโกดังจีน" ด้านบน) */}
+      {!readOnly && !fullPay && (tickets.length === 0 || nArr < tickets.length) && (
+        <div className="mt-2 flex items-end gap-2">
+          <label className="flex-1 text-[11px] text-ink-faint">รหัสชิปปิ้ง ค่าย→โกดังจีน (SF)
+            <input className={cx(inputCls, 'mt-0.5 py-2 font-mono text-[12px]')} value={sf} onChange={(e) => setSf(e.target.value)} placeholder="เช่น SF5194798275423" />
+          </label>
+          <button onClick={saveSf} className="rounded-lg border border-[#2563eb]/45 bg-[#2563eb]/[0.1] px-3 py-2 text-[12px] font-bold text-[#60a5fa]">บันทึก SF</button>
+        </div>
+      )}
 
       {restock && (
         <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-[#16a34a]/35 bg-[#16a34a]/[0.06] p-2.5">
