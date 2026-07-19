@@ -11,8 +11,10 @@ import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipp
 import { memosDue } from '@/domain/services/sourcing';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
+import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo } from '@/domain/services/delivery';
+import { productLabel, lineImage } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
-import type { ProductStatus } from '@/domain/entities';
+import type { ProductStatus, PreorderTicket } from '@/domain/entities';
 
 const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'arrived'];
 
@@ -45,11 +47,23 @@ export default function AdminDashboardPage() {
   const statusCounts = PROGRESS_STATUSES.map((st) => ({ st, count: db.products.filter((p) => !p.is_stock && p.status === st).length }));
   const maxCount = Math.max(1, ...statusCounts.map((s) => s.count));
 
-  // shipping lots arriving soon (ETA within ~2 days)
-  const arrivingSoon = db.products
+  // ── หมวดใหญ่ 1: สินค้าเดินทางออกจากจีน / ใกล้ถึงไทย (การ์ดมีรูป, เจ้าของ 2026-07-19) ──
+  // ล็อตที่กำลังเดินทาง = สินค้า status 'shipping' + จำนวนตั๋ว/ชิ้นที่อยู่บนรถ/เรือรอบนั้น
+  const inTransit = db.products
     .filter((p) => p.status === 'shipping')
-    .map((p) => ({ p, eta: computeEta(db.settings, p.shipped_at) }))
-    .filter((x) => x.eta?.arrivingSoon);
+    .map((p) => {
+      const cohort = db.tickets.filter((t) => t.product_id === p.id && t.product_status === 'shipping');
+      return { p, eta: computeEta(db.settings, p.shipped_at), buyers: cohort.length, pieces: cohort.reduce((s, t) => s + t.qty, 0) };
+    })
+    .sort((a, b) => Number(b.eta?.arrivingSoon ?? false) - Number(a.eta?.arrivingSoon ?? false));
+  const soonCount = inTransit.filter((x) => x.eta?.arrivingSoon).length;
+
+  // ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง (คิวการรับของทั้ง 3 ขั้น รวมที่เดียว) ──
+  const dReq = deliveryRequests(db);
+  const dParcel = parcelQueue(db);
+  const dHandoff = handoffQueue(db);
+  const toShipTotal = dReq.length + dParcel.length + dHandoff.length;
+
   // memo หาของนอกระบบ (แชทเฟส/โทร) ที่เข้าช่วงคาดว่าถึงแล้ว — เตือนให้ไปทวงเช็ค
   const memoDue = memosDue(db);
 
@@ -87,17 +101,61 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {arrivingSoon.length > 0 && (
-        <div className="mb-[22px] animate-pulseRed rounded-2xl border border-[#2563eb]/40 bg-[#2563eb]/[0.1] p-5">
-          <div className="mb-3 flex items-center gap-2 font-bold text-[#bcd3f5]"><Icon name="truck" size={18} /> ใกล้ถึงไทย ({arrivingSoon.length})</div>
-          <div className="flex flex-col gap-2">
-            {arrivingSoon.map(({ p, eta }) => (
-              <div key={p.id} className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
-                <span className="font-semibold">{p.series_name}</span>
-                <span className="text-[#bcd3f5]">{eta && etaRangeLabel(eta)} <span className="text-ink-faint">{eta && etaDaysLabel(eta)}</span></span>
-              </div>
+      {/* ── หมวดใหญ่ 1: เดินทางออกจากจีน / ใกล้ถึงไทย ── */}
+      {inTransit.length > 0 && (
+        <div className={cx('mb-[22px] rounded-2xl border p-5', soonCount > 0 ? 'animate-pulseRed border-[#2563eb]/50 bg-[#2563eb]/[0.1]' : 'border-subtle bg-surface-2')}>
+          <div className="mb-1 flex items-center gap-2 text-base font-bold text-[#bcd3f5]">
+            <Icon name="truck" size={19} /> 🚢 เดินทางออกจากจีน / ใกล้ถึงไทย
+            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] text-ink-muted2">{inTransit.length}</span>
+            {soonCount > 0 && <span className="rounded-full bg-[#dc2626] px-2 py-0.5 text-[11px] font-extrabold text-white">ใกล้ถึง {soonCount}</span>}
+          </div>
+          <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
+          <div className="grid gap-2.5 lg:grid-cols-2">
+            {inTransit.map(({ p, eta, buyers, pieces }) => (
+              <button key={p.id} onClick={() => router.push('/admin/production')} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
+                <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+                  {p.images[0]
+                    ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                    : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)}</div>
+                  <div className="mt-0.5 text-[11.5px] text-ink-faint">คนพรี {buyers} · {pieces} ชิ้น{p.tracking_no ? <span className="font-mono"> · {p.tracking_no}</span> : null}</div>
+                  {eta && (
+                    <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', eta.arrivingSoon ? 'bg-[#dc2626]/20 text-[#f87171]' : 'bg-[#2563eb]/15 text-[#8fb8f0]')}>
+                      🚚 คาดถึง {etaRangeLabel(eta)} {etaDaysLabel(eta)}{eta.arrivingSoon ? ' · ใกล้ถึง!' : ''}
+                    </div>
+                  )}
+                </div>
+                <Icon name="qr" size={16} className="shrink-0 rotate-90 text-ink-faint" />
+              </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง ── */}
+      {toShipTotal > 0 && (
+        <div className="mb-[22px] rounded-2xl border border-[#d97706]/40 bg-surface-2 p-5">
+          <div className="mb-1 flex items-center gap-2 text-base font-bold text-[#fbbf24]">
+            <Icon name="box" size={19} /> 📦 สินค้าที่ต้องจัดส่ง
+            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] text-ink-muted2">{toShipTotal}</span>
+          </div>
+          <div className="mb-3 flex flex-wrap gap-1.5 text-[11.5px]">
+            {dReq.length > 0 && <span className="rounded-md bg-[#d97706]/20 px-2 py-0.5 font-bold text-[#fbbf24]">รอยืนยันคำขอ {dReq.length}</span>}
+            {dParcel.length > 0 && <span className="rounded-md bg-[#b91c1c]/20 px-2 py-0.5 font-bold text-[#f87171]">รอแจ้งเลขพัสดุ {dParcel.length}</span>}
+            {dHandoff.length > 0 && <span className="rounded-md bg-[#2563eb]/20 px-2 py-0.5 font-bold text-[#60a5fa]">รถเข้ารับ/มารับเอง {dHandoff.length}</span>}
+          </div>
+          <div className="grid gap-2.5 lg:grid-cols-2">
+            {[
+              ...dReq.map((t) => ({ t, tone: 'text-[#fbbf24]', tag: 'รอยืนยัน' })),
+              ...dParcel.map((t) => ({ t, tone: 'text-[#f87171]', tag: 'รอแจ้งเลขพัสดุ' })),
+              ...dHandoff.map((t) => ({ t, tone: 'text-[#60a5fa]', tag: 'รอปิดงาน' })),
+            ].slice(0, 8).map(({ t, tone, tag }) => <ToShipCard key={t.id} ticket={t} tone={tone} tag={tag} onGo={() => router.push('/admin/orders')} />)}
+          </div>
+          <button onClick={() => router.push('/admin/orders')} className="mt-3 w-full rounded-xl bg-cta py-2.5 text-[13.5px] font-bold text-white">
+            ไปจัดการจัดส่งทั้งหมด ({toShipTotal}) →
+          </button>
         </div>
       )}
 
@@ -163,6 +221,33 @@ export default function AdminDashboardPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** การ์ดงานจัดส่ง 1 ใบ (สไตล์การ์ด memo ที่เจ้าของชอบ): รูป + ชื่อ-ค่าย + ลูกค้า + ป้ายขั้นตอน. */
+function ToShipCard({ ticket, tone, tag, onGo }: { ticket: PreorderTicket; tone: string; tag: string; onGo: () => void }) {
+  const db = useDatabase();
+  const img = lineImage(db, ticket.product_id, ticket.variant_id);
+  const user = db.users.find((u) => u.id === ticket.owner_id);
+  const to = resolveShipTo(db, ticket);
+  const isShip = !ticket.delivery || ticket.delivery.method === 'registered' || ticket.delivery.method === 'custom';
+  return (
+    <button onClick={onGo} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 p-3 text-left">
+      <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+        {img
+          ? <img src={img} alt="" className="h-full w-full object-cover" />
+          : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13.5px] font-semibold">{productLabel(db, ticket.product_id, ticket.variant_id)}{ticket.qty > 1 ? ` ×${ticket.qty}` : ''}</div>
+        <div className="mt-0.5 truncate text-[11.5px] text-ink-faint">
+          <Icon name="user" size={11} className="mr-0.5 inline" /> {user?.display_name ?? '—'}
+          {ticket.delivery ? ` · ${DELIVERY_METHOD_LABEL[ticket.delivery.method]}` : ' · ส่งตามที่อยู่ (flow เดิม)'}
+        </div>
+        {isShip && to.address && <div className="mt-0.5 truncate text-[11px] text-ink-faint">📍 {to.address}</div>}
+      </div>
+      <span className={cx('shrink-0 rounded-md bg-white/[0.06] px-2 py-1 text-[10.5px] font-bold', tone)}>{tag}</span>
+    </button>
   );
 }
 

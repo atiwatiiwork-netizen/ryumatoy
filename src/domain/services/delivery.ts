@@ -23,6 +23,23 @@ export const DELIVERY_METHOD_LABEL: Record<DeliveryMethod, string> = {
 export const ticketPaidFull = (t: PreorderTicket) => t.remaining_paid >= t.remaining_amount;
 
 /**
+ * ป้ายสถานะตั๋วฝั่งลูกค้า (ฐานระบบ flow การรับของ):
+ * ส่ง/ปิดงานแล้ว → "เสร็จสิ้น" · ลูกค้า submit วิธีรับของแล้ว (จ่ายครบ) → "รอจัดส่ง" ·
+ * จ่ายครบเฉยๆ → "จ่ายครบ" · นอกนั้นตามสถานะล็อต. คืนค่าเป็น key ของ STATUS ใน lib/theme.
+ */
+/** ตั๋ว "จบ/อยู่ปลายทาง" แล้ว (ถึงไทย/จ่ายครบ/เสร็จสิ้น) — ใช้แบ่งแท็บกระเป๋า (เรียบร้อย vs ใบพรี). */
+export const ticketDone = (t: PreorderTicket): boolean =>
+  t.status === 'shipped' || t.status === 'paid_full' || ticketPaidFull(t)
+  || ['arrived', 'delivered', 'closed'].includes(t.product_status);
+
+export const ticketBadgeKey = (t: PreorderTicket): string => {
+  if (t.status === 'shipped') return 'shipped';
+  if (t.delivery && ticketPaidFull(t)) return 'awaiting_ship';
+  if (t.status === 'paid_full') return 'paid_full';
+  return t.product_status;
+};
+
+/**
  * ตั๋วนี้ "พร้อมให้เลือกวิธีรับของ" หรือยัง: จ่ายครบ + ยังไม่จบงาน + ของอยู่ไทยแล้ว
  * (ถึงไทย/ส่งมอบ หรือเป็นสินค้า in-stock ที่พร้อมส่งตั้งแต่ซื้อ).
  */

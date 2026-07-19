@@ -12,6 +12,7 @@ import { ProductCard } from '@/components/ProductCard';
 import { EventBanner } from '@/components/EventBits';
 import { paidPercent } from '@/domain/services/tickets';
 import { inClosedBoard } from '@/domain/services/catalog';
+import { ticketBadgeKey } from '@/domain/services/delivery';
 
 /** Home — responsive (mobile phone layout ↔ desktop top-nav web, HANDOFF.md). */
 export default function HomePage() {
@@ -44,12 +45,12 @@ export default function HomePage() {
             {myTickets.map((t) => {
               const product = db.products.find((p) => p.id === t.product_id)!;
               const due = t.remaining_amount - t.remaining_paid;
-              const sub = t.status === 'paid_full' || due <= 0 ? 'จ่ายครบแล้ว ✓' : t.product_status === 'arrived' ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
+              const sub = t.status === 'shipped' ? 'เสร็จสิ้น รับของเรียบร้อย ✓' : t.status === 'paid_full' || due <= 0 ? 'จ่ายครบแล้ว ✓' : t.product_status === 'arrived' ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
               return (
                 <Link key={t.id} href="/wallet" className="min-w-[168px] rounded-card border border-subtle bg-surface-2 p-4 lg:min-w-0">
                   <div className="mb-2.5 flex items-center justify-between">
                     <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
-                    <StatusBadge status={(t.status === 'paid_full' ? 'paid_full' : t.product_status) as StatusKey} />
+                    <StatusBadge status={ticketBadgeKey(t) as StatusKey} />
                   </div>
                   <div className="mb-3 text-[15px] font-bold leading-tight">{product.series_name}</div>
                   <ProgressBar pct={paidPercent(t.deposit_paid, t.remaining_amount, t.remaining_paid)} fill={STATUS_FILL[t.product_status as StatusKey]} />

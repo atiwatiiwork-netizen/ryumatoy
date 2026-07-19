@@ -11,7 +11,7 @@ import { uploadImage } from '@/lib/upload';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { approveRemainingPayment, setParcel, acceptDelivery, closeDelivery } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
-import { productLabel } from '@/domain/services/catalog';
+import { productLabel, lineImage } from '@/domain/services/catalog';
 import { LabelSheet } from './LabelSheet';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
@@ -117,9 +117,10 @@ export default function OrdersHubPage() {
             {waitingArrival.map((t) => {
               const p = productOf(t); const eta = p ? computeEta(db.settings, p.shipped_at) : null;
               return (
-                <div key={t.id} className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
-                  <div><span className="font-semibold">{p?.series_name}</span> <span className="text-ink-faint">· {userName(t.owner_id)}</span></div>
-                  <div className="flex items-center gap-2.5">
+                <div key={t.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
+                  <TicketThumb ticket={t} size={42} />
+                  <div className="min-w-0 flex-1 truncate"><span className="font-semibold">{p?.series_name}</span> <span className="text-ink-faint">· {userName(t.owner_id)}</span></div>
+                  <div className="flex shrink-0 items-center gap-2.5">
                     <span className="rounded-md bg-[#16a34a]/15 px-2 py-0.5 text-[11px] font-bold text-[#4ade80]">จ่ายครบ ✓</span>
                     {eta && <span className="text-[#bcd3f5]">{etaRangeLabel(eta)} <span className="text-ink-faint">{etaDaysLabel(eta)}</span></span>}
                   </div>
@@ -140,7 +141,8 @@ export default function OrdersHubPage() {
               return (
                 <div key={t.id} className="rounded-xl border border-subtle bg-surface-3 p-3.5">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
+                    <TicketThumb ticket={t} size={52} />
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">{userName(t.owner_id)} <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span></div>
                       <div className="truncate text-[12px] text-ink-muted2">{productLabel(db, t.product_id, t.variant_id)} ×{t.qty} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span></div>
                       {isShip && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-ink-faint">📍 {to.name} {to.phone} · {to.address || '— ไม่มีที่อยู่ (ทักลูกค้า)'}</div>}
@@ -160,8 +162,9 @@ export default function OrdersHubPage() {
         {dHandoffs.length === 0 ? <Empty text="—" /> : (
           <div className="flex flex-col gap-2">
             {dHandoffs.map((t) => (
-              <div key={t.id} className="flex items-center justify-between gap-2 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5">
-                <div className="min-w-0">
+              <div key={t.id} className="flex items-center justify-between gap-2.5 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5">
+                <TicketThumb ticket={t} size={44} />
+                <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-semibold">{userName(t.owner_id)} <span className="rounded-md bg-[#2563eb]/20 px-1.5 py-0.5 text-[10.5px] font-bold text-[#60a5fa]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span></div>
                   <div className="truncate text-[11.5px] text-ink-faint">{productLabel(db, t.product_id, t.variant_id)} ×{t.qty} · <span className="font-mono">{t.ticket_no}</span></div>
                 </div>
@@ -198,11 +201,13 @@ export default function OrdersHubPage() {
         <Section icon="check" title="จัดส่งแล้ว (จบกระบวนการ)" count={shipped.length} tone="green">
           <div className="flex flex-col gap-2">
             {shipped.map((t) => (
-              <div key={t.id} className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
-                <div><span className="font-semibold">{productOf(t)?.series_name}</span> <span className="text-ink-faint">· {userName(t.owner_id)}</span></div>
-                <div className="flex items-center gap-2 text-ink-muted2">
-                  <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px] font-bold uppercase">{CARRIERS.find((c) => c.key === t.carrier)?.label ?? t.carrier}</span>
-                  <span className="font-mono text-[11px]">{t.parcel_no}</span>
+              <div key={t.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
+                <TicketThumb ticket={t} size={40} />
+                <div className="min-w-0 flex-1 truncate"><span className="font-semibold">{productOf(t)?.series_name}</span> <span className="text-ink-faint">· {userName(t.owner_id)}</span></div>
+                <div className="flex shrink-0 items-center gap-2 text-ink-muted2">
+                  {t.parcel_no
+                    ? <><span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px] font-bold uppercase">{CARRIERS.find((c) => c.key === t.carrier)?.label ?? t.carrier}</span><span className="font-mono text-[11px]">{t.parcel_no}</span></>
+                    : <span className="rounded-md bg-[#16a34a]/15 px-2 py-0.5 text-[11px] font-bold text-[#4ade80]">{t.delivery ? DELIVERY_METHOD_LABEL[t.delivery.method] : 'รับแล้ว'} ✓</span>}
                 </div>
               </div>
             ))}
@@ -242,9 +247,10 @@ function ParcelRow({ ticket, label, sub, dispatch, flash }: {
 
   return (
     <div className="rounded-xl border border-[#b91c1c]/30 bg-surface-3 p-3.5">
-      <div className="mb-2.5 flex items-center justify-between">
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="font-mono text-[11px] text-ink-faint">{ticket.ticket_no}</div>
+      <div className="mb-2.5 flex items-center gap-2.5">
+        <TicketThumb ticket={ticket} size={44} />
+        <div className="min-w-0 flex-1 text-sm font-semibold">{label}</div>
+        <div className="shrink-0 font-mono text-[11px] text-ink-faint">{ticket.ticket_no}</div>
       </div>
       {sub && <div className="mb-2.5 -mt-1 line-clamp-2 text-[11.5px] text-ink-faint">{sub}</div>}
       <div className="mb-2.5 flex flex-wrap gap-1.5">
@@ -268,6 +274,18 @@ function ParcelRow({ ticket, label, sub, dispatch, flash }: {
 }
 
 /* ── shared bits ────────────────────────────────────────────────────────── */
+/** รูปสินค้าจิ๋วประจำแถวคิว (เจ้าของ 2026-07-19: "เห็นรูปชัดเจน ทำงานง่ายขึ้น") — เคารพรูป variant. */
+function TicketThumb({ ticket, size = 48 }: { ticket: PreorderTicket; size?: number }) {
+  const db = useDatabase();
+  const img = lineImage(db, ticket.product_id, ticket.variant_id);
+  return (
+    <div className="shrink-0 overflow-hidden rounded-lg border border-subtle bg-stripe" style={{ width: size, height: size }}>
+      {img
+        ? <img src={img} alt="" className="h-full w-full object-cover" />
+        : <div className="grid h-full w-full place-items-center"><Icon name="box" size={Math.round(size * 0.42)} className="text-primary-soft/25" /></div>}
+    </div>
+  );
+}
 const TONE: Record<string, string> = {
   amber: 'text-[#fbbf24]', blue: 'text-[#60a5fa]', red: 'text-[#f87171]', green: 'text-[#4ade80]',
 };

@@ -9,18 +9,21 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, cx } from '@/components/ui';
 import { manufacturerOf, productLabel, lineImage } from '@/domain/services/catalog';
+import { ticketBadgeKey, ticketDone } from '@/domain/services/delivery';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { MyCoupons } from '@/components/CouponTicket';
 import type { PreorderTicket } from '@/domain/entities';
 
 type Tab = 'all' | 'preorder' | 'shipping' | 'done' | 'coupon';
 
-// ทั้งหมด / ใบพรี (จอง+ผลิต) / กำลังเดินทาง / เรียบร้อย (ถึงไทย/จ่ายครบ)
-function matchTab(tab: Tab, ps: string, status: string): boolean {
+// ทั้งหมด / ใบพรี (จอง+ผลิต ยังไม่จบ) / กำลังเดินทาง / เรียบร้อย (ถึงไทย/จ่ายครบ/เสร็จสิ้น)
+// Big Test 2026-07-19: ตั๋ว in-stock (ps 'open' แต่จ่ายเต็มตั้งแต่ซื้อ) เคยหลุดไปอยู่แท็บ "ใบพรี"
+// และตั๋ว shipped/delivered ของ in-stock ไม่เข้าแท็บไหนเลย → ตัดสินด้วย "จบ/จ่ายครบ" ก่อนเสมอ
+function matchTab(tab: Tab, t: PreorderTicket): boolean {
   if (tab === 'all') return true;
-  if (tab === 'preorder') return ps === 'open' || ps === 'production';
-  if (tab === 'shipping') return ps === 'shipping';
-  return ps === 'arrived' || ps === 'closed' || status === 'paid_full';
+  if (tab === 'done') return ticketDone(t);
+  if (tab === 'shipping') return t.product_status === 'shipping';
+  return (t.product_status === 'open' || t.product_status === 'production') && !ticketDone(t); // ใบพรีที่ยังเดินอยู่
 }
 
 export default function WalletPage() {
@@ -34,7 +37,7 @@ export default function WalletPage() {
   const couponCount = usableGrantsFor(db, CURRENT_USER_ID).length;
 
   const filtered = mine
-    .filter((t) => matchTab(tab, t.product_status, t.status))
+    .filter((t) => matchTab(tab, t))
     .sort((a, b) => (newest ? (a.created_at < b.created_at ? 1 : -1) : a.created_at < b.created_at ? -1 : 1));
 
   // group by ค่าย (maker), preserving the sorted order within each group
@@ -83,7 +86,8 @@ export default function WalletPage() {
               const img = lineImage(db, t.product_id, t.variant_id);
               return (
                 <Link key={t.id} href={`/wallet/${t.ticket_no}`} className="flex overflow-hidden rounded-card border border-subtle bg-surface-2">
-                  <div className="w-1" style={{ background: STATUS_FILL[t.product_status as StatusKey] }} />
+                  {/* แถบสี + ป้าย ใช้ key เดียวกัน (ฐานระบบ flow รับของ: submit → รอจัดส่ง, ส่งแล้ว → เสร็จสิ้น) */}
+                  <div className="w-1" style={{ background: STATUS_FILL[ticketBadgeKey(t) as StatusKey] }} />
                   <div className="flex min-w-0 flex-1 gap-3 p-3">
                     <div className="h-[66px] w-[66px] flex-shrink-0 overflow-hidden rounded-[10px] border border-subtle">
                       {img
@@ -93,7 +97,7 @@ export default function WalletPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
-                        <StatusBadge status={(t.status === 'paid_full' ? 'paid_full' : t.product_status) as StatusKey} />
+                        <StatusBadge status={ticketBadgeKey(t) as StatusKey} />
                       </div>
                       <div className="my-1.5 text-[13px] font-semibold leading-tight">{productLabel(db, t.product_id, t.variant_id)}</div>
                       <div className="flex items-center justify-between">

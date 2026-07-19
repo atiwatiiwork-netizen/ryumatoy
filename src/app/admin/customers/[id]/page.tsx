@@ -9,6 +9,7 @@ import type { RankKey, StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, RankBadge, cx } from '@/components/ui';
 import { rankPiecesOf } from '@/domain/services/ranks';
+import { ticketBadgeKey } from '@/domain/services/delivery';
 import { usableGrantsFor, couponExpired } from '@/domain/services/coupons';
 import { setSuspended } from '@/data/mutations';
 import { CouponTierPill } from '@/components/CouponTicket';
@@ -90,7 +91,7 @@ export default function CustomerPage() {
               <div key={t.id} className="flex flex-wrap items-center gap-2 py-2">
                 <span className="w-[135px] shrink-0 font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
                 <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">{product?.series_name ?? '—'}{t.qty > 1 ? ` ×${t.qty}` : ''}</span>
-                <StatusBadge status={(t.status === 'paid_full' ? 'paid_full' : t.product_status) as StatusKey} />
+                <StatusBadge status={ticketBadgeKey(t) as StatusKey} />
                 <span className={cx('text-[12px] font-bold', d > 0 ? 'text-primary-soft' : 'text-[#4ade80]')}>{d > 0 ? `ค้าง ${baht(d)}` : 'ครบ ✓'}</span>
               </div>
             );
