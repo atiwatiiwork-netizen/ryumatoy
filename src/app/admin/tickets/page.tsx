@@ -6,13 +6,22 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { ProductThumb, cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
-import type { PreorderTicket, Product } from '@/domain/entities';
-import { productLabel } from '@/domain/services/catalog';
+import type { PreorderTicket, Product, ProductStatus } from '@/domain/entities';
+import { productLabel, orderedQtyOf } from '@/domain/services/catalog';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const due = (t: PreorderTicket) => t.remaining_amount - t.remaining_paid;
 
 type PayFilter = '' | 'owing' | 'paid';
+
+/** หมวดสถานะบนสุด (owner spec 2026-07-20): เปิดพรี / ปิดกระดานแล้ว(ผลิต) / กำลังเดินทาง / ถึงไทย-จบ.
+ *  ปิดกระดาน+เดินทาง โชว์ "สั่ง/จอง/เกิน" (ข้อมูลลับ เฉพาะแอดมิน). เดินทาง = ป้ายกระพริบ. */
+const STATUS_BUCKETS: { key: string; label: string; statuses: ProductStatus[]; adminInfo: boolean; blink?: boolean; tone: string }[] = [
+  { key: 'open', label: '🟢 เปิดพรีออเดอร์', statuses: ['open'], adminInfo: false, tone: 'bg-[#16a34a]' },
+  { key: 'production', label: '📦 ปิดกระดานแล้ว · กำลังผลิต', statuses: ['production'], adminInfo: true, tone: 'bg-[#d97706]' },
+  { key: 'shipping', label: '🚚 กำลังเดินทางมาไทย', statuses: ['shipping'], adminInfo: true, blink: true, tone: 'bg-[#2563eb]' },
+  { key: 'done', label: '🇹🇭 ถึงไทย / จบแล้ว', statuses: ['arrived', 'delivered', 'closed'], adminInfo: false, tone: 'bg-[#4b5563]' },
+];
 
 /**
  * ตั๋วทั้งหมด — REWORKED (owner spec): a photo GRID of only the products that HAVE tickets,
@@ -29,8 +38,8 @@ export default function AdminTicketsPage() {
   const owingCount = db.tickets.filter((t) => due(t) > 0).length;
   const owingSum = db.tickets.reduce((s, t) => s + Math.max(0, due(t)), 0);
 
-  // tickets → filter → bucket per product → group ค่าย → เรื่อง (only products with tickets)
-  const groups = useMemo(() => {
+  // tickets → filter → bucket per product → group ตามสถานะสินค้า (owner spec 2026-07-20)
+  const buckets = useMemo(() => {
     const ql = q.trim().toLowerCase();
     const byProduct = new Map<string, PreorderTicket[]>();
     for (const t of db.tickets) {
@@ -44,24 +53,18 @@ export default function AdminTicketsPage() {
       }
       (byProduct.get(t.product_id) ?? byProduct.set(t.product_id, []).get(t.product_id)!).push(t);
     }
-    const makers = db.manufacturers
-      .map((m) => ({
-        maker: m,
-        franchises: db.franchises
-          .map((f) => ({
-            franchise: f,
-            products: db.products
-              .filter((p) => p.manufacturer_id === m.id && p.franchise_id === f.id && byProduct.has(p.id))
-              .map((p) => ({ product: p, tickets: byProduct.get(p.id)!.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) }))
-              .sort((a, b) => a.product.series_name.localeCompare(b.product.series_name)),
-          }))
-          .filter((g) => g.products.length > 0),
-      }))
-      .filter((g) => g.franchises.length > 0);
-    return makers;
+    return STATUS_BUCKETS.map((bucket) => {
+      const products = db.products
+        .filter((p) => byProduct.has(p.id) && bucket.statuses.includes(p.status))
+        .map((p) => ({ product: p, tickets: byProduct.get(p.id)!.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) }))
+        // ค่าย → ชื่อ (คงการเรียงเดิมไว้ในหมวด)
+        .sort((a, b) => (a.product.manufacturer_id + a.product.series_name).localeCompare(b.product.manufacturer_id + b.product.series_name));
+      const tix = products.reduce((s, p) => s + p.tickets.length, 0);
+      return { ...bucket, products, tix };
+    }).filter((b) => b.products.length > 0);
   }, [db, q, pay]);
 
-  const shown = groups.reduce((s, m) => s + m.franchises.reduce((s2, f) => s2 + f.products.reduce((s3, p) => s3 + p.tickets.length, 0), 0), 0);
+  const shown = buckets.reduce((s, b) => s + b.tix, 0);
 
   return (
     <div>
@@ -81,44 +84,47 @@ export default function AdminTicketsPage() {
         </select>
       </div>
 
-      {groups.length === 0 ? (
+      {buckets.length === 0 ? (
         <div className="rounded-2xl border border-subtle bg-surface-2 py-12 text-center text-[13px] text-ink-faint">ไม่พบตั๋วตามตัวกรอง</div>
       ) : (
         <>
           <div className="mb-2 text-[12px] text-ink-faint">แสดง {shown} ใบ</div>
-          {groups.map(({ maker, franchises }) => (
-            <div key={maker.id} className="mb-7">
-              {/* ── ค่าย ── */}
-              <div className="mb-2.5 flex items-center gap-2 text-[16px] font-extrabold">
-                <span className="h-4 w-1 rounded-full bg-primary-bright" /> {maker.name}
-                <span className="text-[12px] font-semibold text-ink-faint">· {franchises.reduce((s, f) => s + f.products.reduce((s2, p) => s2 + p.tickets.length, 0), 0)} ใบ</span>
-              </div>
-              {franchises.map(({ franchise, products }) => (
-                <div key={franchise.id} className="mb-4">
-                  {/* ── เรื่อง ── */}
-                  <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {franchise.name} · {products.reduce((s, p) => s + p.tickets.length, 0)} ใบ</div>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                    {products.map(({ product, tickets }) => (
-                      <ProductTicketCard
-                        key={product.id}
-                        product={product}
-                        tickets={tickets}
-                        open={openPid === product.id}
-                        onToggle={() => setOpenPid((cur) => (cur === product.id ? null : product.id))}
-                      />
-                    ))}
-                  </div>
-                  {/* droplist ของการ์ดที่เปิดในเรื่องนี้ */}
-                  {products.some((p) => p.product.id === openPid) && (
-                    <BuyerList
-                      entry={products.find((p) => p.product.id === openPid)!}
-                      onPick={setPeek}
-                    />
+          {buckets.map((bucket) => {
+            // ข้อมูลลับแอดมิน (ปิดกระดาน/เดินทาง): รวมสั่งผลิต / ยอดจอง / ส่วนเกิน ทั้งหมวด
+            const sumOrdered = bucket.products.reduce((s, p) => s + orderedQtyOf(db, p.product.id), 0);
+            const sumFinal = bucket.products.reduce((s, p) => s + (p.product.production_qty ?? orderedQtyOf(db, p.product.id)), 0);
+            const sumSurplus = Math.max(0, sumFinal - sumOrdered);
+            return (
+              <div key={bucket.key} className="mb-7">
+                {/* ── หัวหมวดสถานะ ── */}
+                <div className="mb-2.5 flex flex-wrap items-center gap-2">
+                  <span className={cx('inline-flex items-center rounded-lg px-2.5 py-1 text-[14px] font-extrabold text-white', bucket.tone, bucket.blink && 'animate-blink')}>{bucket.label}</span>
+                  <span className="text-[12px] font-semibold text-ink-faint">· {bucket.tix} ใบ · {bucket.products.length} รายการ</span>
+                  {bucket.adminInfo && (
+                    <span className="rounded-md border border-[#d4af37]/40 bg-[#d4af37]/[0.1] px-2 py-0.5 text-[11px] font-bold text-[#f1d27a]">
+                      🔒 สั่งผลิต {sumFinal} · จอง {sumOrdered}{sumSurplus > 0 ? ` · เกิน ${sumSurplus}` : ''}
+                    </span>
                   )}
                 </div>
-              ))}
-            </div>
-          ))}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                  {bucket.products.map(({ product, tickets }) => (
+                    <ProductTicketCard
+                      key={product.id}
+                      product={product}
+                      tickets={tickets}
+                      adminInfo={bucket.adminInfo}
+                      open={openPid === product.id}
+                      onToggle={() => setOpenPid((cur) => (cur === product.id ? null : product.id))}
+                    />
+                  ))}
+                </div>
+                {/* droplist ของการ์ดที่เปิดในหมวดนี้ */}
+                {bucket.products.some((p) => p.product.id === openPid) && (
+                  <BuyerList entry={bucket.products.find((p) => p.product.id === openPid)!} onPick={setPeek} />
+                )}
+              </div>
+            );
+          })}
         </>
       )}
 
@@ -127,10 +133,14 @@ export default function AdminTicketsPage() {
   );
 }
 
-function ProductTicketCard({ product, tickets, open, onToggle }: { product: Product; tickets: PreorderTicket[]; open: boolean; onToggle: () => void }) {
+function ProductTicketCard({ product, tickets, adminInfo, open, onToggle }: { product: Product; tickets: PreorderTicket[]; adminInfo?: boolean; open: boolean; onToggle: () => void }) {
   const db = useDatabase();
   const owing = tickets.reduce((s, t) => s + Math.max(0, due(t)), 0);
   const pieces = tickets.reduce((s, t) => s + t.qty, 0);
+  // ข้อมูลลับแอดมิน: สั่งผลิตจากค่าย (production_qty) vs ยอดจอง → ส่วนเกิน (โชว์เฉพาะปิดกระดาน/เดินทาง)
+  const ordered = orderedQtyOf(db, product.id);
+  const finalQty = product.production_qty ?? ordered;
+  const surplus = Math.max(0, finalQty - ordered);
   return (
     <button onClick={onToggle} className={cx('overflow-hidden rounded-card border bg-surface-2 text-left', open ? 'border-primary-soft ring-1 ring-primary-soft' : 'border-subtle')}>
       <div className="relative">
@@ -145,6 +155,11 @@ function ProductTicketCard({ product, tickets, open, onToggle }: { product: Prod
             ? <span className="font-bold text-primary-soft">ค้าง {baht(owing)}</span>
             : <span className="font-bold text-[#4ade80]">ครบ ✓</span>}
         </div>
+        {adminInfo && (
+          <div className="mt-1 rounded-md border border-[#d4af37]/35 bg-[#d4af37]/[0.08] px-1.5 py-1 text-center text-[10px] font-bold text-[#f1d27a]">
+            🔒 สั่ง {finalQty} · จอง {ordered}{surplus > 0 ? ` · เกิน ${surplus}` : ''}
+          </div>
+        )}
         <div className={cx('mt-1.5 text-center text-[10.5px] font-semibold', open ? 'text-primary-soft' : 'text-ink-faint')}>{open ? 'ปิดรายชื่อ ▴' : 'ดูคนพรี ▾'}</div>
       </div>
     </button>

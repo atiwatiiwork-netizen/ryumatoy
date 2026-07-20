@@ -82,8 +82,14 @@ const config: Config = {
           '0%,100%': { backgroundPosition: '0% 50%', opacity: '.9', filter: 'blur(3px)' },
           '50%': { backgroundPosition: '100% 50%', opacity: '.5', filter: 'blur(6px)' },
         },
+        // ป้าย "กำลังเดินทางมาไทย" — ข้อความกระพริบเรียกสายตา
+        blink: {
+          '0%,100%': { opacity: '1' },
+          '50%': { opacity: '.35' },
+        },
       },
       animation: {
+        blink: 'blink 1.1s ease-in-out infinite',
         pulseGlow: 'pulseGlow 1.8s ease-in-out infinite',
         pulseRed: 'pulseRed 2.2s infinite',
         couponShine: 'couponShine 2.6s ease-in-out infinite',

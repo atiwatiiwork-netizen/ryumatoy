@@ -107,6 +107,10 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           {saved && <span className="text-[11px] text-ink-faint line-through">{baht(basePrice)}</span>}
         </div>
         {sel && <div className="truncate text-[10px] font-semibold text-ink-muted2">{sel.name}</div>}
+        {/* พรีที่ปิดกระดานแล้วกำลังเดินทางมาไทย (รอบพิเศษยังขายได้ระหว่างของมา) → ป้ายกระพริบเรียกสายตา */}
+        {!product.is_stock && product.status === 'shipping' && (
+          <div className="mt-1 animate-blink text-[10.5px] font-extrabold text-[#60a5fa]">🚚 กำลังเดินทางมาไทย</div>
+        )}
         {stockLeft != null && (stockLeft <= 0
           ? <div className="text-[10.5px] font-bold text-ink-faint">สินค้าหมด</div>
           : stockLeft <= 3

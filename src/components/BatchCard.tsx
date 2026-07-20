@@ -50,6 +50,10 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
             <div className="mt-0.5 text-[10.5px] font-semibold text-ink-muted2">
               {fullPay ? 'พร้อมส่ง · จ่ายเต็ม' : `พรีรอบพิเศษ · มัดจำ ${baht(batch.deposit_amount)}`}
             </div>
+            {/* ปิดกระดานแล้วกำลังเดินทางมาไทย → ป้ายกระพริบ (รอบพิเศษยังจองได้ระหว่างของมา) */}
+            {product.status === 'shipping' && (
+              <div className="mt-1 animate-blink text-[10.5px] font-extrabold text-[#60a5fa]">🚚 กำลังเดินทางมาไทย</div>
+            )}
           </>
         )}
       </div>
