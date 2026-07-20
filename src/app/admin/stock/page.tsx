@@ -221,6 +221,13 @@ function LegacyCreate() {
     finally { setImgBusy(false); }
   };
 
+  // push "เปิดพรีรอบพิเศษ" → ลูกค้าตามตัวกรองค่าย/เรื่อง. DNA: ห้ามใส่จำนวน/สต๊อกเด็ดขาด
+  // (สร้าง urgency + ไม่เผยว่ามีของกี่ชิ้น — เหมือน restock). ปิด/เปิด toggle ที่ Push Control key 'restock'.
+  const pushNewRound = (target: { manufacturer_id: string; franchise_id: string }, name: string, url: string, pr: number, dep: number, fp: boolean) => {
+    if (!pushEnabled(db, 'restock')) return;
+    sendPush(subsForNewProduct(db, target), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${name} · ${baht(pr)}${fp ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(dep)}`}`, url }, dispatch).catch(() => {});
+  };
+
   const openExisting = () => {
     const p = db.products.find((x) => x.id === pid);
     if (!p) return flash('เลือกสินค้า');
@@ -235,7 +242,8 @@ function LegacyCreate() {
     const hasExistingTickets = db.tickets.some((t) => t.product_id === p.id);
     if (!fullPay && !hasExistingTickets) dispatch(setProductStatus(p.id, startStatus));
     else if (!fullPay && hasExistingTickets) flash('เปิดรอบใหม่แล้ว — สถานะผู้พรีเดิมไม่ถูกแตะ (เลื่อนผ่านยืนยันโกดัง)');
-    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}`);
+    pushNewRound(p, p.series_name, `/shop/${p.id}`, pr, fullPay ? pr : (depNum > 0 ? depNum : p.deposit_amount), fullPay);
+    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)} · แจ้งลูกค้าแล้ว`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
   };
   const createNew = () => {
@@ -246,7 +254,11 @@ function LegacyCreate() {
     const sname = seriesOpts.find((s) => s.id === sid)?.name;
     const finalName = sname ? `${cname.trim()} - ${sname}` : cname.trim();
     dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus }));
-    flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว`);
+    // อ่าน id สินค้าที่เพิ่งสร้าง (no-op dispatch) เพื่อลิงก์ push ให้ตรงตัว
+    let newPid = '';
+    dispatch((d) => { newPid = d.products.find((x) => x.manufacturer_id === mk && x.franchise_id === fr && x.series_name === finalName)?.id ?? ''; return d; });
+    pushNewRound({ manufacturer_id: mk, franchise_id: fr }, finalName, newPid ? `/shop/${newPid}` : '/shop', pr, fullPay ? pr : (depNum > 0 ? depNum : rateDep), fullPay);
+    flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว · แจ้งลูกค้าแล้ว`);
     setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel(''); setDep(''); setImages([]);
   };
 
@@ -356,7 +368,10 @@ function SurplusRow({ product: p }: { product: Product }) {
     const q = Math.min(Number(qty) || 0, remaining), pr = Number(price) || p.price_total;
     if (q <= 0) return flash('จำนวนต้อง > 0 และไม่เกินส่วนเกิน');
     dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: false }));
-    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว`);
+    // DNA: push ไม่บอกจำนวน/สต๊อก (key 'restock')
+    if (pushEnabled(db, 'restock'))
+      sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(pr)}${fullPay ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(p.deposit_amount)}`}`, url: `/shop/${p.id}` }, dispatch).catch(() => {});
+    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว · แจ้งลูกค้าแล้ว`);
   };
   return (
     <div className="flex flex-wrap items-center gap-2 px-1 py-3">
