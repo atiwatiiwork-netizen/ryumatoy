@@ -10,7 +10,8 @@ import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
-import { memosDue } from '@/domain/services/sourcing';
+import { memoPhase, memoEtaLabel } from '@/domain/services/sourcing';
+import { memoCustomersOf, type SourcingMemo } from '@/domain/entities';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
 import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
@@ -67,10 +68,22 @@ export default function AdminDashboardPage() {
       return { p, eta, whEta: whTicket ? warehouseEtaLabel(db, whTicket) : '', waiting, buyers: cohort.length, pieces: cohort.reduce((s, t) => s + t.qty, 0) };
     })
     .sort((a, b) => Number(b.eta?.arrivingSoon ?? false) - Number(a.eta?.arrivingSoon ?? false));
-  const soonCount = inTransit.filter((x) => x.eta?.arrivingSoon).length;
+
+  // ── หาของนอกระบบ (SourcingMemo แชทเฟส/โทร) ก็เดินทางมาเหมือนกัน — ไม่อยู่ในระบบ product เลย
+  // จึงต้องเสียบเข้าหมวดนี้เอง. ใกล้ถึง = memoPhase due/overdue, กำลังเดินทาง = coming (ก่อนถึงช่วง). ──
+  const memoTransit = db.sourcingMemos
+    .filter((m) => m.status === 'active')
+    .map((m) => { const phase = memoPhase(db, m); return { m, phase, soon: phase === 'due' || phase === 'overdue' }; })
+    .filter((x) => x.phase !== 'none') // ต้องมีขนส่ง+วันเริ่ม (มี ETA) ถึงจะบอกได้ว่ากำลังเดินทาง
+    .sort((a, b) => Number(b.soon) - Number(a.soon));
+
+  const soonCount = inTransit.filter((x) => x.eta?.arrivingSoon).length + memoTransit.filter((x) => x.soon).length;
+  const transitTotal = inTransit.length + memoTransit.length;
 
   /** การ์ดล็อต 1 ใบ (ใช้ทั้ง group ใกล้ถึงไทย และ ขบวนทั้งหมด) — กดกาง LotDetail. */
-  const renderLotCard = ({ p, eta, whEta, waiting, buyers, pieces }: (typeof inTransit)[number]) => (
+  const renderLotCard = ({ p, eta, whEta, waiting, buyers, pieces }: (typeof inTransit)[number]) => {
+    const isSourcing = db.sourcingRequests.some((r) => r.product_id === p.id); // ระบบหาของสร้าง product นี้
+    return (
     <button key={p.id} onClick={() => setOpenLot((cur) => (cur === p.id ? null : p.id))} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', openLot === p.id ? 'border-accent bg-[#b91c1c]/[0.08]' : eta?.arrivingSoon ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
       <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
         {p.images[0]
@@ -78,7 +91,7 @@ export default function AdminDashboardPage() {
           : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)}</div>
+        <div className="truncate text-[13.5px] font-semibold">{productLabel(db, p.id)} {isSourcing && <span className="rounded bg-[#8b5cf6]/[0.16] px-1.5 py-0.5 text-[10px] font-bold text-[#c4b5fd]">หาของ</span>}</div>
         <div className="mt-0.5 text-[11.5px] text-ink-faint">
           คนพรี {buyers} · {pieces} ชิ้น
           {waiting > 0 && <span className="text-[#fbbf24]"> · ออกแล้วบางส่วน (รออีก {waiting} ใบ)</span>}
@@ -92,16 +105,36 @@ export default function AdminDashboardPage() {
       </div>
       <span className="shrink-0 text-[11px] font-bold text-ink-faint">{openLot === p.id ? '▲ ปิด' : '▼ ลูกค้า'}</span>
     </button>
-  );
+    );
+  };
+
+  /** การ์ดหาของนอกระบบ 1 ใบ — กดไปหน้าหาของ (จัดการ/ปิดงานที่นั่น ไม่มีตั๋วในระบบ). */
+  const renderMemoCard = ({ m, phase }: { m: SourcingMemo; phase: ReturnType<typeof memoPhase> }) => {
+    const custs = memoCustomersOf(m);
+    return (
+      <button key={m.id} onClick={() => router.push('/admin/sourcing')} className={cx('flex items-center gap-3 rounded-xl border p-3 text-left', phase === 'overdue' ? 'border-[#dc2626]/45 bg-[#dc2626]/[0.08]' : phase === 'due' ? 'border-[#2563eb]/45 bg-[#2563eb]/[0.08]' : 'border-subtle bg-surface-3')}>
+        <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+          {m.image_url
+            ? <img src={m.image_url} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="search" size={20} className="text-[#c4b5fd]/40" /></div>}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13.5px] font-semibold">{m.product_name} <span className="rounded bg-[#8b5cf6]/[0.16] px-1.5 py-0.5 text-[10px] font-bold text-[#c4b5fd]">หาของนอกระบบ</span></div>
+          <div className="mt-0.5 truncate text-[11.5px] text-ink-faint">ลูกค้า {custs.length} คน · {custs.map((c) => c.name).join(', ')}</div>
+          <div className={cx('mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-bold', phase === 'overdue' ? 'bg-[#dc2626]/20 text-[#f87171]' : phase === 'due' ? 'bg-[#2563eb]/15 text-[#8fb8f0]' : 'bg-white/[0.07] text-ink-muted2')}>
+            {memoEtaLabel(db, m)}{phase === 'overdue' ? ' · เลยกำหนด!' : phase === 'due' ? ' · น่าจะถึงแล้ว' : ''}
+          </div>
+        </div>
+        <Icon name="search" size={15} className="shrink-0 text-ink-faint" />
+      </button>
+    );
+  };
 
   // ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง (คิวการรับของทั้ง 3 ขั้น รวมที่เดียว) ──
   const dReq = deliveryRequests(db);
   const dParcel = parcelQueue(db);
   const dHandoff = handoffQueue(db);
   const toShipTotal = dReq.length + dParcel.length + dHandoff.length;
-
-  // memo หาของนอกระบบ (แชทเฟส/โทร) ที่เข้าช่วงคาดว่าถึงแล้ว — เตือนให้ไปทวงเช็ค
-  const memoDue = memosDue(db);
 
   return (
     <div>
@@ -137,15 +170,15 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {/* ── หมวดใหญ่ 1: เดินทางออกจากจีน / ใกล้ถึงไทย ── */}
-      {inTransit.length > 0 && (
+      {/* ── หมวดใหญ่ 1: เดินทางออกจากจีน / ใกล้ถึงไทย (พรี + สต๊อกใบพรี + หาของทั้งใน/นอกระบบ) ── */}
+      {transitTotal > 0 && (
         <div className={cx('mb-[22px] rounded-2xl border p-5', soonCount > 0 ? 'animate-pulseRed border-[#2563eb]/50 bg-[#2563eb]/[0.1]' : 'border-subtle bg-surface-2')}>
           <div className="mb-1 flex items-center gap-2 text-base font-bold text-[#bcd3f5]">
             <Icon name="truck" size={19} /> 🚢 เดินทางออกจากจีน / ใกล้ถึงไทย
-            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] text-ink-muted2">{inTransit.length}</span>
+            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] text-ink-muted2">{transitTotal}</span>
             {soonCount > 0 && <span className="rounded-full bg-[#dc2626] px-2 py-0.5 text-[11px] font-extrabold text-white">ใกล้ถึง {soonCount}</span>}
           </div>
-          <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
+          <div className="mb-3 text-[11.5px] text-ink-faint">ล็อตที่ออกจากโกดังจีนแล้ว + หาของ · ถึงไทยเมื่อไหร่ไปกดเลื่อนสถานะ "ถึงไทย"</div>
 
           {/* group ใกล้ถึงไทย แยกชัดจากขบวนทั้งหมด (เจ้าของ 2026-07-20) */}
           {soonCount > 0 && (
@@ -153,14 +186,16 @@ export default function AdminDashboardPage() {
               <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-[#f87171]">🔴 ใกล้ถึงไทย ({soonCount}) — เตรียมรับของ</div>
               <div className="grid gap-2.5 lg:grid-cols-2">
                 {inTransit.filter((x) => x.eta?.arrivingSoon).map(renderLotCard)}
+                {memoTransit.filter((x) => x.soon).map(renderMemoCard)}
               </div>
             </div>
           )}
-          {inTransit.some((x) => !x.eta?.arrivingSoon) && (
+          {(inTransit.some((x) => !x.eta?.arrivingSoon) || memoTransit.some((x) => !x.soon)) && (
             <>
-              {soonCount > 0 && <div className="mb-2 text-[12px] font-bold text-ink-muted">🚢 กำลังเดินทางทั้งหมด ({inTransit.length - soonCount})</div>}
+              {soonCount > 0 && <div className="mb-2 text-[12px] font-bold text-ink-muted">🚢 กำลังเดินทางทั้งหมด ({transitTotal - soonCount})</div>}
               <div className="grid gap-2.5 lg:grid-cols-2">
                 {inTransit.filter((x) => !x.eta?.arrivingSoon).map(renderLotCard)}
+                {memoTransit.filter((x) => !x.soon).map(renderMemoCard)}
               </div>
             </>
           )}
@@ -200,14 +235,6 @@ export default function AdminDashboardPage() {
           <Icon name="payments" size={18} />
           <span className="flex-1 text-sm font-bold">ส่วนต่างรอตรวจสอบ {pendingRP.length} รายการ</span>
           <span className="text-[13px] text-ink-muted2">ไปที่ สลิป/ออเดอร์ →</span>
-        </button>
-      )}
-
-      {memoDue.length > 0 && (
-        <button onClick={() => router.push('/admin/sourcing')} className="mb-[22px] flex w-full items-center gap-2.5 rounded-2xl border border-[#8b5cf6]/45 bg-surface-2 p-4 text-left text-[#c4b5fd]">
-          <Icon name="search" size={18} />
-          <span className="flex-1 text-sm font-bold">📒 หาของนอกระบบถึงช่วงคาดแล้ว {memoDue.length} รายการ — ทวงเช็ค!</span>
-          <span className="text-[13px] text-ink-muted2">ไปที่ หาของ →</span>
         </button>
       )}
 
