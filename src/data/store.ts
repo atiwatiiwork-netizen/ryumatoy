@@ -24,6 +24,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 const LOAD_TIMEOUT = 12_000;
+// persist ก็ต้องมีเพดานเหมือน load: บน resume ที่ client ค้างตาย (dead socket) request ไม่ settle เลย —
+// ถ้าปล่อยค้าง pendingSaves จะ >0 ตลอดกาล → reloadIfIdle (poll/focus ที่เป็นกลไกฟื้นตัวหลัก) โดนบล็อกถาวร,
+// และ saving chain ไม่จบ → ทุก await flush (checkout/missions/เลือกวิธีรับของ) ค้างปุ่มตลอด. timeout →
+// rewind + onPersistError แจ้งผู้ใช้ + คิวเดินต่อ; diff-upsert เป็น idempotent การส่งซ้ำรอบหน้าปลอดภัย.
+const PERSIST_TIMEOUT = 20_000;
 
 export class Store {
   private db: Database = structuredClone(SEED_DATABASE);
@@ -83,7 +88,7 @@ export class Store {
     this.lastSynced = target;
     this.pendingSaves++;
     this.saving = this.saving
-      .then(() => this.adapter.persist(target, base))
+      .then(() => withTimeout(this.adapter.persist(target, base), PERSIST_TIMEOUT, 'persist'))
       .catch((err) => {
         console.error('[store] persist failed', err);
         // rewind so the next change re-attempts these rows instead of treating them as synced

@@ -11,11 +11,17 @@ import { supabase, hasSupabase } from '@/data/supabaseClient';
 
 export type TicketNoStart = Record<string, number>; // prefix → first reserved number
 
-/** Reserve a contiguous block for one prefix; returns the FIRST number, or null on seed/failure. */
+/** Reserve a contiguous block for one prefix; returns the FIRST number, or null on seed/failure.
+ *  TIMEOUT-bounded (8s): on a bad resume a wedged client's request never settles — an un-bounded
+ *  await here froze the CHECKOUT button forever (resume hang #7). Timing out falls back to client
+ *  numbering like any other reserve failure. */
 export async function reserveTicketBlock(prefix: string, count: number): Promise<number | null> {
   if (!hasSupabase || !supabase || count < 1) return null;
   try {
-    const { data, error } = await supabase.rpc('reserve_ticket_nos', { p: prefix, c: count });
+    const { data, error } = await Promise.race([
+      supabase.rpc('reserve_ticket_nos', { p: prefix, c: count }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('reserve timed out')), 8000)),
+    ]);
     return !error && typeof data === 'number' ? data : null;
   } catch {
     return null; // never let a reserve failure block checkout — the mutation falls back to client numbering
