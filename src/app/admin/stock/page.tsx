@@ -491,7 +491,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   };
 
   return (
-    <div className={cx('rounded-xl border border-subtle bg-surface-2 p-3.5', readOnly && 'opacity-75')}>
+    <div className={cx('rounded-xl border border-subtle bg-surface-2 p-3.5', readOnly && moving.length === 0 && 'opacity-75')}>
       {/* การ์ดรูปสไตล์ "หาของนอกระบบ": รูป + ชื่อ + ราคา + chips สถานะรอบ */}
       <div className="flex items-start gap-3">
         <div className="h-[64px] w-[64px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
@@ -516,7 +516,8 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       {/* ปุ่มแอ็กชันแถวเดียว (สไตล์การ์ด memo) */}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.1] px-3 py-1.5 text-[12px] font-bold text-[#f1d27a]">🎫 ลูกค้า ({tickets.length}) {open ? '▲' : '▼'}</button>
-        {!readOnly && !fullPay && moving.length > 0 && (
+        {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่ */}
+        {!fullPay && moving.length > 0 && (
           <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">🇹🇭 ถึงไทยแล้ว ({moving.length})</button>
         )}
         {(soldOut || readOnly) && !restock && <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRestock(true); }} className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">➕ มีของเพิ่ม</button>}
@@ -525,8 +526,9 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
       </div>
 
-      {/* รหัสชิปปิ้งค่าย→โกดังจีน (ไว้เทียบตารางโกดังใน "ยืนยันเข้าโกดังจีน" ด้านบน) */}
-      {!readOnly && !fullPay && (tickets.length === 0 || nArr < tickets.length) && (
+      {/* รหัสชิปปิ้งค่าย→โกดังจีน (ไว้เทียบตารางโกดังใน "ยืนยันเข้าโกดังจีน" ด้านบน) — โชว์ตราบใดที่ยังมีของ
+          ไม่ถึงไทย (รวมรอบที่ปิดขายไปแล้วแต่ของยังเดินทาง); รอบเปิดที่ยังไม่มีคนซื้อก็ใส่ล่วงหน้าได้ */}
+      {!fullPay && (nArr < tickets.length || (tickets.length === 0 && !readOnly)) && (
         <div className="mt-2 flex items-end gap-2">
           <label className="flex-1 text-[11px] text-ink-faint">รหัสชิปปิ้ง ค่าย→โกดังจีน (SF)
             <input className={cx(inputCls, 'mt-0.5 py-2 font-mono text-[12px]')} value={sf} onChange={(e) => setSf(e.target.value)} placeholder="เช่น SF5194798275423" />
