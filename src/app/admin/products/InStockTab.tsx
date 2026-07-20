@@ -6,7 +6,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { franchiseOf, canConvertToInStock, outstandingTickets, stockAdditionsOf } from '@/domain/services/catalog';
+import { franchiseOf, canConvertToInStock, outstandingTickets, stockAdditionsOf, stockRemaining } from '@/domain/services/catalog';
 import { availableFor, reservedHeld } from '@/domain/services/reservations';
 import { roundTo50 } from '@/domain/services/pricing';
 import { convertToInStock, restockInStock, removeProduct, setStockCond } from '@/data/mutations';
@@ -70,7 +70,9 @@ function ConvertRow({ product: p }: { product: Product }) {
   const [open, setOpen] = useState(false);
   const base = p.price_total;
   const [price, setPrice] = useState(String(base));
-  const surplus = p.surplus_qty ?? 0;
+  // จำนวนที่แปลงจริง = ของเหลือขาย (surplus − ที่ขายในรอบพิเศษไปแล้ว) ไม่ใช่ surplus_qty ดิบ
+  // — ต้องตรงกับ convertToInStock (ใช้ stockRemaining) ไม่งั้นแอดมินเข้าใจจำนวนผิด (Big Test 2026-07-20)
+  const surplus = stockRemaining(db, p);
   const pct = (n: number) => setPrice(String(roundTo50(base * (1 + n / 100))));
   const doConvert = () => {
     const pr = Number(price) || base;

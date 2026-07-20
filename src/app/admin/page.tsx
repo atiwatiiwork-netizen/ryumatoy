@@ -15,7 +15,7 @@ import { memoCustomersOf, type SourcingMemo } from '@/domain/entities';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
 import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
-import { productLabel, lineImage } from '@/domain/services/catalog';
+import { productLabel, lineImage, canConvertToInStock, stockRemaining } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
 import type { ProductStatus, PreorderTicket } from '@/domain/entities';
 
@@ -136,6 +136,10 @@ export default function AdminDashboardPage() {
   const dHandoff = handoffQueue(db);
   const toShipTotal = dReq.length + dParcel.length + dHandoff.length;
 
+  // พรีที่จบแล้ว มีของเหลือ พร้อมแปลงเป็นสินค้า in-stock (ให้แอดมินตั้งราคาขาย) — เจ้าของ 2026-07-20
+  const convertible = db.products.filter((p) => canConvertToInStock(db, p));
+  const convertiblePieces = convertible.reduce((s, p) => s + stockRemaining(db, p), 0);
+
   return (
     <div>
       <div className="mb-[22px] flex items-center justify-between">
@@ -235,6 +239,14 @@ export default function AdminDashboardPage() {
           <Icon name="payments" size={18} />
           <span className="flex-1 text-sm font-bold">ส่วนต่างรอตรวจสอบ {pendingRP.length} รายการ</span>
           <span className="text-[13px] text-ink-muted2">ไปที่ สลิป/ออเดอร์ →</span>
+        </button>
+      )}
+
+      {convertible.length > 0 && (
+        <button onClick={() => router.push('/admin/instock')} className="mb-[22px] flex w-full items-center gap-2.5 rounded-2xl border border-[#16a34a]/45 bg-surface-2 p-4 text-left text-[#4ade80]">
+          <Icon name="box" size={18} />
+          <span className="flex-1 text-sm font-bold">📦 พรีจบแล้ว มีของเหลือ {convertiblePieces} ชิ้น ({convertible.length} รายการ) — ตั้งราคาขายเป็นสินค้าพร้อมส่ง</span>
+          <span className="text-[13px] text-ink-muted2">ไปที่ In-Stock →</span>
         </button>
       )}
 
