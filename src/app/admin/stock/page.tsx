@@ -10,7 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket } from '@/data/mutations';
+import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts } from '@/domain/services/tickets';
 import { store } from '@/data/store';
@@ -208,8 +208,9 @@ function LegacyCreate() {
   const [wcf, setWcf] = useState<WcfType>('wcf');
   const [dep, setDep] = useState(''); // custom มัดจำ — blank = ใช้เรทตามชนิด (finished goods มักใช้ 1000)
   const [startStatus, setStartStatus] = useState<'production' | 'shipping'>('shipping'); // ผลิต(รอโกดัง)/เดินทาง
-  // ร่าง = ยังไม่ขึ้นหน้าร้าน (ไล่เก็บใบพรีเก่า: มอบตั๋วลูกค้าเดิมก่อน แล้วค่อยกด 🚀 เปิดขายที่การ์ดรอบ)
-  const [publish, setPublish] = useState(true);
+  // DEFAULT = ร่าง (เจ้าของ 2026-07-20: "กดสร้างแล้วยังไม่เปิดขาย — แอดมินมากดเองถึงจะเปิดขาย + push")
+  // สลับเป็น 🚀 ได้ถ้าอยากเปิดขาย+แจ้งลูกค้าทันทีตอนสร้าง
+  const [publish, setPublish] = useState(false);
   const [images, setImages] = useState<string[]>([]);
   const [imgBusy, setImgBusy] = useState(false);
 
@@ -396,6 +397,100 @@ function SurplusRow({ product: p }: { product: Product }) {
   );
 }
 
+// ── มอบตั๋วหลายรายการทีเดียว (เจ้าของ 2026-07-20: เลือกลูกค้า 1 คน + หลายสินค้า → มอบครั้งเดียว) ──
+function MultiGrant({ batches }: { batches: ProductBatch[] }) {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const [openPanel, setOpenPanel] = useState(false);
+  const [userSel, setUserSel] = useState('');
+  const [rows, setRows] = useState<Record<string, { on: boolean; qty: string; dep: string }>>({});
+  const [busy, setBusy] = useState(false);
+  const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
+  const eligible = batches.filter((b) => batchRemaining(db, b.id, b.stock_qty) > 0);
+  const row = (b: ProductBatch) => rows[b.id] ?? { on: false, qty: '1', dep: String(b.deposit_amount) };
+  const setRow = (b: ProductBatch, patch: Partial<{ on: boolean; qty: string; dep: string }>) => setRows((r) => ({ ...r, [b.id]: { ...row(b), ...patch } }));
+  const chosen = eligible.filter((b) => row(b).on);
+
+  const doGrant = async () => {
+    const u = db.users.find((x) => x.id === userSel);
+    if (!u) return flash('เลือกลูกค้าก่อน');
+    if (chosen.length === 0) return flash('ติ๊กเลือกอย่างน้อย 1 รายการ');
+    for (const b of chosen) {
+      const q = Number(row(b).qty) || 0;
+      const rem = batchRemaining(db, b.id, b.stock_qty);
+      const p = db.products.find((x) => x.id === b.product_id);
+      if (q < 1 || q > rem) return flash(`${p?.series_name}: จำนวนต้อง 1–${rem}`);
+      if ((Number(row(b).dep) || 0) > b.price_total) return flash(`${p?.series_name}: มัดจำเกินราคาขาย`);
+    }
+    const summary = chosen.map((b) => `• ${db.products.find((x) => x.id === b.product_id)?.series_name} ×${row(b).qty} (มัดจำ ${baht(Number(row(b).dep) || 0)}/ชิ้น)`).join('\n');
+    if (!confirm(`มอบตั๋ว ${chosen.length} รายการ ให้ "${u.display_name}"\n${summary}`)) return;
+    setBusy(true);
+    try {
+      // จองเลขตั๋วจาก server ทีเดียวทั้งชุด (นับต่อ prefix) — allocator ใน mutation แชร์ตัวนับ ไม่ชนกัน
+      const startNos = await reserveTicketNos(ticketPrefixCounts(db, chosen.map((b) => b.product_id)));
+      dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0) })), startNos));
+      try { await store.flush(); } catch { /* onPersistError โชว์เอง */ }
+      // push ครั้งเดียว บอกว่าได้รายการไหนมาเพิ่ม (DNA: ไม่บอกจำนวนสต๊อก)
+      if (pushEnabled(db, 'order_approved')) {
+        const names = chosen.map((b) => db.products.find((x) => x.id === b.product_id)?.series_name ?? '').filter(Boolean);
+        sendPush(subsForUsers(db, [u.id]), { title: `🎫 ได้รับใบพรีใหม่ ${chosen.length} รายการ!`, body: `${names.join(' · ').slice(0, 110)} — แตะดูตั๋วของคุณ`, url: '/wallet' }, dispatch).catch(() => {});
+      }
+      flash(`มอบตั๋ว ${chosen.length} รายการ ให้ ${u.display_name} แล้ว ✓ แจ้งเตือนลูกค้าแล้ว`);
+      setOpenPanel(false); setRows({}); setUserSel('');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <button onClick={() => setOpenPanel(true)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋วหลายรายการ</button>
+      {openPanel && (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/70 p-4" onClick={() => !busy && setOpenPanel(false)}>
+          <div className="max-h-[85vh] w-full max-w-[560px] overflow-y-auto rounded-2xl border border-[#8b5cf6]/40 bg-surface-2 p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 text-base font-bold text-[#c4b5fd]">🎁 มอบตั๋วหลายรายการ</div>
+            <div className="mb-3 text-[12px] text-ink-faint">เลือกลูกค้า 1 คน → ติ๊กสินค้า → มอบครั้งเดียว ตัดสต๊อกทุกรอบ + push แจ้งลูกค้า 1 ครั้ง</div>
+            <label className="mb-3 block text-[11.5px] text-ink-faint">ลูกค้า
+              <select className={cx(inputCls, 'mt-0.5')} value={userSel} onChange={(e) => setUserSel(e.target.value)}>
+                <option value="">— เลือกลูกค้า —</option>
+                {grantables.map((u) => <option key={u.id} value={u.id}>{u.display_name}{u.member_code ? ` · ${u.member_code}` : ''}{u.phone ? ` · ${u.phone}` : ''}</option>)}
+              </select>
+            </label>
+            <div className="flex flex-col gap-1.5">
+              {eligible.map((b) => {
+                const p = db.products.find((x) => x.id === b.product_id);
+                const r = row(b);
+                const rem = batchRemaining(db, b.id, b.stock_qty);
+                return (
+                  <div key={b.id} className={cx('flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2', r.on ? 'border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.07]' : 'border-subtle bg-surface-3')}>
+                    <input type="checkbox" checked={r.on} onChange={(e) => setRow(b, { on: e.target.checked })} className="h-4 w-4 accent-[#8b5cf6]" />
+                    <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-subtle bg-stripe">
+                      {p?.images[0] ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" /> : <div className="grid h-full w-full place-items-center"><Icon name="box" size={14} className="text-primary-soft/25" /></div>}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12.5px] font-semibold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span>{b.published === false && <span className="ml-1 rounded bg-[#d97706]/20 px-1 py-0.5 text-[9px] font-bold text-[#fbbf24]">ร่าง</span>}</div>
+                      <div className="font-mono text-[10.5px] text-ink-faint">{baht(b.price_total)} · เหลือ {rem}</div>
+                    </div>
+                    {r.on && (<>
+                      <label className="text-[10.5px] text-ink-faint">จำนวน<input className={cx(inputCls, 'mt-0.5 w-14 py-1.5 text-center text-[12px]')} inputMode="numeric" value={r.qty} onChange={(e) => setRow(b, { qty: e.target.value.replace(/[^\d]/g, '') })} /></label>
+                      <label className="text-[10.5px] text-ink-faint">มัดจำ/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-20 py-1.5 text-center text-[12px]')} inputMode="numeric" value={r.dep} onChange={(e) => setRow(b, { dep: e.target.value.replace(/[^\d]/g, '') })} /></label>
+                    </>)}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex items-center gap-2.5">
+              <button onClick={() => setOpenPanel(false)} className="rounded-lg border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-semibold text-ink-muted2">ยกเลิก</button>
+              <button onClick={doGrant} disabled={busy || chosen.length === 0 || !userSel} className="flex-1 rounded-lg bg-[#8b5cf6] py-2.5 text-[13.5px] font-bold text-white disabled:opacity-50">
+                {busy ? 'กำลังออกตั๋ว…' : `✓ มอบตั๋ว ${chosen.length} รายการ + แจ้งลูกค้า`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Open rounds management + history ────────────────────────────────────────
 // การ์ดรูปสไตล์ "หาของนอกระบบ" + group ตามค่าย (เจ้าของ 2026-07-20)
 function OpenRounds() {
@@ -413,7 +508,10 @@ function OpenRounds() {
   }
   return (
     <div className="mb-6">
-      <div className="mb-2 text-[15px] font-bold">รอบที่เปิดอยู่ ({open.length})</div>
+      <div className="mb-2 flex items-center gap-2 text-[15px] font-bold">
+        รอบที่เปิดอยู่ ({open.length})
+        {open.length > 0 && <MultiGrant batches={open} />}
+      </div>
       {open.length === 0 ? (
         <div className="rounded-2xl border border-subtle bg-surface-2 py-6 text-center text-[13px] text-ink-faint">ยังไม่มีรอบเปิดอยู่</div>
       ) : groups.map((g) => (
