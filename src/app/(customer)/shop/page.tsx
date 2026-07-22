@@ -67,7 +67,7 @@ function ShopInner() {
   // special-round batches (สต๊อกใบพรี) shown as their own cards — in the "พรีรอบพิเศษ" category and the "all" view
   const showBatches = category === null || category === 'special';
   const openBatches = !showBatches ? [] : db.batches.filter((b) => {
-    if (b.status !== 'open') return false;
+    if (b.status !== 'open' || b.published === false) return false; // ร่างไม่ขึ้นหน้าร้าน (v53)
     // sold-out rounds are hidden from the mixed "all" view but STAY (greyed "หมด") in the dedicated category
     if (category !== 'special' && batchRemaining(db, b.id, b.stock_qty) <= 0) return false;
     const p = db.products.find((x) => x.id === b.product_id);
@@ -83,7 +83,7 @@ function ShopInner() {
   // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
   const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
-  const specialCount = db.batches.filter((b) => b.status === 'open' && batchRemaining(db, b.id, b.stock_qty) > 0).length;
+  const specialCount = db.batches.filter((b) => b.status === 'open' && b.published !== false && batchRemaining(db, b.id, b.stock_qty) > 0).length;
   // ประเภท offered on the storefront = active categories only
   const activeCategories = db.categories.filter((c) => c.active);
   // ค่าย list narrows to makers under the selected ประเภท

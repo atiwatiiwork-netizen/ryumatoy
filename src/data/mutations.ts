@@ -315,7 +315,7 @@ export const removeBatch = (batchId: string) => (db: Database): Database => ({
  *  round per SKU. `addSurplus` (legacy: physical stock we already hold) bumps surplus first; without it
  *  the round sells existing surplus (from a production close). Deposit = the SKU's deposit unless
  *  `fullPay` (จ่ายเต็ม/พร้อมส่ง → deposit = price). Existing buyers keep their snapshot (ryuma-preorder-stock-spec). */
-export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number }) => (db: Database): Database => {
+export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number; published?: boolean }) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p) return db;
   if (db.batches.some((b) => b.product_id === productId && b.status === 'open')) return db; // one round at a time
@@ -329,8 +329,50 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
   const stockAdditions = opts.addSurplus
     ? [{ id: id('sa'), product_id: productId, qty, note: `สต๊อกใบพรี (legacy) +${qty}`, created_at: now }, ...db.stockAdditions]
     : db.stockAdditions;
-  const batch = { id: id('b'), product_id: productId, label: opts.label?.trim() || (opts.fullPay ? 'พร้อมส่ง' : 'รอบพิเศษ'), price_total: price, deposit_amount: deposit, stock_qty: qty, status: 'open' as const, created_at: now };
+  const batch = {
+    id: id('b'), product_id: productId, label: opts.label?.trim() || (opts.fullPay ? 'พร้อมส่ง' : 'รอบพิเศษ'),
+    price_total: price, deposit_amount: deposit, stock_qty: qty, status: 'open' as const,
+    // ร่าง = ยังไม่ขึ้นหน้าร้าน (ไล่เก็บใบพรีเก่า: มอบตั๋วลูกค้าเดิมก่อน แล้วค่อยกดเปิดขาย)
+    ...(opts.published === false ? { published: false } : {}),
+    created_at: now,
+  };
   return { ...db, products, stockAdditions, batches: [batch, ...db.batches] };
+};
+
+/** เปิดขายรอบร่าง (publish) — ขึ้นหน้าร้านตั้งแต่ตอนนี้; ผู้เรียก (UI) เป็นคนยิง push เอง. */
+export const publishBatch = (batchId: string) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b || b.status !== 'open' || b.published !== false) return db;
+  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, published: true } : x)) };
+};
+
+/**
+ * มอบตั๋วรอบพิเศษให้ลูกค้าโดยตรง (ไล่เก็บใบพรีเก่า/ดีลนอกระบบ) — ออกตั๋วจริงผูก batch → ตัดสต๊อก
+ * อัตโนมัติ (batchSoldQty/stockRemaining นับจากตั๋ว). depEach = มัดจำต่อชิ้นที่รับมาแล้ว (default ตามรอบ,
+ * ปรับได้เพราะของเก่าอาจเก็บมาไม่เท่ารอบ; เก็บครบ = ตั๋ว paid_full ทันที). เลขตั๋วใช้ block ที่จองจาก
+ * server (startNos, migration v47) — ห้ามนับฝั่ง client เดี่ยวๆ.
+ */
+export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  const user = db.users.find((u) => u.id === userId);
+  const p = b ? db.products.find((x) => x.id === b.product_id) : undefined;
+  const q = Math.floor(qty);
+  if (!b || !user || !p || q < 1 || b.status !== 'open') return db;
+  const sold = db.tickets.filter((t) => t.batch_id === b.id).reduce((s, t) => s + t.qty, 0);
+  if (b.stock_qty - sold < q) return db; // ห้ามมอบเกินสต๊อกที่เหลือของรอบ
+  const dep = Math.max(0, Math.min(b.price_total, depEach != null ? depEach : b.deposit_amount));
+  const when = new Date();
+  const alloc = ticketNoAllocator(db, startNos, when);
+  const abbr = franchiseOf(db, p)?.abbr ?? 'xx';
+  const remainingEach = Math.max(0, b.price_total - dep);
+  const ticket: PreorderTicket = {
+    id: id('t'), ticket_no: alloc(abbr, []),
+    product_id: p.id, batch_id: b.id, owner_id: userId, original_buyer_id: userId, qty: q,
+    deposit_paid: dep * q, remaining_amount: remainingEach * q, remaining_paid: 0,
+    status: remainingEach === 0 ? 'paid_full' : 'active', product_status: p.status, qr_code_url: '',
+    created_at: when.toISOString(), approved_at: when.toISOString(),
+  };
+  return { ...db, tickets: [ticket, ...db.tickets] };
 };
 
 /** Create a brand-new legacy SKU (stock we already hold) + open its first special round in one step.
@@ -341,6 +383,7 @@ export const createLegacyStockProduct = (data: {
   qty: number; price: number; fullPay: boolean; label?: string;
   deposit?: number; // custom มัดจำ (e.g. finished-goods rate 1000฿); falls back to the WCF/Mega rate
   startStatus?: 'production' | 'shipping'; // pre-order rounds: 'production' waits for the warehouse gate
+  published?: boolean; // false = ร่าง (ไล่เก็บใบพรีเก่า: มอบตั๋วก่อน ค่อยกดเปิดขาย)
 }) => (db: Database): Database => {
   const pid = id('p');
   const now = new Date().toISOString();
@@ -360,7 +403,7 @@ export const createLegacyStockProduct = (data: {
     surplus_qty: 0, stock_origin: 'manual', created_at: now,
   };
   const withProduct = { ...db, products: [product, ...db.products] };
-  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit })(withProduct);
+  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit, published: data.published })(withProduct);
 };
 
 /**

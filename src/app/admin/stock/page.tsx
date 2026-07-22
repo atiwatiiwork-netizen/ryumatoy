@@ -10,7 +10,10 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound } from '@/data/mutations';
+import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket } from '@/data/mutations';
+import { reserveTicketNos } from '@/lib/ticketno';
+import { ticketPrefixCounts } from '@/domain/services/tickets';
+import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
 import { ocrImage } from '@/lib/ocr';
@@ -205,6 +208,8 @@ function LegacyCreate() {
   const [wcf, setWcf] = useState<WcfType>('wcf');
   const [dep, setDep] = useState(''); // custom มัดจำ — blank = ใช้เรทตามชนิด (finished goods มักใช้ 1000)
   const [startStatus, setStartStatus] = useState<'production' | 'shipping'>('shipping'); // ผลิต(รอโกดัง)/เดินทาง
+  // ร่าง = ยังไม่ขึ้นหน้าร้าน (ไล่เก็บใบพรีเก่า: มอบตั๋วลูกค้าเดิมก่อน แล้วค่อยกด 🚀 เปิดขายที่การ์ดรอบ)
+  const [publish, setPublish] = useState(true);
   const [images, setImages] = useState<string[]>([]);
   const [imgBusy, setImgBusy] = useState(false);
 
@@ -234,7 +239,7 @@ function LegacyCreate() {
     if (hasOpenBatch(db, p.id)) return flash('SKU นี้มีรอบพิเศษเปิดอยู่แล้ว (ปิดรอบก่อน)');
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
-    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined }));
+    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined, published: publish }));
     // setProductStatus cascades to EVERY ticket of the SKU. Only apply it on a SKU with NO existing
     // buyers — otherwise opening a fresh special round would flip earlier-round buyers' status (and
     // skip the warehouse gate). SKUs that already have tickets keep their per-ticket status; advance
@@ -242,8 +247,8 @@ function LegacyCreate() {
     const hasExistingTickets = db.tickets.some((t) => t.product_id === p.id);
     if (!fullPay && !hasExistingTickets) dispatch(setProductStatus(p.id, startStatus));
     else if (!fullPay && hasExistingTickets) flash('เปิดรอบใหม่แล้ว — สถานะผู้พรีเดิมไม่ถูกแตะ (เลื่อนผ่านยืนยันโกดัง)');
-    pushNewRound(p, p.series_name, `/shop/${p.id}`, pr, fullPay ? pr : (depNum > 0 ? depNum : p.deposit_amount), fullPay);
-    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)} · แจ้งลูกค้าแล้ว`);
+    if (publish) pushNewRound(p, p.series_name, `/shop/${p.id}`, pr, fullPay ? pr : (depNum > 0 ? depNum : p.deposit_amount), fullPay);
+    flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}${publish ? ' · แจ้งลูกค้าแล้ว' : ' · ร่างไว้ (ยังไม่ขึ้นหน้าร้าน)'}`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
   };
   const createNew = () => {
@@ -253,12 +258,12 @@ function LegacyCreate() {
     if (!fullPay && depNum > 0 && depNum >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย (หรือสลับเป็นจ่ายเต็ม)');
     const sname = seriesOpts.find((s) => s.id === sid)?.name;
     const finalName = sname ? `${cname.trim()} - ${sname}` : cname.trim();
-    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus }));
+    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus, published: publish }));
     // อ่าน id สินค้าที่เพิ่งสร้าง (no-op dispatch) เพื่อลิงก์ push ให้ตรงตัว
     let newPid = '';
     dispatch((d) => { newPid = d.products.find((x) => x.manufacturer_id === mk && x.franchise_id === fr && x.series_name === finalName)?.id ?? ''; return d; });
-    pushNewRound({ manufacturer_id: mk, franchise_id: fr }, finalName, newPid ? `/shop/${newPid}` : '/shop', pr, fullPay ? pr : (depNum > 0 ? depNum : rateDep), fullPay);
-    flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว · แจ้งลูกค้าแล้ว`);
+    if (publish) pushNewRound({ manufacturer_id: mk, franchise_id: fr }, finalName, newPid ? `/shop/${newPid}` : '/shop', pr, fullPay ? pr : (depNum > 0 ? depNum : rateDep), fullPay);
+    flash(`สร้าง ${finalName} + เปิดรอบพิเศษ ${q} ตัว${publish ? ' · แจ้งลูกค้าแล้ว' : ' · ร่างไว้ (มอบตั๋ว/กดเปิดขายทีหลัง)'}`);
     setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel(''); setDep(''); setImages([]);
   };
 
@@ -325,7 +330,11 @@ function LegacyCreate() {
           </div>
         )}
         <span className="text-[11.5px] text-ink-faint">{fullPay ? 'ลูกค้าจ่ายเต็มตอนสั่ง (ของอยู่ในมือ)' : startStatus === 'production' ? 'ของยังผลิต → ยืนยันโกดังก่อนเปลี่ยนเป็นเดินทาง' : 'ของออกจากจีนแล้ว'}</span>
-        <button onClick={sub === 'existing' ? openExisting : createNew} className="ml-auto rounded-lg bg-cta px-5 py-2.5 text-sm font-bold text-white">เปิดรอบพิเศษ</button>
+        {/* ร่าง: ยังไม่ขึ้นหน้าร้าน — ไว้ไล่เก็บใบพรีเก่า (มอบตั๋วลูกค้าเดิมก่อน ค่อยกด 🚀 เปิดขาย) */}
+        <button onClick={() => setPublish((v) => !v)} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', publish ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-[#d97706]/50 bg-[#d97706]/[0.14] text-[#fbbf24]')}>
+          {publish ? '🚀 เปิดขายทันที + แจ้งลูกค้า' : '📝 ร่างไว้ก่อน (ยังไม่ขึ้นหน้าร้าน)'}
+        </button>
+        <button onClick={sub === 'existing' ? openExisting : createNew} className="ml-auto rounded-lg bg-cta px-5 py-2.5 text-sm font-bold text-white">{publish ? 'เปิดรอบพิเศษ' : 'สร้างรอบ (ร่าง)'}</button>
       </div>
     </div>
   );
@@ -486,6 +495,46 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     flash(`ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
   };
 
+  // ── ร่าง → เปิดขาย (publish): ขึ้นหน้าร้าน + push (DNA: ไม่บอกจำนวน) ──
+  const isDraft = b.status === 'open' && b.published === false;
+  const doPublish = () => {
+    if (!confirm(`เปิดขาย "${p?.series_name}" ขึ้นหน้าร้าน + แจ้งลูกค้า?`)) return;
+    dispatch(publishBatch(b.id));
+    if (p && pushEnabled(db, 'restock'))
+      sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(b.price_total)}${fullPay ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(b.deposit_amount)}`}`, url: `/shop/${b.product_id}?batch=${b.id}` }, dispatch).catch(() => {});
+    flash('🚀 เปิดขายแล้ว · ขึ้นหน้าร้าน + แจ้งลูกค้า');
+  };
+
+  // ── มอบตั๋วให้ลูกค้าโดยตรง (ไล่เก็บใบพรีเก่า) — ตัดสต๊อกรอบอัตโนมัติ ──
+  const [granting, setGranting] = useState(false);
+  const [gUser, setGUser] = useState('');
+  const [gQty, setGQty] = useState('1');
+  const [gDep, setGDep] = useState(String(b.deposit_amount));
+  const [gBusy, setGBusy] = useState(false);
+  const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
+  const doGrant = async () => {
+    const u = db.users.find((x) => x.id === gUser);
+    const q = Number(gQty) || 0;
+    const depEach = Math.max(0, Number(gDep) || 0);
+    if (!u) return flash('เลือกลูกค้าก่อน');
+    if (q < 1 || q > remaining) return flash(`จำนวนต้อง 1–${remaining} (สต๊อกรอบนี้)`);
+    if (depEach > b.price_total) return flash('มัดจำต่อชิ้นเกินราคาขาย');
+    if (!confirm(`มอบตั๋ว ${p?.series_name} ×${q} ให้ "${u.display_name}"\nมัดจำรับแล้ว ${baht(depEach)}/ชิ้น · ค้าง ${baht(Math.max(0, b.price_total - depEach) * q)}\nสต๊อกรอบจะเหลือ ${remaining - q}`)) return;
+    setGBusy(true);
+    try {
+      // เลขตั๋วต้องจองจาก server ก่อนเสมอ (migration v47 — กันเลขชน)
+      const startNos = await reserveTicketNos(ticketPrefixCounts(db, [b.product_id]));
+      dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos));
+      try { await store.flush(); } catch { /* onPersistError โชว์เอง */ }
+      let no = '';
+      dispatch((d) => { no = d.tickets.filter((t) => t.batch_id === b.id && t.owner_id === u.id).sort((a, x) => (a.created_at < x.created_at ? 1 : -1))[0]?.ticket_no ?? ''; return d; });
+      if (pushEnabled(db, 'order_approved'))
+        sendPush(subsForUsers(db, [u.id]), { title: '🎫 ได้รับใบพรีแล้ว!', body: `${p?.series_name ?? ''} ×${q} — แตะดูตั๋วของคุณ`, url: no ? `/wallet/${encodeURIComponent(no)}` : '/wallet' }, dispatch).catch(() => {});
+      flash(`มอบตั๋ว ${no || ''} ให้ ${u.display_name} แล้ว ✓ (สต๊อกรอบเหลือ ${remaining - q})`);
+      setGranting(false); setGUser(''); setGQty('1'); setGDep(String(b.deposit_amount));
+    } finally { setGBusy(false); }
+  };
+
   // มีของเพิ่ม → เปิดรอบใหม่ (แสดงเมื่อรอบนี้ขายหมด หรือเป็นรอบที่ปิดไปแล้ว)
   const [restock, setRestock] = useState(false);
   const [rq, setRq] = useState('');
@@ -515,8 +564,8 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
             : <div className="grid h-full w-full place-items-center"><Icon name="box" size={24} className="text-primary-soft/25" /></div>}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span></div>
-          <div className="mt-0.5 font-mono text-[11px] text-ink-faint">เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}</div>
+          <div className="truncate text-sm font-bold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}</div>
+          <div className="mt-0.5 font-mono text-[11px] text-ink-faint">เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}{p && !p.is_stock ? ` · 🔒 คลัง SKU ${stockRemaining(db, p)}` : ''}</div>
           <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10.5px] font-bold">
             {fullPay ? <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ของอยู่ไทย · พร้อมส่ง</span> : (<>
               {nProd > 0 && <span className="rounded-md bg-[#d97706]/15 px-1.5 py-0.5 text-[#fbbf24]">ผลิต/รอโกดัง {nProd}</span>}
@@ -531,6 +580,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       {/* ปุ่มแอ็กชันแถวเดียว (สไตล์การ์ด memo) */}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.1] px-3 py-1.5 text-[12px] font-bold text-[#f1d27a]">🎫 ลูกค้า ({tickets.length}) {open ? '▲' : '▼'}</button>
+        {isDraft && !readOnly && (
+          <button onClick={doPublish} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">🚀 เปิดขาย + แจ้งลูกค้า</button>
+        )}
+        {!readOnly && b.status === 'open' && remaining > 0 && (
+          <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
+        )}
         {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่ */}
         {!fullPay && moving.length > 0 && (
           <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">🇹🇭 ถึงไทยแล้ว ({moving.length})</button>
@@ -540,6 +595,30 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         {!readOnly && noBuyers && <button onClick={() => { if (confirm('ยกเลิกรอบนี้? (ยังไม่มีคนซื้อ)')) { dispatch(removeBatch(b.id)); flash('ยกเลิกรอบแล้ว'); } }} className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-2.5 py-1.5 text-[12px] font-semibold text-primary-soft">ยกเลิก</button>}
         {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
       </div>
+
+      {/* มอบตั๋วให้ลูกค้าโดยตรง — ตัดสต๊อกรอบทันที · เลขตั๋วจองจาก server · มัดจำที่รับมาแล้วปรับได้ */}
+      {granting && (
+        <div className="mt-2 rounded-lg border border-[#8b5cf6]/40 bg-[#8b5cf6]/[0.06] p-2.5">
+          <div className="mb-2 text-[11.5px] font-bold text-[#c4b5fd]">🎁 มอบตั๋วรอบนี้ (สต๊อกเหลือ {remaining}) — ราคา {baht(b.price_total)}/ชิ้น</div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-[180px] flex-1 text-[11px] text-ink-faint">ลูกค้า
+              <select className={cx(inputCls, 'mt-0.5 py-2')} value={gUser} onChange={(e) => setGUser(e.target.value)}>
+                <option value="">— เลือกลูกค้า —</option>
+                {grantables.map((u) => <option key={u.id} value={u.id}>{u.display_name}{u.member_code ? ` · ${u.member_code}` : ''}{u.phone ? ` · ${u.phone}` : ''}</option>)}
+              </select>
+            </label>
+            <label className="text-[11px] text-ink-faint">จำนวน
+              <input className={cx(inputCls, 'mt-0.5 w-16 py-2 text-center')} inputMode="numeric" value={gQty} onChange={(e) => setGQty(e.target.value.replace(/[^\d]/g, ''))} />
+            </label>
+            <label className="text-[11px] text-ink-faint">มัดจำรับแล้ว/ชิ้น
+              <input className={cx(inputCls, 'mt-0.5 w-24 py-2 text-center')} inputMode="numeric" value={gDep} onChange={(e) => setGDep(e.target.value.replace(/[^\d]/g, ''))} />
+            </label>
+            <button onClick={doGrant} disabled={gBusy} className="rounded-lg bg-[#8b5cf6] px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">{gBusy ? 'กำลังออกตั๋ว…' : '✓ มอบตั๋ว'}</button>
+            <button onClick={() => setGranting(false)} className="py-2 text-[12px] text-ink-faint">ยกเลิก</button>
+          </div>
+          <div className="mt-1.5 text-[10.5px] text-ink-faint">มัดจำเต็มราคา = ตั๋วจ่ายครบทันที · ต่ำกว่า = ลูกค้าไปจ่ายส่วนต่างต่อในแอป · ตัดสต๊อกรอบทันทีที่มอบ</div>
+        </div>
+      )}
 
       {/* รหัสชิปปิ้งค่าย→โกดังจีน (ไว้เทียบตารางโกดังใน "ยืนยันเข้าโกดังจีน" ด้านบน) — โชว์ตราบใดที่ยังมีของ
           ไม่ถึงไทย (รวมรอบที่ปิดขายไปแล้วแต่ของยังเดินทาง); รอบเปิดที่ยังไม่มีคนซื้อก็ใส่ล่วงหน้าได้ */}

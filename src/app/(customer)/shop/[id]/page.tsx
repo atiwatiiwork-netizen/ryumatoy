@@ -38,7 +38,8 @@ export default function ProductDetailPage() {
   if (!product) return <div className="p-10 text-ink-faint">ไม่พบสินค้า</div>;
 
   // reopened stock batch (from a ?batch= link) overrides the price/deposit
-  const batch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open');
+  // ร่าง (published === false) เข้าผ่านลิงก์ตรงไม่ได้ — ยังไม่เปิดขาย (v53)
+  const batch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open' && b.published !== false);
   const variant = variants.find((v) => v.id === variantId);
   const rawPrice = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
   const rawDeposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);
@@ -155,9 +156,10 @@ export default function ProductDetailPage() {
           <span className="text-ink-faint line-through">{baht(rawPrice)}</span>
         </div>
       )}
+      {/* กฎร้าน: ลูกค้าห้ามเห็นจำนวนสต๊อกจริง — บอกได้แค่ เหลือน้อย(กระพริบ) / 1 ชิ้นสุดท้าย / หมด */}
       {limited && (
-        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : avail === 1 ? 'animate-pulse text-[#f87171]' : 'text-[#4ade80]')}>
-          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : `เหลือ ${avail} ชิ้น`}
+        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : avail === 1 ? 'animate-pulse text-[#f87171]' : 'animate-pulse text-[#fbbf24]')}>
+          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : 'สินค้าเหลือน้อย · รีบจองก่อนหมด'}
         </div>
       )}
       <div className="flex gap-2.5">

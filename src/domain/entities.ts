@@ -145,6 +145,9 @@ export interface ProductBatch {
   deposit_amount: number;
   stock_qty: number;
   status: BatchStatus;
+  // ร่าง (ยังไม่ publish): ไม่ขึ้นหน้าร้านจนแอดมินกด "เปิดขาย" — ใช้ไล่เก็บใบพรีเก่าเข้าระบบ
+  // (สร้าง SKU → มอบตั๋วลูกค้าเดิมก่อน → ค่อยเปิดขายที่เหลือ). undefined/true = ขายอยู่ (back-compat, v53)
+  published?: boolean;
   created_at: string;
 }
 

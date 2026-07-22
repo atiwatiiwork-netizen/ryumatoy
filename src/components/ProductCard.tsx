@@ -58,7 +58,8 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
     // in-stock: never let the cart hold more than what's really left (reservation-aware)
     if (stockLeft != null) {
       const inCart = cart.lines.filter((l) => l.productId === product.id).reduce((s, l) => s + l.qty, 0);
-      if (inCart + 1 > stockLeft) { flash(`สต๊อกไม่พอ — เหลือ ${stockLeft} ชิ้น (ในตะกร้า ${inCart})`); return; }
+      // กฎร้าน: ไม่บอกจำนวนสต๊อกจริงแม้ตอนเต็ม — บอกแค่ว่าหยิบครบที่มีแล้ว
+      if (inCart + 1 > stockLeft) { flash('หยิบครบจำนวนที่เหลือแล้ว (อยู่ในตะกร้าครบ)'); return; }
     }
     // in-stock pays in full (DNA: full-pay deposit invariant) — guards legacy rows where deposit < price
     const dep = product.is_stock ? product.price_total : product.deposit_amount;

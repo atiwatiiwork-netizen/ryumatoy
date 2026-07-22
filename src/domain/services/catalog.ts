@@ -207,9 +207,10 @@ export function hasOpenBatch(db: Database, productId: string): boolean {
 export function openBatchOf(db: Database, productId: string) {
   return db.batches.find((b) => b.product_id === productId && b.status === 'open');
 }
-/** Batches currently on a special round (open) — the "พรีรอบพิเศษ" storefront category. */
+/** Batches currently on a special round (open) — the "พรีรอบพิเศษ" storefront category.
+ *  ร่าง (published === false) ไม่ขึ้นหน้าร้าน — โผล่เมื่อแอดมินกด "เปิดขาย" เท่านั้น (v53). */
 export function openRoundBatches(db: Database) {
-  return db.batches.filter((b) => b.status === 'open');
+  return db.batches.filter((b) => b.status === 'open' && b.published !== false);
 }
 
 /** Detailed buyers of a single round (batch): name + qty + price paid (snapshot total) + ticket + date. */
