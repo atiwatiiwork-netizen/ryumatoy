@@ -1152,13 +1152,18 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
  * สินค้า (SKU) ยกเป็น 'arrived' เฉพาะเมื่อไม่เหลือตั๋วรอบอื่นที่ยังผลิต/เดินทางอยู่.
  */
 export const arriveSpecialRound = (batchId: string) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b) return db;
+  const pid = b.product_id;
+  const p0 = db.products.find((x) => x.id === pid);
   const cohort = db.tickets.filter((t) => t.batch_id === batchId && ['production', 'shipping'].includes(t.product_status));
-  if (cohort.length === 0) return db;
-  const pid = cohort[0].product_id;
+  const productMoving = !!p0 && !p0.is_stock && (p0.status === 'production' || p0.status === 'shipping');
+  // ไม่มีอะไรกำลังเดินทางเลย (ตั๋วก็ไม่มี ของก็ไม่ได้เดิน เช่น full-pay ของอยู่ในมือ) → no-op กันกดมั่ว
+  if (cohort.length === 0 && !productMoving) return db;
   const ids = new Set(cohort.map((t) => t.id));
-  const tickets = db.tickets.map((t) => (ids.has(t.id) ? { ...t, product_status: 'arrived' as const } : t));
+  const tickets = cohort.length ? db.tickets.map((t) => (ids.has(t.id) ? { ...t, product_status: 'arrived' as const } : t)) : db.tickets;
   const othersMoving = tickets.some((t) => t.product_id === pid && ['production', 'shipping'].includes(t.product_status));
-  return {
+  let out: Database = {
     ...db,
     tickets,
     // ยก SKU เป็น arrived เฉพาะเมื่อ (1) ไม่มีตั๋วรอบอื่นกำลังเดิน และ (2) ตัว SKU อยู่ระหว่างผลิต/เดินทาง
@@ -1167,6 +1172,15 @@ export const arriveSpecialRound = (batchId: string) => (db: Database): Database 
       ? { ...p, status: 'arrived' as const, eta_note: 'ถึงไทยแล้ว' }
       : p)),
   };
+  // ถึงไทยแล้ว + SKU จบยอด (ไม่มีตั๋วค้างจ่าย) + มีของเหลือ → กลายเป็นสินค้า In-Stock มือ 1 อัตโนมัติ
+  // (เจ้าของ 2026-07-22: รอบไม่มีลูกค้าเลย กดถึงไทย = เข้าสต๊อกขายพร้อมส่งทันที; ราคาเริ่ม = ราคารอบ
+  // แอดมินไปปรับต่อได้ที่ In-Stock). รอบที่ยังมีคนค้างจ่าย → ยังไม่แปลง (กันขายทับของจอง กติกาเดิม)
+  const pNow = out.products.find((x) => x.id === pid);
+  if (pNow && canConvertToInStock(out, pNow)) {
+    out = convertToInStock(pid, b.price_total)(out);
+    out = { ...out, batches: out.batches.map((x) => (x.product_id === pid && x.status === 'open' ? { ...x, status: 'closed' as const } : x)) };
+  }
+  return out;
 };
 
 // ── การรับของ (delivery choice, ryuma delivery spec 2026-07-19) ────────────

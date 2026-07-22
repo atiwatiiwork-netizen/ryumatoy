@@ -567,6 +567,11 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
   // ── สถานะการเดินทางของรอบนี้ (นับจากตั๋วในรอบ ไม่ใช่ตัว SKU — กันข้ามรอบ) ──
   const moving = tickets.filter((t) => ['production', 'shipping'].includes(t.product_status));
+  // รอบไม่มีลูกค้า: ของ (ตัว SKU) ยังเดินทางอยู่เอง — ต้องกดถึงไทยได้เหมือนกัน (เฉพาะรอบล่าสุดของ SKU
+  // กันการ์ดรอบเก่าในประวัติไปอ่านสถานะของรอบใหม่) → ถึงแล้วของเหลือกลายเป็น In-Stock มือ 1
+  const totalRounds = db.batches.filter((x) => x.product_id === b.product_id).length;
+  const productMoving = !!p && !p.is_stock && (p.status === 'production' || p.status === 'shipping');
+  const canArriveNoTickets = tickets.length === 0 && productMoving && roundNo === totalRounds;
   const nProd = tickets.filter((t) => t.product_status === 'production').length;
   const nShip = tickets.filter((t) => t.product_status === 'shipping').length;
   const nArr = tickets.filter((t) => ['arrived', 'delivered'].includes(t.product_status) || t.status === 'shipped').length;
@@ -577,10 +582,14 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     dispatch(setProductSf(p.id, sf.trim()));
     flash('บันทึกรหัสชิปปิ้งแล้ว — รอเทียบตารางโกดัง ✓');
   };
-  // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้
+  // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้.
+  // รอบไม่มีลูกค้า/จบยอดแล้ว: ของเหลือกลายเป็น In-Stock มือ 1 อัตโนมัติ (เจ้าของ 2026-07-22)
   const doArrive = () => {
     const owners = [...new Set(moving.map((t) => t.owner_id))];
-    if (!confirm(`ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`)) return;
+    const msg = moving.length === 0
+      ? `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้าง — สต๊อกที่เหลือ ${remaining} ชิ้นจะกลายเป็นสินค้า In-Stock (มือ 1) ทันที`
+      : `ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`;
+    if (!confirm(msg)) return;
     dispatch(arriveSpecialRound(b.id));
     if (p && pushEnabled(db, 'lot_arrived')) {
       const seen = new Set<string>();
@@ -590,7 +599,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         sendPush(subsForUsers(db, [t.owner_id]), { title: '🇹🇭 ของถึงไทยแล้ว!', body: `${productLabel(db, p.id)} — ${t.remaining_amount > t.remaining_paid ? 'ชำระส่วนต่างเพื่อรับของได้เลย' : 'เลือกวิธีรับของได้เลย'}`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
       }
     }
-    flash(`ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
+    // เช็คผล: ถ้า SKU แปลงเป็น in-stock แล้ว (จบยอด+มีของเหลือ) บอกแอดมินชัดๆ
+    let becameStock = false, stockNow = 0;
+    dispatch((d) => { const pp = d.products.find((x) => x.id === b.product_id); becameStock = !!pp?.is_stock; stockNow = pp?.stock_qty ?? 0; return d; });
+    flash(becameStock
+      ? `ถึงไทยแล้ว ✓ ของเหลือกลายเป็น In-Stock มือ 1 · สต๊อก ${stockNow} ชิ้น (ปรับราคาต่อได้ที่ In-Stock)`
+      : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
   };
 
   // ── ร่าง → เปิดขาย (publish): ขึ้นหน้าร้าน + push (DNA: ไม่บอกจำนวน) ──
@@ -684,9 +698,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         {!readOnly && b.status === 'open' && remaining > 0 && (
           <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
         )}
-        {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่ */}
-        {!fullPay && moving.length > 0 && (
-          <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">🇹🇭 ถึงไทยแล้ว ({moving.length})</button>
+        {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่
+            (รวมรอบไม่มีลูกค้า — ถึงแล้วของเหลือกลายเป็น In-Stock มือ 1) */}
+        {!fullPay && (moving.length > 0 || canArriveNoTickets) && (
+          <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">
+            🇹🇭 ถึงไทยแล้ว{moving.length > 0 ? ` (${moving.length})` : ' → In-Stock'}
+          </button>
         )}
         {(soldOut || readOnly) && !restock && <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRestock(true); }} className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">➕ มีของเพิ่ม</button>}
         {!readOnly && noBuyers && !edit && <button onClick={() => { setEp(String(b.price_total)); setEq(String(b.stock_qty)); setEl(b.label); setEdit(true); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">แก้ไข</button>}
