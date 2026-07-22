@@ -10,6 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { seriesForFranchise } from '@/domain/services/catalog';
 import { genId, bulkCreateStock } from '@/data/mutations';
+import { sendPush, subsForNewProduct, pushEnabled } from '@/lib/push';
 import { StockCondPicker } from '@/components/StockCond';
 import { NEW_STOCK_COND } from '@/domain/entities';
 import type { Product, StockCond } from '@/domain/entities';
@@ -94,8 +95,16 @@ export function StockBulkAdd({ onDone }: { onDone: () => void }) {
       };
     });
     dispatch(bulkCreateStock(products));
+    // push แจ้งลูกค้าตามตัวกรองค่าย/เรื่อง — ทั้งชุด maker/เรื่องเดียวกัน ยิงสรุป 1 ครั้ง.
+    // DNA: ห้ามบอกจำนวน/สต๊อก — ใส่แค่ชื่อ + ราคา (ryuma-dna-push-noqty). gate = 'new_instock'.
+    if (pushEnabled(db, 'new_instock')) {
+      const names = products.map((p) => `${p.series_name} ${baht(p.price_total)}`);
+      const body = names.slice(0, 3).join(' · ') + (names.length > 3 ? ` และอีก ${names.length - 3} รายการ` : '');
+      sendPush(subsForNewProduct(db, { manufacturer_id: sd.manufacturer_id, franchise_id: sd.franchise_id }),
+        { title: products.length > 1 ? `🟢 สินค้าพร้อมส่งเข้าใหม่ ${products.length} รายการ!` : '🟢 สินค้าพร้อมส่งเข้าใหม่!', body: `${body} — แตะดูเลย`, url: '/shop?cat=instock' }, dispatch).catch(() => {});
+    }
     try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* */ }
-    flash(`สร้างสินค้าพร้อมส่ง ${products.length} รายการ 🎉`);
+    flash(`สร้างสินค้าพร้อมส่ง ${products.length} รายการ 🎉 · แจ้งลูกค้าแล้ว`);
     setRows([]);
   };
 
