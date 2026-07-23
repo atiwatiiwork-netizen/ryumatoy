@@ -7,7 +7,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
-import { deliveryRequests, parcelQueue, handoffQueue } from '@/domain/services/delivery';
+import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -32,8 +32,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
-  // งานจัดส่งทั้งหมด (คำขอรอรับเรื่อง + รอใส่เลขพัสดุ + รถเข้ารับ/มารับเอง) — badge ของแท็บ "จัดส่ง"
-  const shippingJobs = deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
+  // งานจัดส่งทั้งหมด (รอลูกค้าเลือกวิธีรับ + คำขอรอรับเรื่อง + รอใส่เลขพัสดุ + รถเข้ารับ/มารับเอง) — badge แท็บ "จัดส่ง"
+  const shippingJobs = awaitingChoice(db).length + deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
   const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });

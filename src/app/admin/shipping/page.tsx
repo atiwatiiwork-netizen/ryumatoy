@@ -8,8 +8,8 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { uploadImage } from '@/lib/upload';
 import { productLabel, lineImage } from '@/domain/services/catalog';
-import { deliveryRequests, parcelQueue, handoffQueue, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
-import { acceptDelivery, closeDelivery, setParcel } from '@/data/mutations';
+import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
+import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { LabelSheet } from '../orders/LabelSheet';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
@@ -33,6 +33,7 @@ export default function ShippingPage() {
   const { flash } = useToast();
 
   const dReq = deliveryRequests(db).sort((a, b) => ((a.delivery?.requested_at ?? '') < (b.delivery?.requested_at ?? '') ? 1 : -1));
+  const dChoice = awaitingChoice(db);
   const dParcel = parcelQueue(db);
   const dHandoff = handoffQueue(db);
   const recentShipped = db.tickets.filter((t) => t.status === 'shipped').sort((a, b) => ((a.shipped_out_at ?? '') < (b.shipped_out_at ?? '') ? 1 : -1)).slice(0, 10);
@@ -57,18 +58,76 @@ export default function ShippingPage() {
     flash(`ปิดงานแล้ว · ${t.ticket_no} ✓`);
   };
 
+  // ⓪ ตั๋วที่รอลูกค้ากดเลือกวิธีรับของ — แอดมินเตือน / จัดส่งตามที่อยู่ลงทะเบียนแทน / ปิดงานตั๋วเก่านอกระบบ
+  const nudge = (t: PreorderTicket) => {
+    if (pushEnabled(db, 'parcel'))
+      sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 ของพร้อมส่งแล้ว!', body: 'ชำระครบแล้ว — แตะเลือกวิธีรับของได้เลย', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+    flash(`ส่งแจ้งเตือนให้ ${userName(t.owner_id)} แล้ว 🔔`);
+  };
+  const shipToRegistered = (t: PreorderTicket) => {
+    const u = db.users.find((x) => x.id === t.owner_id);
+    if (!confirm(`จัดส่ง ${t.ticket_no} ตามที่อยู่ที่ลงทะเบียนของ ${u?.display_name}?\n📍 ${u?.shipping_address}`)) return;
+    dispatch(chooseDelivery(t.id, t.owner_id, 'registered'));
+    dispatch(acceptDelivery(t.id));
+    if (pushEnabled(db, 'parcel'))
+      sendPush(subsForUsers(db, [t.owner_id]), { title: '✅ รับเรื่องจัดส่งแล้ว', body: 'แอดมินจัดส่งตามที่อยู่ที่ลงทะเบียนให้ — รอเลขพัสดุได้เลย', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+    flash(`เข้าคิวจัดส่งแล้ว · ${t.ticket_no} ✓`);
+  };
+  const closeOffline = (t: PreorderTicket) => {
+    if (!confirm(`ปิดงาน ${t.ticket_no} — ตั๋วนี้ส่ง/รับของกันนอกระบบไปแล้วใช่ไหม? (ไม่ push หาลูกค้า)`)) return;
+    dispatch(markShippedOffline(t.id));
+    flash(`ปิดงานนอกระบบ · ${t.ticket_no} ✓`);
+  };
+
   return (
     <div>
       <div className="mb-1 text-2xl font-extrabold">จัดส่ง</div>
       <div className="mb-4 text-[13px] text-ink-faint">ศูนย์จัดการส่งของครบวงจร — รับเรื่อง → ปริ้นใบปะหน้า → ใส่เลขพัสดุ (แจ้งลูกค้าอัตโนมัติ) → ปิดงาน</div>
 
       {/* สรุปงานวันนี้ — เห็นแวบเดียวรู้ว่าค้างอะไร */}
-      <div className="mb-5 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-2.5 lg:grid-cols-5">
+        <Stat label="รอลูกค้าเลือกวิธีรับ" value={dChoice.length} tone="text-[#c084fc]" icon="ticket" pulse={dChoice.length > 0} />
         <Stat label="คำขอใหม่ รอรับเรื่อง" value={dReq.length} tone="text-[#fbbf24]" icon="bell" pulse={dReq.length > 0} />
         <Stat label="รอใส่เลขพัสดุ" value={dParcel.length} tone="text-[#f87171]" icon="box" />
         <Stat label="รถเข้ารับ / มารับเอง" value={dHandoff.length} tone="text-[#60a5fa]" icon="user" />
         <Stat label="ส่งแล้ว (ทั้งหมด)" value={db.tickets.filter((t) => t.status === 'shipped').length} tone="text-[#4ade80]" icon="check" />
       </div>
+
+      {/* ⓪ จ่ายครบแล้วแต่ยังไม่กดเลือกวิธีรับของ — เดิมตั๋วพวกนี้ไม่โผล่คิวไหนเลย (เคส Taweesin) */}
+      <Section icon="ticket" tone="text-[#c084fc]" title="จ่ายครบแล้ว · รอลูกค้าเลือกวิธีรับของ" count={dChoice.length} sub="ลูกค้ายังไม่ได้กดเลือกวิธีรับของ — เตือนลูกค้า หรือแอดมินจัดส่งตามที่อยู่ลงทะเบียนให้เลย · ตั๋วเก่าที่เคยส่งนอกระบบ กดปิดงานทิ้งได้">
+        {dChoice.length === 0 ? <Empty text="ไม่มีตั๋วค้าง 🎉" /> : (
+          <div className="grid gap-2.5 lg:grid-cols-2">
+            {dChoice.map((t) => {
+              const u = db.users.find((x) => x.id === t.owner_id);
+              return (
+                <div key={t.id} className="rounded-xl border border-[#a855f7]/35 bg-surface-2 p-3.5">
+                  <div className="flex items-start gap-3">
+                    <Thumb ticket={t} size={52} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13.5px] font-bold">{productLabel(db, t.product_id, t.variant_id)}{t.qty > 1 ? ` ×${t.qty}` : ''}</div>
+                      <div className="mt-0.5 text-[11.5px] text-ink-muted2"><Icon name="user" size={11} className="mr-0.5 inline" /> {userName(t.owner_id)} · <span className="font-mono text-[10.5px] text-ink-faint">{t.ticket_no}</span></div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[10.5px] font-bold text-[#4ade80]">จ่ายครบ ✓ {baht(t.deposit_paid + t.remaining_paid)}</span>
+                        {u?.shipping_address
+                          ? <span className="line-clamp-1 text-[10.5px] text-ink-faint">📍 {u.shipping_address}</span>
+                          : <span className="text-[10.5px] font-bold text-[#fbbf24]">⚠ โปรไฟล์ไม่มีที่อยู่</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 flex gap-2">
+                    <button onClick={() => nudge(t)} className="flex-1 rounded-lg border border-[#a855f7]/50 py-2 text-[12.5px] font-bold text-[#c084fc]">🔔 เตือนลูกค้า</button>
+                    <button onClick={() => shipToRegistered(t)} disabled={!u?.shipping_address}
+                      className={cx('flex-1 rounded-lg py-2 text-[12.5px] font-bold', u?.shipping_address ? 'bg-cta text-white' : 'cursor-not-allowed bg-surface-3 text-ink-faint')}>
+                      📮 ส่งตามที่อยู่ลงทะเบียน
+                    </button>
+                    <button onClick={() => closeOffline(t)} className="shrink-0 rounded-lg border border-subtle px-2.5 py-2 text-[11.5px] text-ink-faint" title="ตั๋วเก่าที่ส่ง/รับของนอกระบบไปแล้ว">ปิดงาน</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Section>
 
       {/* ① คำขอรับของใหม่ → รับเรื่อง */}
       <Section icon="bell" tone="text-[#fbbf24]" title="คำขอรับของใหม่ · รอรับเรื่อง" count={dReq.length} sub="ลูกค้าเลือกวิธีรับของแล้ว → กดรับเรื่อง: ส่งพัสดุเข้าคิวใบปะหน้า/เลขพัสดุ · รับเอง-รถเข้ารับ รอปิดงาน">

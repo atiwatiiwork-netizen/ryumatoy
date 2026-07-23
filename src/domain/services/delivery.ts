@@ -71,6 +71,14 @@ export const parcelQueue = (db: Database): PreorderTicket[] =>
     return !!t.delivery.accepted_at && (t.delivery.method === 'registered' || t.delivery.method === 'custom');
   });
 
+/**
+ * จ่ายครบ + ของพร้อมส่ง แต่ลูกค้ายังไม่กดเลือกวิธีรับของ → ไม่เข้าคิวไหนเลย แอดมินมองไม่เห็น
+ * (เคสจริง Taweesin 2026-07-23: ตั๋ว in-stock จ่ายครบแล้วหายเงียบ). พรีที่ "ถึงไทย" ไม่นับ —
+ * ตั๋วพวกนั้นไหลเข้า parcelQueue ตาม flow เดิมอยู่แล้ว.
+ */
+export const awaitingChoice = (db: Database): PreorderTicket[] =>
+  db.tickets.filter((t) => !t.delivery && !t.parcel_no && t.product_status !== 'arrived' && deliveryReady(db, t));
+
 /** คำขอรับของที่รอแอดมิน Accept. */
 export const deliveryRequests = (db: Database): PreorderTicket[] =>
   db.tickets.filter((t) => t.delivery && !t.delivery.accepted_at && t.status !== 'shipped');

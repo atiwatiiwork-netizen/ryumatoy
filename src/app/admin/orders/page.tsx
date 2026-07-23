@@ -8,7 +8,7 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { approveRemainingPayment } from '@/data/mutations';
-import { deliveryRequests, handoffQueue, parcelQueue } from '@/domain/services/delivery';
+import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { PreorderTicket } from '@/domain/entities';
@@ -33,7 +33,7 @@ export default function OrdersHubPage() {
   // §3 paid, still travelling — info only
   const waitingArrival = db.tickets.filter((t) => t.product_status === 'shipping' && paidFull(t));
   // งานจัดส่ง (ย้ายไป /admin/shipping) — นับไว้โชว์บนแบนเนอร์
-  const shippingJobs = deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
+  const shippingJobs = awaitingChoice(db).length + deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
 
   return (
     <div>

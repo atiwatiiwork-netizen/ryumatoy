@@ -1236,6 +1236,17 @@ export const closeDelivery = (ticketId: string) => (db: Database): Database => {
 };
 
 /**
+ * ปิดงานตั๋วที่จัดส่ง/ส่งมอบกันนอกระบบไปแล้ว (ตั๋วเก่าก่อนมีระบบเลือกวิธีรับของ) — ตั๋วจบเป็น
+ * 'shipped' โดยไม่แตะ delivery/parcel. ใช้เคลียร์คิว "รอลูกค้าเลือกวิธีรับของ" ใน /admin/shipping.
+ */
+export const markShippedOffline = (ticketId: string) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t || t.status === 'shipped' || t.remaining_paid < t.remaining_amount) return db;
+  const now = new Date().toISOString();
+  return { ...db, tickets: db.tickets.map((x) => (x.id === ticketId ? { ...x, status: 'shipped' as const, shipped_out_at: now } : x)) };
+};
+
+/**
  * Close the pre-order round for the given products → status 'production'.
  * Records the final production qty and the surplus (final − ordered) that becomes
  * shop stock. Ordered qty is the sum of ticket qty for the product.
