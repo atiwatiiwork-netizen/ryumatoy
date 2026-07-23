@@ -7,6 +7,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
+import { deliveryRequests, parcelQueue, handoffQueue } from '@/domain/services/delivery';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -31,12 +32,18 @@ export function AdminShell({ children }: { children: ReactNode }) {
   if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
-  const awaitingParcel = db.tickets.filter((t) => t.product_status === 'arrived' && t.remaining_paid >= t.remaining_amount && !t.parcel_no).length;
+  // งานจัดส่งทั้งหมด (คำขอรอรับเรื่อง + รอใส่เลขพัสดุ + รถเข้ารับ/มารับเอง) — badge ของแท็บ "จัดส่ง"
+  const shippingJobs = deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
   const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });
   const groups: { title?: string; items: NavItem[] }[] = [
-    { items: [it('/admin', 'dashboard', 'Dashboard'), it('/admin/analytics', 'sliders', 'วิเคราะห์รายเดือน')] },
+    { items: [
+      it('/admin', 'dashboard', 'Dashboard'),
+      it('/admin/analytics', 'sliders', 'วิเคราะห์รายเดือน'),
+      // ศูนย์จัดส่ง (เจ้าของ 2026-07-23): คำขอรับของ → ใบปะหน้า → ใส่เลขพัสดุ → ปิดงาน ครบที่เดียว
+      it('/admin/shipping', 'truck', 'จัดส่ง', shippingJobs),
+    ] },
     { title: 'สินค้า', items: [
       it('/admin/products', 'box', 'Pre-Order'),
       it('/admin/instock', 'store', 'In-Stock'),
@@ -50,7 +57,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/coupons', 'tag', 'คูปอง'),
     ] },
     { title: 'ออเดอร์', items: [
-      it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP + awaitingParcel),
+      it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP),
       it('/admin/sourcing', 'search', 'หาของ', db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length),
       it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด'),
       it('/admin/payment', 'payments', 'ตั้งค่าการเงิน'),

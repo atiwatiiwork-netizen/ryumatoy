@@ -46,8 +46,10 @@ export default function SlipApprovalPage() {
     let grantsAfter = grantsBefore;
     dispatch((d) => { grantsAfter = d.couponGrants.filter((g) => g.user_id === order.user_id).length; return d; });
     const mySubs = subsForUsers(db, [order.user_id]);
+    // in-stock (ของพร้อมส่ง) จ่ายครบตั้งแต่ซื้อ → ชวนไปเลือกวิธีรับของทันที (เคส Taweesin: ลูกค้าไม่รู้ว่าต้องเลือก)
+    const hasInStock = order.items.some((it) => db.products.find((p) => p.id === it.product_id)?.is_stock);
     if (pushEnabled(db, 'order_approved'))
-      sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋ว ${order.items.length} ใบเข้ากระเป๋าแล้ว — แตะเพื่อดู`, url: '/wallet' }, dispatch).catch(() => {});
+      sendPush(mySubs, { title: '✅ ออเดอร์อนุมัติแล้ว', body: `ตั๋ว ${order.items.length} ใบเข้ากระเป๋าแล้ว — ${hasInStock ? 'เลือกวิธีรับของได้เลย!' : 'แตะเพื่อดู'}`, url: '/wallet' }, dispatch).catch(() => {});
     if (grantsAfter > grantsBefore && pushEnabled(db, 'event_reward'))
       sendPush(mySubs, { title: '🎁 ได้รับคูปองจากกิจกรรม!', body: `คุณได้รับคูปอง ${grantsAfter - grantsBefore} ใบ — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
     // confirm any stock holds → real sale

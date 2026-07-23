@@ -40,6 +40,14 @@ export default function TicketDetailPage() {
   const { flash } = useToast();
   const CURRENT_USER_ID = useCurrentUserId();
 
+  // HOOKS ทั้งหมดต้องอยู่ก่อน early-return (Rules of Hooks) — เดิม useState อยู่หลัง "ไม่พบใบพรี" →
+  // เปิดลิงก์ตั๋วตรงๆ (จาก push/refresh): render แรกข้อมูลยังไม่มา = return สั้น, พอโหลดเสร็จ hooks เพิ่ม
+  // → "Rendered more hooks" หน้าขาวทั้งหน้า (เคสจริง Taweesin 2026-07-23: ไม่เห็นตัวเลือกวิธีรับของ)
+  const [paying, setPaying] = useState(false);
+  const [slip, setSlip] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [couponGrantId, setCouponGrantId] = useState<string>('');
+
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
   if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
 
@@ -48,7 +56,15 @@ export default function TicketDetailPage() {
   const pct = paidPercent(ticket.deposit_paid, ticket.remaining_amount, ticket.remaining_paid);
   const due = ticket.remaining_amount - ticket.remaining_paid;
   const isShipped = ticket.status === 'shipped';
-  const currentIdx = isShipped ? TIMELINE.length - 1 : TIMELINE.findIndex((s) => s.key === ticket.product_status);
+  // ตั๋ว IN-STOCK: timeline พรี (เปิดจอง→ผลิต→…) ไม่ตรงความจริง (เคยค้างที่ "เปิดจอง" — เคส Taweesin
+  // 2026-07-23). ใช้เส้นทางของจริงแทน: ชำระแล้ว → เลือกวิธีรับของ → รอจัดส่ง (รอเลขพัสดุ) → เสร็จสิ้น
+  const isStockTicket = product.is_stock;
+  const steps: string[] = isStockTicket
+    ? ['ชำระเงินแล้ว', 'เลือกวิธีรับของ', 'รอจัดส่ง', 'เสร็จสิ้น']
+    : TIMELINE.map((s) => s.label);
+  const currentIdx = isStockTicket
+    ? (isShipped ? 3 : ticket.delivery ? 2 : 1)
+    : (isShipped ? TIMELINE.length - 1 : TIMELINE.findIndex((s) => s.key === ticket.product_status));
   const carrierLabel: Record<string, string> = { ems: 'EMS', jt: 'J&T', flash: 'Flash', kerry: 'Kerry' };
   const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
   // warehouse-confirmed tickets carry their OWN start date + transport (ryuma-warehouse-spec) →
@@ -59,13 +75,9 @@ export default function TicketDetailPage() {
   const canPay = due > 0 && ['shipping', 'arrived', 'delivered'].includes(ticket.product_status);
   const pendingRP = db.remainingPayments.find((r) => r.ticket_id === ticket.id && r.status === 'pending');
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
-  const [paying, setPaying] = useState(false);
-  const [slip, setSlip] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   // pre-order coupon: reduces this final payment (only usable coupons that match this product)
   const eligibleCoupons = preorderCouponsForTicket(db, CURRENT_USER_ID, product);
-  const [couponGrantId, setCouponGrantId] = useState<string>('');
   const selectedCoupon = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
   const couponOff = selectedCoupon ? couponDiscount(selectedCoupon.coupon, due) : 0;
   const payable = Math.max(0, due - couponOff);
@@ -154,15 +166,15 @@ export default function TicketDetailPage() {
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 px-4 py-[18px]">
         <div className="relative flex justify-between">
           <div className="absolute left-3.5 right-3.5 top-[11px] h-0.5 bg-white/10" />
-          {TIMELINE.map((s, i) => {
-            const done = i < currentIdx;
-            const current = i === currentIdx;
+          {steps.map((label, i) => {
+            const done = i < currentIdx || (i === currentIdx && isShipped);
+            const current = i === currentIdx && !isShipped;
             return (
-              <div key={s.key} className="relative z-10 flex-1 text-center">
+              <div key={label} className="relative z-10 flex-1 text-center">
                 <div className={cx('mx-auto grid h-6 w-6 place-items-center rounded-full border-2', done ? 'border-[#16a34a] bg-[#16a34a]' : current ? 'animate-pulseRed border-[#dc2626] bg-[#dc2626]' : 'border-white/15 bg-surface-3')}>
                   {done && <Icon name="check" size={13} className="text-white" />}
                 </div>
-                <div className={cx('mt-1.5 text-[10.5px]', current ? 'font-bold text-ink' : 'text-ink-faint')}>{s.label}</div>
+                <div className={cx('mt-1.5 text-[10.5px]', current ? 'font-bold text-ink' : 'text-ink-faint')}>{label}</div>
               </div>
             );
           })}

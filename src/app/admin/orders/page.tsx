@@ -1,28 +1,20 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
-import { cx } from '@/components/ui';
-import { uploadImage } from '@/lib/upload';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { approveRemainingPayment, setParcel, acceptDelivery, closeDelivery } from '@/data/mutations';
-import { deliveryRequests, handoffQueue, parcelQueue, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
-import { productLabel, lineImage } from '@/domain/services/catalog';
-import { LabelSheet } from './LabelSheet';
+import { approveRemainingPayment } from '@/data/mutations';
+import { deliveryRequests, handoffQueue, parcelQueue } from '@/domain/services/delivery';
+import { lineImage } from '@/domain/services/catalog';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
-import type { Carrier, PreorderTicket } from '@/domain/entities';
+import type { PreorderTicket } from '@/domain/entities';
 
-const CARRIERS: { key: Carrier; label: string }[] = [
-  { key: 'ems', label: 'EMS' },
-  { key: 'jt', label: 'J&T' },
-  { key: 'flash', label: 'Flash' },
-  { key: 'kerry', label: 'Kerry' },
-];
-
+/** ศูนย์การเงินออเดอร์: สลิปมัดจำ + ส่วนต่าง + รอถึงไทย. งานจัดส่งทั้งหมดย้ายไปแท็บ "จัดส่ง"
+ *  (/admin/shipping — เจ้าของ 2026-07-23) เหลือแบนเนอร์ลิงก์ไว้ที่นี่. */
 export default function OrdersHubPage() {
   const router = useRouter();
   const db = useDatabase();
@@ -38,31 +30,24 @@ export default function OrdersHubPage() {
   const pendingOrders = db.orders.filter((o) => o.status === 'pending_approval');
   // §2 pending remaining-balance slips
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
-  // §4 paid, still travelling — info only
+  // §3 paid, still travelling — info only
   const waitingArrival = db.tickets.filter((t) => t.product_status === 'shipping' && paidFull(t));
-  // §4.5 delivery requests waiting for Accept (ryuma delivery spec) + accepted self-pickup/courier jobs
-  const dRequests = deliveryRequests(db);
-  const dHandoffs = handoffQueue(db);
-  // §5 ready to ship + no parcel yet → enter tracking (includes accepted in-stock deliveries)
-  const awaitingParcel = parcelQueue(db);
-  // §6 done
-  const shipped = db.tickets.filter((t) => t.status === 'shipped');
-
-  /** push แจ้งลูกค้าตอน Accept — ข้อความตามวิธีรับของ (gate เดียวกับ push พัสดุ). */
-  const pushAccept = (t: PreorderTicket) => {
-    if (!pushEnabled(db, 'parcel') || !t.delivery) return;
-    const body = t.delivery.method === 'courier' ? 'เรียกรถเข้ามารับของได้เลย — นัดเวลากับแอดมินทางแชท'
-      : t.delivery.method === 'pickup' ? 'เข้ามารับของได้เลย — นัดวัน-เวลากับแอดมินทางแชท'
-        : 'กำลังแพ็คของ รอแจ้งเลขพัสดุได้เลย';
-    sendPush(subsForUsers(db, [t.owner_id]), { title: '✅ ยืนยันวิธีรับของแล้ว', body, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
-  };
+  // งานจัดส่ง (ย้ายไป /admin/shipping) — นับไว้โชว์บนแบนเนอร์
+  const shippingJobs = deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
 
   return (
     <div>
       <div className="mb-[22px]">
         <div className="text-2xl font-extrabold">สลิป / ออเดอร์</div>
-        <div className="text-[13px] text-ink-faint">ศูนย์จัดการออเดอร์ · การเงิน · สถานะ · จัดส่ง</div>
+        <div className="text-[13px] text-ink-faint">ศูนย์จัดการออเดอร์ · การเงิน · สถานะ</div>
       </div>
+
+      {/* งานจัดส่งทั้งหมดอยู่แท็บ "จัดส่ง" แล้ว */}
+      <button onClick={() => router.push('/admin/shipping')} className="mb-[18px] flex w-full items-center gap-2.5 rounded-2xl border border-[#b91c1c]/40 bg-surface-2 p-4 text-left">
+        <Icon name="truck" size={18} className="text-[#f87171]" />
+        <span className="flex-1 text-sm font-bold text-ink">🚚 งานจัดส่ง {shippingJobs} รายการ — คำขอรับของ · ใบปะหน้า · ใส่เลขพัสดุ · ปิดงาน</span>
+        <span className="text-[13px] text-ink-muted2">ไปที่ จัดส่ง →</span>
+      </button>
 
       {/* §1 deposit slips */}
       <Section icon="copy" title="สลิปมัดจำรอตรวจ" count={pendingOrders.length} tone="amber">
@@ -100,7 +85,7 @@ export default function OrdersHubPage() {
                   <button onClick={() => {
                     dispatch(approveRemainingPayment(r.id));
                     if (pushEnabled(db, 'rp_approved'))
-                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ชำระครบ — รอจัดส่งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ชำระครบ — เลือกวิธีรับของได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
                     flash('อนุมัติส่วนต่างแล้ว');
                   }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
                 </div>
@@ -110,7 +95,7 @@ export default function OrdersHubPage() {
         )}
       </Section>
 
-      {/* §4 paid, travelling — info only */}
+      {/* §3 paid, travelling — info only */}
       <Section icon="truck" title="จ่ายแล้ว · รอถึงไทย" count={waitingArrival.length} tone="blue" sub="ไม่ต้องทำอะไร รอเลื่อนสถานะเป็นถึงไทย">
         {waitingArrival.length === 0 ? <Empty text="—" /> : (
           <div className="flex flex-col gap-2">
@@ -130,151 +115,12 @@ export default function OrdersHubPage() {
           </div>
         )}
       </Section>
-
-      {/* §4.5 delivery requests → Accept (ทุกวิธีรับของต้องผ่านแอดมินยืนยันก่อน) */}
-      <Section icon="bell" title="คำขอรับของ · รอยืนยัน" count={dRequests.length} tone="amber" sub="ลูกค้าเลือกวิธีรับของแล้ว → กด Accept: ส่งพัสดุจะเข้าคิวใบปะหน้า/Tracking · รถเข้ารับ-มารับเอง รอปิดงาน">
-        {dRequests.length === 0 ? <Empty text="ไม่มีคำขอค้าง" /> : (
-          <div className="flex flex-col gap-2.5">
-            {dRequests.map((t) => {
-              const to = resolveShipTo(db, t);
-              const isShip = t.delivery!.method === 'registered' || t.delivery!.method === 'custom';
-              return (
-                <div key={t.id} className="rounded-xl border border-subtle bg-surface-3 p-3.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <TicketThumb ticket={t} size={52} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold">{userName(t.owner_id)} <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span></div>
-                      <div className="truncate text-[12px] text-ink-muted2">{productLabel(db, t.product_id, t.variant_id)} ×{t.qty} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span></div>
-                      {isShip && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-ink-faint">📍 {to.name} {to.phone} · {to.address || '— ไม่มีที่อยู่ (ทักลูกค้า)'}</div>}
-                    </div>
-                    <button onClick={() => { dispatch(acceptDelivery(t.id)); pushAccept(t); flash(`ยืนยันแล้ว · ${DELIVERY_METHOD_LABEL[t.delivery!.method]}`); }}
-                      className="shrink-0 rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Accept</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Section>
-
-      {/* §4.6 accepted courier/pickup → admin closes when goods leave the shop (spec 7.3) */}
-      <Section icon="user" title="รถเข้ารับ / มารับเอง · รอปิดงาน" count={dHandoffs.length} tone="blue" sub="ของออกจากมือแล้ว → กดปิดงาน (ตั๋วจบกระบวนการ ไม่ต้องใส่เลขพัสดุ)">
-        {dHandoffs.length === 0 ? <Empty text="—" /> : (
-          <div className="flex flex-col gap-2">
-            {dHandoffs.map((t) => (
-              <div key={t.id} className="flex items-center justify-between gap-2.5 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5">
-                <TicketThumb ticket={t} size={44} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-semibold">{userName(t.owner_id)} <span className="rounded-md bg-[#2563eb]/20 px-1.5 py-0.5 text-[10.5px] font-bold text-[#60a5fa]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span></div>
-                  <div className="truncate text-[11.5px] text-ink-faint">{productLabel(db, t.product_id, t.variant_id)} ×{t.qty} · <span className="font-mono">{t.ticket_no}</span></div>
-                </div>
-                <button onClick={() => {
-                  if (!confirm(`ปิดงาน ${t.ticket_no} — ลูกค้ารับของแล้วใช่ไหม?`)) return;
-                  dispatch(closeDelivery(t.id));
-                  if (pushEnabled(db, 'parcel'))
-                    sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 รับของเรียบร้อย', body: 'ขอบคุณที่อุดหนุนริวมะครับ 🙏', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
-                  flash(`ปิดงานแล้ว · ${t.ticket_no} ✓`);
-                }} className="shrink-0 rounded-[9px] bg-cta px-3.5 py-2 text-[13px] font-bold text-white">ปิดงาน ✓</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {/* §4.7 ใบปะหน้าพัสดุ A4 (8 ช่อง) — รวมพรี+in-stock, ลูกค้าเดียวกัน = ช่องเดียว */}
-      <LabelSheet tickets={awaitingParcel} />
-
-      {/* §5 arrived + paid → enter parcel tracking (final step) */}
-      <Section icon="box" title="รอจัดส่ง · ใส่ Tracking พัสดุ" count={awaitingParcel.length} tone="red" sub="ถึงไทย + จ่ายครบ → เลือกขนส่ง + ใส่เลข = จบกระบวนการ">
-        {awaitingParcel.length === 0 ? <Empty text="ไม่มีพัสดุรอจัดส่ง" /> : (
-          <div className="flex flex-col gap-3">
-            {awaitingParcel.map((t) => {
-              const to = resolveShipTo(db, t);
-              return <ParcelRow key={t.id} ticket={t} label={`${productLabel(db, t.product_id, t.variant_id)} · ${userName(t.owner_id)}`} sub={`📍 ${to.name} ${to.phone} · ${to.address || '— ไม่มีที่อยู่'}`} dispatch={dispatch} flash={flash} />;
-            })}
-          </div>
-        )}
-      </Section>
-
-      {/* §6 done */}
-      {shipped.length > 0 && (
-        <Section icon="check" title="จัดส่งแล้ว (จบกระบวนการ)" count={shipped.length} tone="green">
-          <div className="flex flex-col gap-2">
-            {shipped.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13px]">
-                <TicketThumb ticket={t} size={40} />
-                <div className="min-w-0 flex-1 truncate"><span className="font-semibold">{productOf(t)?.series_name}</span> <span className="text-ink-faint">· {userName(t.owner_id)}</span></div>
-                <div className="flex shrink-0 items-center gap-2 text-ink-muted2">
-                  {t.parcel_no
-                    ? <><span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[11px] font-bold uppercase">{CARRIERS.find((c) => c.key === t.carrier)?.label ?? t.carrier}</span><span className="font-mono text-[11px]">{t.parcel_no}</span></>
-                    : <span className="rounded-md bg-[#16a34a]/15 px-2 py-0.5 text-[11px] font-bold text-[#4ade80]">{t.delivery ? DELIVERY_METHOD_LABEL[t.delivery.method] : 'รับแล้ว'} ✓</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-    </div>
-  );
-}
-
-/* ── parcel tracking row (final step) ───────────────────────────────────── */
-function ParcelRow({ ticket, label, sub, dispatch, flash }: {
-  ticket: PreorderTicket; label: string; sub?: string; dispatch: ReturnType<typeof useDispatch>; flash: (m: string) => void;
-}) {
-  const db = useDatabase();
-  const [carrier, setCarrier] = useState<Carrier | null>(null);
-  const [no, setNo] = useState('');
-  const [img, setImg] = useState<string | undefined>();
-  const [busy, setBusy] = useState(false);
-
-  const onImg = async (file?: File) => {
-    if (!file) return;
-    setBusy(true);
-    try { setImg(await uploadImage(file, 'parcel')); flash('แนบรูปแล้ว'); }
-    catch { flash('อัปโหลดไม่สำเร็จ'); }
-    finally { setBusy(false); }
-  };
-  const save = () => {
-    if (!carrier) return flash('เลือกขนส่งก่อน');
-    if (!no.trim()) return flash('ใส่เลขพัสดุก่อน');
-    dispatch(setParcel(ticket.id, carrier, no.trim(), img));
-    const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
-    if (pushEnabled(db, 'parcel'))
-      sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
-    flash(`จัดส่งแล้ว · ${ticket.ticket_no} จบกระบวนการ ✓`);
-  };
-
-  return (
-    <div className="rounded-xl border border-[#b91c1c]/30 bg-surface-3 p-3.5">
-      <div className="mb-2.5 flex items-center gap-2.5">
-        <TicketThumb ticket={ticket} size={44} />
-        <div className="min-w-0 flex-1 text-sm font-semibold">{label}</div>
-        <div className="shrink-0 font-mono text-[11px] text-ink-faint">{ticket.ticket_no}</div>
-      </div>
-      {sub && <div className="mb-2.5 -mt-1 line-clamp-2 text-[11.5px] text-ink-faint">{sub}</div>}
-      <div className="mb-2.5 flex flex-wrap gap-1.5">
-        {CARRIERS.map((c) => (
-          <button key={c.key} onClick={() => setCarrier(c.key)}
-            className={cx('rounded-lg border px-3 py-1.5 text-[12.5px] font-bold', carrier === c.key ? 'border-accent bg-primary text-white' : 'border-subtle bg-surface-2 text-ink-muted2')}>
-            {c.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input value={no} onChange={(e) => setNo(e.target.value)} placeholder="เลขพัสดุ (Tracking no)" className="flex-1 rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-ink placeholder:text-ink-faint" />
-        <label className={cx('grid cursor-pointer place-items-center rounded-lg border px-3 text-[12px]', img ? 'border-[#16a34a]/50 text-[#4ade80]' : 'border-subtle text-ink-faint')}>
-          <input type="file" accept="image/*" className="hidden" onChange={(e) => onImg(e.target.files?.[0])} />
-          {busy ? '…' : img ? '✓ รูป' : <Icon name="camera" size={16} />}
-        </label>
-        <button onClick={save} className="rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">จัดส่ง</button>
-      </div>
     </div>
   );
 }
 
 /* ── shared bits ────────────────────────────────────────────────────────── */
-/** รูปสินค้าจิ๋วประจำแถวคิว (เจ้าของ 2026-07-19: "เห็นรูปชัดเจน ทำงานง่ายขึ้น") — เคารพรูป variant. */
+/** รูปสินค้าจิ๋วประจำแถวคิว — เคารพรูป variant. */
 function TicketThumb({ ticket, size = 48 }: { ticket: PreorderTicket; size?: number }) {
   const db = useDatabase();
   const img = lineImage(db, ticket.product_id, ticket.variant_id);
