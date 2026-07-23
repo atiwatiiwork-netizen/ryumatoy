@@ -100,12 +100,25 @@ export default function SlipApprovalPage() {
           </div>
 
           <div className="mb-3.5 flex flex-col gap-2.5">
-            {order.items.map((item) => (
-              <div key={item.id} className="flex justify-between gap-2.5 text-[13px]">
-                <span className="text-ink-muted2">{productLabel(db, item.product_id, item.variant_id)} ×{item.qty}</span>
-                <span className="font-semibold">{baht(item.deposit_amount)}</span>
-              </div>
-            ))}
+            {order.items.map((item) => {
+              // ป้ายประเภทกระพริบ (เจ้าของ 2026-07-23): แยกให้เห็นทันทีว่าแต่ละรายการเป็นอะไร
+              // batch_id = รอบพิเศษ · is_stock = In-Stock · นอกนั้น = พรีออเดอร์
+              const prod = db.products.find((p) => p.id === item.product_id);
+              const kind = item.batch_id
+                ? { label: 'รอบพิเศษ', cls: 'bg-[#d97706]/20 text-[#fbbf24]' }
+                : prod?.is_stock
+                  ? { label: 'In-Stock', cls: 'bg-[#16a34a]/20 text-[#4ade80]' }
+                  : { label: 'พรีออเดอร์', cls: 'bg-[#b91c1c]/20 text-[#f87171]' };
+              return (
+                <div key={item.id} className="flex items-center justify-between gap-2.5 text-[13px]">
+                  <span className="min-w-0 text-ink-muted2">
+                    <span className={`mr-1.5 inline-block animate-blink rounded px-1.5 py-0.5 text-[9.5px] font-extrabold align-[1px] ${kind.cls}`}>{kind.label}</span>
+                    {productLabel(db, item.product_id, item.variant_id)} ×{item.qty}
+                  </span>
+                  <span className="shrink-0 font-semibold">{baht(item.deposit_amount)}</span>
+                </div>
+              );
+            })}
           </div>
 
           <div className="mb-3 rounded-xl bg-surface-3 p-3.5">
