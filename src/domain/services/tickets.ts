@@ -16,6 +16,27 @@ export function padTicketSeq(n: number): string {
   return String(n).padStart(4, '0');
 }
 
+/**
+ * Gate รอบพิเศษ (เจ้าของ 2026-07-23): ลูกค้าต้อง "เคยพรี" ถึงซื้อรอบพิเศษได้ — กันคนไม่พรีมาเอาแต่ของพิเศษ.
+ * นับเป็นใบพรี: ตั๋วทุกใบ ยกเว้นการซื้อ in-stock ล้วน (ไม่มี batch + สินค้า is_stock + ไม่มีส่วนต่าง).
+ * ตั๋วรอบพิเศษ/หาของ/ที่แอดมินมอบ นับหมด (= ลูกค้าพรีตัวจริง ทั้งในระบบและไล่เก็บนอกระบบ);
+ * ตั๋วพรีเก่าบน SKU ที่ถูก convert เป็น in-stock ทีหลังก็ยังนับ (มีส่วนต่างเป็นหลักฐานว่าเป็นพรี).
+ */
+export function hasPreorderTicket(db: Database, userId: string): boolean {
+  return db.tickets.some((t) => {
+    if (t.owner_id !== userId) return false;
+    if (t.batch_id) return true; // รอบพิเศษ / หาของ / มอบตั๋วสต๊อกใบพรี
+    const p = db.products.find((x) => x.id === t.product_id);
+    return !(p?.is_stock && t.remaining_amount === 0); // ตัดเฉพาะซื้อพร้อมส่งล้วน
+  });
+}
+
+/** ตะกร้านี้ซื้อรอบพิเศษได้ไหม: เคยมีใบพรีอยู่แล้ว หรือ ตะกร้าเดียวกันมีพรีปกติพ่วง (กำลังพรีอยู่ = ผ่าน). */
+export function canBuySpecialWithLines(db: Database, userId: string, lines: { productId: string; batchId?: string }[]): boolean {
+  if (hasPreorderTicket(db, userId)) return true;
+  return lines.some((l) => !l.batchId && !(db.products.find((p) => p.id === l.productId)?.is_stock));
+}
+
 /** How many tickets each prefix will need, from a list of product ids (one ticket per id) — used by the
  *  UI handler to reserve exactly that many numbers per prefix from the server before issuing. */
 export function ticketPrefixCounts(db: Database, productIds: string[], when = new Date()): Record<string, number> {

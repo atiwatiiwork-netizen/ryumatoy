@@ -1,7 +1,7 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, DeliveryMethod } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
-import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems } from '../domain/services/tickets';
+import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
 
 /** Build a ticket_no allocator for ONE mutation run. If a prefix has a server-reserved start number,
@@ -61,6 +61,9 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
  *  to verify, so the order is approved and the tickets are issued immediately (customer gets ตั๋วเลย). */
 export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply, startNos?: TicketNoStart) {
   return (db: Database): Database => {
+    // Gate รอบพิเศษ (เจ้าของ 2026-07-23): มีรายการ batch แต่ไม่เคยมีใบพรี + ตะกร้านี้ไม่มีพรีปกติพ่วง
+    // → ปัดตกทั้งออเดอร์ (authoritative guard — UI กันไว้ชั้นนอกแล้ว, กันยิงตรง/ตะกร้าค้างข้ามเครื่อง)
+    if (lines.some((l) => l.batchId) && !canBuySpecialWithLines(db, userId, lines)) return db;
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
     const items: OrderItem[] = lines.map((l) => {

@@ -14,7 +14,7 @@ import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
-import { ticketPrefixCounts } from '@/domain/services/tickets';
+import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel } from '@/domain/services/catalog';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
@@ -113,6 +113,10 @@ export default function CheckoutPage() {
 
   const submit = async () => {
     if ((!slip && !noPayment) || blockedByStock) return;
+    // Gate รอบพิเศษ (เจ้าของ 2026-07-23): มีรอบพิเศษในตะกร้าแต่ยังไม่มีใบพรี (และไม่มีพรีปกติพ่วง)
+    // — บล็อกก่อนโอนจริง (mutation ก็ guard ซ้ำ ชั้นนี้ไว้กันเงียบ + อธิบายลูกค้า)
+    if (validLines.some((l) => l.batchId) && !canBuySpecialWithLines(db, currentUserId, validLines))
+      return flash('🔒 รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เพิ่มพรีปกติลงตะกร้า หรือเปิดพรีก่อนนะครับ');
     setBusy(true);
     // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
     await Promise.all(resIds.map((rid) => payReservation(rid)));
@@ -125,6 +129,10 @@ export default function CheckoutPage() {
     // numbers from the server first (migration v47); seed/preview returns {} → mutation falls back.
     const startNos = noPayment ? await reserveTicketNos(ticketPrefixCounts(db, validLines.map((l) => l.productId))) : undefined;
     dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos));
+    // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
+    let submitted = false;
+    dispatch((d) => { submitted = d.orders.length > db.orders.length; return d; });
+    if (!submitted) { setBusy(false); return flash('ส่งออเดอร์ไม่สำเร็จ — ตรวจสิทธิ์รอบพิเศษ/รีเฟรชหน้าแล้วลองใหม่'); }
     cart.clear();
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.

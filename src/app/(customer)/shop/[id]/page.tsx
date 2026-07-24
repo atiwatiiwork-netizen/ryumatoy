@@ -13,6 +13,7 @@ import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
 import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining, dimensionLabel } from '@/domain/services/catalog';
 import { depositForRank } from '@/domain/services/ranks';
+import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { useSmartBack } from '@/lib/nav';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
@@ -66,8 +67,11 @@ export default function ProductDetailPage() {
   const avail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
   const soldOut = limited && (avail ?? 1) <= 0;
 
+  // Gate รอบพิเศษ (เจ้าของ 2026-07-23): ต้องเคยมีใบพรี (หรือมีพรีปกติในตะกร้า) ถึงซื้อรอบพิเศษได้
+  const specialLocked = !!batch && !canBuySpecialWithLines(db, CURRENT_USER_ID, cart.lines);
   const addToCart = () => {
     if (soldOut) return flash('สินค้าหมด/ถูกจองครบแล้ว');
+    if (specialLocked) return flash('รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เปิดพรีสักตัวก่อนนะครับ 🙏');
     cart.add({ productId: product.id, variantId: batch ? undefined : variantId, batchId: batch?.id, depositEach: deposit, priceEach: price });
     flash('เพิ่มลงตะกร้าแล้ว');
     router.push('/cart');
@@ -163,9 +167,17 @@ export default function ProductDetailPage() {
           {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : 'สินค้าเหลือน้อย · รีบจองก่อนหมด'}
         </div>
       )}
+      {/* Gate รอบพิเศษ: ลูกค้าที่ยังไม่มีใบพรี เห็นชัดว่าทำไมซื้อไม่ได้ + ชวนไปพรี (ไม่ใช่แค่ปุ่มเทา) */}
+      {specialLocked && !soldOut && (
+        <div className="mb-2.5 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-3">
+          <div className="flex items-center gap-2 text-[13px] font-bold text-[#fbbf24]"><Icon name="verified" size={16} /> 🔒 รอบพิเศษ เฉพาะลูกค้าที่มีใบพรี</div>
+          <div className="mt-0.5 text-[12px] text-ink-muted2">เปิดพรีกับร้านสักตัวก่อน แล้วกลับมารับสิทธิ์รอบพิเศษได้เลย — หรือหยิบพรีใส่ตะกร้าพร้อมกันก็ได้</div>
+          <Link href="/shop?cat=preorder" className="mt-1.5 inline-block text-[12.5px] font-bold text-primary-soft underline">ดูพรีออเดอร์ที่เปิดอยู่ →</Link>
+        </div>
+      )}
       <div className="flex gap-2.5">
         <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
-        <Button onClick={addToCart} icon="cart" disabled={soldOut}>{soldOut ? 'สินค้าหมด' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}</Button>
+        <Button onClick={addToCart} icon="cart" disabled={soldOut || specialLocked}>{soldOut ? 'สินค้าหมด' : specialLocked ? '🔒 เฉพาะลูกค้าที่มีใบพรี' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}</Button>
       </div>
 
       {/* others in the same series (arc) — collect the set */}
