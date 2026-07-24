@@ -39,6 +39,12 @@ const id = (p: string) => `${p}-${Date.now()}-${counter++}`;
 /** Generate a fresh id for a new catalog row (used by the admin forms). */
 export const genId = (prefix: string) => id(prefix);
 
+/** mirror เริ่มต้นของตั๋วใหม่: ซื้อจากรอบพิเศษ (batch) บน SKU ที่จบรอบก่อนไปแล้ว = การจองรอบใหม่
+ *  ต้องเริ่ม 'open' — ห้ามลาก arrived/delivered/closed ของรอบเก่ามา (ไม่งั้นตั๋วเกิดมา "ถึงไทย"
+ *  จ่ายส่วนต่าง/เข้าคิวจัดส่งได้ทั้งที่ของยังไม่ผลิต — audit 2026-07-23). */
+const mirrorStatusFor = (product: Product, batchId?: string | null): ProductStatus =>
+  batchId && ['arrived', 'delivered', 'closed'].includes(product.status) ? 'open' : product.status;
+
 /** Insert or replace a row by id within a collection. */
 function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
   const i = rows.findIndex((r) => r.id === row.id);
@@ -166,7 +172,9 @@ export const repairTickets = () => (db: Database): Database => {
         product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
         owner_id: order.user_id, original_buyer_id: order.user_id, qty: item.qty,
         deposit_paid: unitDeposit * item.qty, remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
-        remaining_paid: 0, status: 'active', product_status: product.status, qr_code_url: '',
+        // full-pay (in-stock) = paid_full ตั้งแต่เกิด — ให้ field status ตรงกับยอดจริงเหมือน grantSpecialTickets
+        remaining_paid: 0, status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
+        product_status: mirrorStatusFor(product, item.batch_id), qr_code_url: '',
         created_at: when, approved_at: when,
       });
     }
@@ -204,8 +212,9 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
         deposit_paid: unitDeposit * item.qty,
         remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
         remaining_paid: 0,
-        status: 'active',
-        product_status: product.status,
+        // full-pay (in-stock) = paid_full ตั้งแต่เกิด — field status ตรงกับยอดจริง (เหมือน grantSpecialTickets)
+        status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
+        product_status: mirrorStatusFor(product, item.batch_id),
         qr_code_url: '',
         created_at: now,
         approved_at: now,
@@ -1137,14 +1146,19 @@ export const setProductStatus = (productId: string, status: ProductStatus, extra
  * Record the in-Thailand parcel (carrier + tracking no + optional photo) for a single
  * ticket. This is the LAST step of the pre-order: the ticket is marked 'shipped' (done).
  */
-export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, image?: string) => (db: Database): Database => ({
-  ...db,
-  tickets: db.tickets.map((t) =>
-    t.id === ticketId
-      ? { ...t, carrier, parcel_no: parcelNo, parcel_image: image, status: 'shipped' as const, shipped_out_at: new Date().toISOString() }
-      : t,
-  ),
-});
+export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, image?: string) => (db: Database): Database => {
+  const t0 = db.tickets.find((t) => t.id === ticketId);
+  // shipped ไปแล้ว = no-op — กันกดซ้ำ (double-click) เขียนทับ shipped_out_at + push ซ้ำหาลูกค้า
+  if (!t0 || t0.status === 'shipped') return db;
+  return {
+    ...db,
+    tickets: db.tickets.map((t) =>
+      t.id === ticketId
+        ? { ...t, carrier, parcel_no: parcelNo, parcel_image: image, status: 'shipped' as const, shipped_out_at: new Date().toISOString() }
+        : t,
+    ),
+  };
+};
 
 /**
  * "ถึงไทยแล้ว" สำหรับพรีรอบพิเศษ — เลื่อนเฉพาะตั๋วของรอบ (batch) นั้น เป็น 'arrived'
@@ -1156,7 +1170,8 @@ export const arriveSpecialRound = (batchId: string) => (db: Database): Database 
   if (!b) return db;
   const pid = b.product_id;
   const p0 = db.products.find((x) => x.id === pid);
-  const cohort = db.tickets.filter((t) => t.batch_id === batchId && ['production', 'shipping'].includes(t.product_status));
+  // รวม mirror 'open' ด้วย — ตั๋วที่เกิดตอน SKU ยังสถานะเก่า (data drift) ต้องกดถึงไทยได้ ไม่ใช่ no-op เงียบ
+  const cohort = db.tickets.filter((t) => t.batch_id === batchId && ['open', 'production', 'shipping'].includes(t.product_status) && t.status !== 'shipped');
   const productMoving = !!p0 && !p0.is_stock && (p0.status === 'production' || p0.status === 'shipping');
   // ไม่มีอะไรกำลังเดินทางเลย (ตั๋วก็ไม่มี ของก็ไม่ได้เดิน เช่น full-pay ของอยู่ในมือ) → no-op กันกดมั่ว
   if (cohort.length === 0 && !productMoving) return db;
@@ -1196,6 +1211,9 @@ export const chooseDelivery = (ticketId: string, userId: string, method: Deliver
   if (t.remaining_paid < t.remaining_amount) return db; // ยังจ่ายไม่ครบ = ยังเลือกไม่ได้
   if (t.delivery?.accepted_at) return db; // แอดมินยืนยันแล้ว ห้ามสลับเอง (ให้ทักแอดมิน)
   if (method === 'custom' && !(custom?.name.trim() && custom.phone.trim() && custom.address.trim())) return db;
+  // ของต้องพร้อมส่งจริง (ถึงไทย/ส่งมอบ หรือ in-stock) — mirror ของ deliveryReady กันเลือกทั้งที่ของยังอยู่จีน
+  const prod = db.products.find((p) => p.id === t.product_id);
+  if (!['arrived', 'delivered'].includes(t.product_status) && !prod?.is_stock) return db;
   return {
     ...db,
     tickets: db.tickets.map((x) => (x.id === ticketId
@@ -1273,7 +1291,9 @@ export const closeProduction = (entries: { productId: string; finalQty: number }
       return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
     }),
     // ปิดใบพรี = เปิดจอง → ผลิต : ต้อง cascade สถานะลงทุกตั๋วเหมือน setProductStatus (ให้ 2 ฟีเจอร์ตรงกัน)
-    tickets: db.tickets.map((t) => (ids.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+    // cascade เฉพาะตั๋วรอบที่ยังจองอยู่ ('open') — ห้ามลากตั๋วรอบเก่าที่ arrived/shipped ถอยกลับมาผลิต
+    // (audit 2026-07-23: ตั๋วจบแล้วถอยสถานะ = หายจากคิวจัดส่งเงียบๆ)
+    tickets: db.tickets.map((t) => (ids.has(t.product_id) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
     boardLogs: entries.length
       ? [{ id: id('bl'), board_title: 'ปิดรอบสั่งผลิต', maker_id: makerId, closed_at: now, lines }, ...db.boardLogs]
       : db.boardLogs,
@@ -1465,7 +1485,8 @@ export const closeBoardWithProduction = (boardId: string, entries: { productId: 
       const final = Math.max(booked, byId.get(p.id)!);
       return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
     }),
-    tickets: db.tickets.map((t) => (byId.has(t.product_id) ? { ...t, product_status: 'production' } : t)),
+    // scope เดียวกับ closeProduction — เฉพาะตั๋ว 'open' ยังไม่ shipped (กัน bleed ข้ามรอบ)
+    tickets: db.tickets.map((t) => (byId.has(t.product_id) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
     boardLogs: [
       { id: id('bl'), board_id: boardId, board_title: board.title, maker_id: board.maker_id, closed_at: now, lines },
       ...db.boardLogs,

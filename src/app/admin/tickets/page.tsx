@@ -8,6 +8,8 @@ import { ProductThumb, cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import type { PreorderTicket, Product, ProductStatus } from '@/domain/entities';
 import { productLabel, orderedQtyOf } from '@/domain/services/catalog';
+import { ticketBadgeKey } from '@/domain/services/delivery';
+import { STATUS, type StatusKey } from '@/lib/theme';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const due = (t: PreorderTicket) => t.remaining_amount - t.remaining_paid;
@@ -53,15 +55,26 @@ export default function AdminTicketsPage() {
       }
       (byProduct.get(t.product_id) ?? byProduct.set(t.product_id, []).get(t.product_id)!).push(t);
     }
-    return STATUS_BUCKETS.map((bucket) => {
+    // In-Stock แยกหมวดของตัวเอง — SKU พร้อมส่ง status ค้าง 'open' ตลอด เคยไปนอนอยู่ใต้
+    // "เปิดพรีออเดอร์" ทั้งที่ไม่ใช่พรี (audit 2026-07-23)
+    const stockBucket = {
+      key: 'instock', label: '🛒 In-Stock พร้อมส่ง', statuses: [] as ProductStatus[], adminInfo: false, blink: false as boolean | undefined, tone: 'bg-[#7c3aed]',
+      products: db.products
+        .filter((p) => byProduct.has(p.id) && p.is_stock)
+        .map((p) => ({ product: p, tickets: byProduct.get(p.id)!.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) }))
+        .sort((a, b) => (a.product.manufacturer_id + a.product.series_name).localeCompare(b.product.manufacturer_id + b.product.series_name)),
+      tix: 0,
+    };
+    stockBucket.tix = stockBucket.products.reduce((s, p) => s + p.tickets.length, 0);
+    return [...STATUS_BUCKETS.map((bucket) => {
       const products = db.products
-        .filter((p) => byProduct.has(p.id) && bucket.statuses.includes(p.status))
+        .filter((p) => byProduct.has(p.id) && !p.is_stock && bucket.statuses.includes(p.status))
         .map((p) => ({ product: p, tickets: byProduct.get(p.id)!.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) }))
         // ค่าย → ชื่อ (คงการเรียงเดิมไว้ในหมวด)
         .sort((a, b) => (a.product.manufacturer_id + a.product.series_name).localeCompare(b.product.manufacturer_id + b.product.series_name));
       const tix = products.reduce((s, p) => s + p.tickets.length, 0);
       return { ...bucket, products, tix };
-    }).filter((b) => b.products.length > 0);
+    }), stockBucket].filter((b) => b.products.length > 0);
   }, [db, q, pay]);
 
   const shown = buckets.reduce((s, b) => s + b.tix, 0);
@@ -180,6 +193,8 @@ function BuyerList({ entry, onPick }: { entry: { product: Product; tickets: Preo
               <span className="flex min-w-[140px] flex-1 items-center gap-2 text-[13px] font-semibold"><Icon name="user" size={13} className="text-primary-soft" /> <span className="truncate">{owner?.display_name ?? '—'}</span></span>
               <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
               {t.qty > 1 && <span className="text-[11.5px] text-ink-muted">×{t.qty}</span>}
+              {/* สถานะจริงรายใบ (ส่งแล้ว/รอจัดส่ง/จ่ายครบ ≠ กันหมด) — เดิม "ครบ ✓" อย่างเดียวแยกไม่ออก */}
+              {(() => { const k = ticketBadgeKey(t) as StatusKey; const s = STATUS[k]; return s ? <span className={cx('rounded-md border px-1.5 py-0.5 text-[10px] font-bold', s.cls)}>{s.label}</span> : null; })()}
               <span className={cx('w-[90px] text-right text-[12px] font-bold', d > 0 ? 'text-primary-soft' : 'text-[#4ade80]')}>{d > 0 ? `ค้าง ${baht(d)}` : 'ครบ ✓'}</span>
               <span className="w-[70px] text-right text-[11px] text-ink-faint">{fmtDate(t.created_at)}</span>
             </button>

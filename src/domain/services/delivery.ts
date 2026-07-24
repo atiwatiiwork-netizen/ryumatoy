@@ -35,7 +35,10 @@ export const ticketDone = (t: PreorderTicket): boolean =>
 export const ticketBadgeKey = (t: PreorderTicket): string => {
   if (t.status === 'shipped') return 'shipped';
   if (t.delivery && ticketPaidFull(t)) return 'awaiting_ship';
-  if (t.status === 'paid_full') return 'paid_full';
+  // ตัดสินด้วยยอดจริง ไม่ใช่ field status — ตั๋ว in-stock จาก checkout เกิดมา remaining 0/0 แต่
+  // status ค้าง 'active' ตลอด (มีแต่ admin approve ส่วนต่าง/grant ที่เซ็ต 'paid_full') → เคยโชว์ "เปิดจอง"
+  // ทั้งที่จ่ายครบ (audit 2026-07-23, เคส Taweesin)
+  if (t.status === 'paid_full' || ticketPaidFull(t)) return 'paid_full';
   return t.product_status;
 };
 
@@ -66,7 +69,8 @@ export const resolveShipTo = (db: Database, t: PreorderTicket): ShipTo => {
  */
 export const parcelQueue = (db: Database): PreorderTicket[] =>
   db.tickets.filter((t) => {
-    if (t.parcel_no || t.status === 'shipped' || !ticketPaidFull(t)) return false;
+    // มี parcel_no แต่ status ยังไม่ shipped = เซฟครึ่งเดียว (split-flush) — คงไว้ในคิวให้แอดมินกรอกซ้ำ
+    if (t.status === 'shipped' || !ticketPaidFull(t)) return false;
     if (!t.delivery) return t.product_status === 'arrived'; // flow เดิม (ตั๋วก่อน v52)
     return !!t.delivery.accepted_at && (t.delivery.method === 'registered' || t.delivery.method === 'custom');
   });
@@ -77,7 +81,8 @@ export const parcelQueue = (db: Database): PreorderTicket[] =>
  * ตั๋วพวกนั้นไหลเข้า parcelQueue ตาม flow เดิมอยู่แล้ว.
  */
 export const awaitingChoice = (db: Database): PreorderTicket[] =>
-  db.tickets.filter((t) => !t.delivery && !t.parcel_no && t.product_status !== 'arrived' && deliveryReady(db, t));
+  // 'delivered' legacy (ไม่มี delivery/parcel) = ส่งมอบตาม flow เก่าไปแล้ว — อย่าชวนแอดมินทวงลูกค้าซ้ำ
+  db.tickets.filter((t) => !t.delivery && !t.parcel_no && !['arrived', 'delivered'].includes(t.product_status) && deliveryReady(db, t));
 
 /** คำขอรับของที่รอแอดมิน Accept. */
 export const deliveryRequests = (db: Database): PreorderTicket[] =>

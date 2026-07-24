@@ -21,8 +21,11 @@ type Tab = 'all' | 'preorder' | 'shipping' | 'done' | 'coupon';
 // และตั๋ว shipped/delivered ของ in-stock ไม่เข้าแท็บไหนเลย → ตัดสินด้วย "จบ/จ่ายครบ" ก่อนเสมอ
 function matchTab(tab: Tab, t: PreorderTicket): boolean {
   if (tab === 'all') return true;
-  if (tab === 'done') return ticketDone(t);
-  if (tab === 'shipping') return t.product_status === 'shipping';
+  // จ่ายครบแต่ของยังเดินทางอยู่ = "กำลังเดินทาง" อย่างเดียว (เคยโผล่ 2 แท็บพร้อมกัน audit 2026-07-23);
+  // ตั๋วจบงาน (shipped) อยู่ "เรียบร้อย" เสมอ
+  const inTransit = t.product_status === 'shipping' && t.status !== 'shipped';
+  if (tab === 'done') return ticketDone(t) && !inTransit;
+  if (tab === 'shipping') return inTransit;
   return (t.product_status === 'open' || t.product_status === 'production') && !ticketDone(t); // ใบพรีที่ยังเดินอยู่
 }
 

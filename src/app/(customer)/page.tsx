@@ -45,15 +45,20 @@ export default function HomePage() {
             {myTickets.map((t) => {
               const product = db.products.find((p) => p.id === t.product_id)!;
               const due = t.remaining_amount - t.remaining_paid;
-              const sub = t.status === 'shipped' ? 'เสร็จสิ้น รับของเรียบร้อย ✓' : t.status === 'paid_full' || due <= 0 ? 'จ่ายครบแล้ว ✓' : t.product_status === 'arrived' ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
+              // ข้อความ + สี ผูกกับ ticketBadgeKey ตัวเดียว — ห้ามตัดสินเองจาก field ดิบ (การ์ดเคยขัดแย้งกันเอง)
+              const badgeKey = ticketBadgeKey(t);
+              const sub = badgeKey === 'shipped' ? 'เสร็จสิ้น รับของเรียบร้อย ✓'
+                : badgeKey === 'awaiting_ship' ? 'รอจัดส่ง — เลือกวิธีรับของแล้ว ✓'
+                : badgeKey === 'paid_full' || due <= 0 ? 'จ่ายครบแล้ว ✓'
+                : t.product_status === 'arrived' ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
               return (
                 <Link key={t.id} href="/wallet" className="min-w-[168px] rounded-card border border-subtle bg-surface-2 p-4 lg:min-w-0">
                   <div className="mb-2.5 flex items-center justify-between">
                     <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span>
-                    <StatusBadge status={ticketBadgeKey(t) as StatusKey} />
+                    <StatusBadge status={badgeKey as StatusKey} />
                   </div>
                   <div className="mb-3 text-[15px] font-bold leading-tight">{product.series_name}</div>
-                  <ProgressBar pct={paidPercent(t.deposit_paid, t.remaining_amount, t.remaining_paid)} fill={STATUS_FILL[t.product_status as StatusKey]} />
+                  <ProgressBar pct={paidPercent(t.deposit_paid, t.remaining_amount, t.remaining_paid)} fill={STATUS_FILL[badgeKey as StatusKey]} />
                   <div className={`mt-2.5 text-xs ${due > 0 ? 'text-ink-muted' : 'text-[#4ade80]'}`}>{sub}</div>
                 </Link>
               );

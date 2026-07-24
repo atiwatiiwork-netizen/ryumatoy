@@ -130,7 +130,8 @@ export function LabelSheet({ tickets }: { tickets: PreorderTicket[] }) {
     <div className="mb-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 flex items-center gap-2 text-base font-bold text-ink">
         <Icon name="copy" size={18} className="text-[#c4b5fd]" /> <span>ใบปะหน้าพัสดุ A4 · 8 ช่อง</span>
-        <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{slots.length}</span>
+        {/* นับเป็น "ช่อง" (ลูกค้า+ที่อยู่) ไม่เท่าจำนวนตั๋ว — บอกคู่กันกันงงกับเลขคิวเลขพัสดุ */}
+        <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{tickets.length} ใบ / {slots.length} ช่อง</span>
       </div>
       <div className="mb-3 text-[11.5px] text-ink-faint">รวมพรี + In Stock รอบเดียวกัน · ลูกค้าเดียวกัน = ช่องเดียว (หลายสินค้าหลายบรรทัด) · ปริ้นแล้วตัดตามเส้นประ</div>
 

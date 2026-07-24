@@ -14,7 +14,7 @@ import { memoPhase, memoEtaLabel } from '@/domain/services/sourcing';
 import { memoCustomersOf, type SourcingMemo } from '@/domain/entities';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
 import { orphanUsedGrants } from '@/domain/services/coupons';
-import { deliveryRequests, parcelQueue, handoffQueue, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
+import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
 import { productLabel, lineImage, canConvertToInStock, stockRemaining } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
 import type { ProductStatus, PreorderTicket } from '@/domain/entities';
@@ -34,6 +34,7 @@ export default function AdminDashboardPage() {
   const zeroItemOrders = db.orders.filter((o) => (o.status === 'pending_approval' || o.status === 'approved') && o.items.length === 0);
   const orphanGrants = orphanUsedGrants(db).length; // coupon burned, its order/rp never landed (self-heals client-side)
   const hasAnomaly = lostTickets.length > 0 || zeroItemOrders.length > 0 || orphanGrants > 0;
+  // (delivery-state anomalies คำนวณด้านล่างหลังคิวจัดส่ง — โชว์รวมในแบนเนอร์เดียวกัน)
 
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
@@ -130,11 +131,16 @@ export default function AdminDashboardPage() {
     );
   };
 
-  // ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง (คิวการรับของทั้ง 3 ขั้น รวมที่เดียว) ──
+  // ── หมวดใหญ่ 2: สินค้าที่ต้องจัดส่ง (ครบ 4 คิว — สูตรเดียวกับ badge แท็บจัดส่ง) ──
+  const dChoice = awaitingChoice(db);
   const dReq = deliveryRequests(db);
   const dParcel = parcelQueue(db);
   const dHandoff = handoffQueue(db);
-  const toShipTotal = dReq.length + dParcel.length + dHandoff.length;
+  const toShipTotal = dChoice.length + dReq.length + dParcel.length + dHandoff.length;
+  // watchdog สถานะเพี้ยน (audit 2026-07-23): (1) delivery accepted แต่ยอดค้าง (editTicketDeposit ย้อนหลัง)
+  // — หลุดทุกคิวถ้าไม่เตือน (2) มีเลขพัสดุแต่ status ไม่ shipped (split-flush ครึ่งเดียว)
+  const acceptedUnpaid = db.tickets.filter((t) => t.delivery?.accepted_at && !ticketPaidFull(t) && t.status !== 'shipped');
+  const parcelNotShipped = db.tickets.filter((t) => t.parcel_no && t.status !== 'shipped');
 
   // พรีที่จบแล้ว มีของเหลือ พร้อมแปลงเป็นสินค้า in-stock (ให้แอดมินตั้งราคาขาย) — เจ้าของ 2026-07-20
   const convertible = db.products.filter((p) => canConvertToInStock(db, p));
@@ -160,13 +166,15 @@ export default function AdminDashboardPage() {
         <Stat label="Stock ใกล้หมด" value={String(lowStock)} icon="bolt" />
       </div>
 
-      {hasAnomaly && (
+      {(hasAnomaly || acceptedUnpaid.length > 0 || parcelNotShipped.length > 0) && (
         <div className="mb-[22px] rounded-2xl border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] p-5">
-          <div className="mb-2 flex items-center gap-2 font-bold text-primary-soft"><Icon name="warning" size={18} /> พบข้อมูลขาดจากการเซฟไม่สมบูรณ์ (มือถือหลุดกลางเซฟ)</div>
+          <div className="mb-2 flex items-center gap-2 font-bold text-primary-soft"><Icon name="warning" size={18} /> พบข้อมูลขาดจากการเซฟไม่สมบูรณ์ / สถานะเพี้ยน</div>
           <ul className="mb-3 list-inside list-disc text-[12.5px] leading-relaxed text-ink-muted2">
             {lostTickets.length > 0 && <li>ตั๋วหายจากออเดอร์ที่อนุมัติแล้ว <b className="text-ink">{lostTickets.length} ใบ · {lostPeople} คน</b> — กู้เองเมื่อลูกค้าเปิดแอป หรือกดซ่อมด้านล่าง</li>}
             {zeroItemOrders.length > 0 && <li>ออเดอร์ไม่มีรายการสินค้า <b className="text-ink">{zeroItemOrders.length} ออเดอร์</b> — อนุมัติไม่ได้ ให้ปฏิเสธแล้วแจ้งลูกค้าสั่งใหม่</li>}
             {orphanGrants > 0 && <li>คูปองถูกใช้แต่ออเดอร์/สลิปไม่สมบูรณ์ <b className="text-ink">{orphanGrants} ใบ</b> — ระบบคืนให้เองเมื่อลูกค้าเปิดแอป</li>}
+            {acceptedUnpaid.length > 0 && <li>รับเรื่องจัดส่งแล้วแต่ยอดยังไม่ครบ <b className="text-ink">{acceptedUnpaid.map((t) => t.ticket_no).join(', ')}</b> — เก็บเงินก่อนส่ง (เกิดจากแก้มัดจำย้อนหลัง)</li>}
+            {parcelNotShipped.length > 0 && <li>มีเลขพัสดุแต่สถานะตั๋วไม่จบ <b className="text-ink">{parcelNotShipped.map((t) => t.ticket_no).join(', ')}</b> — เซฟไม่สมบูรณ์ ให้กรอกเลขซ้ำในแท็บจัดส่ง</li>}
           </ul>
           {lostTickets.length > 0 && (
             <button onClick={() => { dispatch(repairTickets()); flash(`ซ่อมตั๋วแล้ว ${lostTickets.length} ใบ ✓`); }} className="rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">🔧 ซ่อมตั๋วทั้งหมดตอนนี้</button>
@@ -217,18 +225,21 @@ export default function AdminDashboardPage() {
             <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] text-ink-muted2">{toShipTotal}</span>
           </div>
           <div className="mb-3 flex flex-wrap gap-1.5 text-[11.5px]">
+            {dChoice.length > 0 && <span className="rounded-md bg-[#7c3aed]/25 px-2 py-0.5 font-bold text-[#c084fc]">รอลูกค้าเลือกวิธีรับ {dChoice.length}</span>}
             {dReq.length > 0 && <span className="rounded-md bg-[#d97706]/20 px-2 py-0.5 font-bold text-[#fbbf24]">รอยืนยันคำขอ {dReq.length}</span>}
             {dParcel.length > 0 && <span className="rounded-md bg-[#b91c1c]/20 px-2 py-0.5 font-bold text-[#f87171]">รอแจ้งเลขพัสดุ {dParcel.length}</span>}
             {dHandoff.length > 0 && <span className="rounded-md bg-[#2563eb]/20 px-2 py-0.5 font-bold text-[#60a5fa]">รถเข้ารับ/มารับเอง {dHandoff.length}</span>}
           </div>
           <div className="grid gap-2.5 lg:grid-cols-2">
             {[
+              ...dChoice.map((t) => ({ t, tone: 'text-[#c084fc]', tag: 'รอลูกค้าเลือกวิธีรับ' })),
               ...dReq.map((t) => ({ t, tone: 'text-[#fbbf24]', tag: 'รอยืนยัน' })),
               ...dParcel.map((t) => ({ t, tone: 'text-[#f87171]', tag: 'รอแจ้งเลขพัสดุ' })),
               ...dHandoff.map((t) => ({ t, tone: 'text-[#60a5fa]', tag: 'รอปิดงาน' })),
-            ].slice(0, 8).map(({ t, tone, tag }) => <ToShipCard key={t.id} ticket={t} tone={tone} tag={tag} onGo={() => router.push('/admin/orders')} />)}
+            ].slice(0, 8).map(({ t, tone, tag }) => <ToShipCard key={t.id} ticket={t} tone={tone} tag={tag} onGo={() => router.push('/admin/shipping')} />)}
           </div>
-          <button onClick={() => router.push('/admin/orders')} className="mt-3 w-full rounded-xl bg-cta py-2.5 text-[13.5px] font-bold text-white">
+          {/* งานจัดส่งย้ายไปแท็บ "จัดส่ง" แล้ว (เดิมชี้ /admin/orders ที่เหลือแต่การเงิน — audit 2026-07-23) */}
+          <button onClick={() => router.push('/admin/shipping')} className="mt-3 w-full rounded-xl bg-cta py-2.5 text-[13.5px] font-bold text-white">
             ไปจัดการจัดส่งทั้งหมด ({toShipTotal}) →
           </button>
         </div>

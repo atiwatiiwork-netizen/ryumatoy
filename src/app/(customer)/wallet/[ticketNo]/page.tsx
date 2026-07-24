@@ -58,13 +58,18 @@ export default function TicketDetailPage() {
   const isShipped = ticket.status === 'shipped';
   // ตั๋ว IN-STOCK: timeline พรี (เปิดจอง→ผลิต→…) ไม่ตรงความจริง (เคยค้างที่ "เปิดจอง" — เคส Taweesin
   // 2026-07-23). ใช้เส้นทางของจริงแทน: ชำระแล้ว → เลือกวิธีรับของ → รอจัดส่ง (รอเลขพัสดุ) → เสร็จสิ้น
-  const isStockTicket = product.is_stock;
+  // เฉพาะตั๋วที่ "ซื้อแบบพร้อมส่ง" (จ่ายเต็มไม่มีส่วนต่าง) — ตั๋วพรีเดิมบน SKU ที่เพิ่งถูก convert
+  // เป็น in-stock ต้องยังใช้ timeline พรี (ไม่งั้นขึ้น "ชำระเงินแล้ว ✓" ทั้งที่ค้างส่วนต่าง)
+  const isStockTicket = product.is_stock && ticket.remaining_amount === 0;
   const steps: string[] = isStockTicket
     ? ['ชำระเงินแล้ว', 'เลือกวิธีรับของ', 'รอจัดส่ง', 'เสร็จสิ้น']
     : TIMELINE.map((s) => s.label);
   const currentIdx = isStockTicket
     ? (isShipped ? 3 : ticket.delivery ? 2 : 1)
-    : (isShipped ? TIMELINE.length - 1 : TIMELINE.findIndex((s) => s.key === ticket.product_status));
+    // 'closed'/สถานะนอก TIMELINE → findIndex คืน -1 (ไม่มีขั้นไหนติดไฟเลย) → ถือเป็นจบเส้นทาง
+    : (isShipped || TIMELINE.findIndex((s) => s.key === ticket.product_status) === -1
+        ? TIMELINE.length - 1
+        : TIMELINE.findIndex((s) => s.key === ticket.product_status));
   const carrierLabel: Record<string, string> = { ems: 'EMS', jt: 'J&T', flash: 'Flash', kerry: 'Kerry' };
   const eta = ticket.product_status === 'shipping' ? computeEta(db.settings, product.shipped_at) : null;
   // warehouse-confirmed tickets carry their OWN start date + transport (ryuma-warehouse-spec) →
@@ -274,8 +279,13 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
     if (method === 'custom' && !(name.trim() && phone.trim() && addr.trim())) return flash('กรอก ชื่อ / เบอร์ / ที่อยู่ ให้ครบ');
     setBusy(true);
     dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method, method === 'custom' ? { name, phone, address: addr } : undefined));
+    // read-back: mutation guard อาจ no-op (แอดมินเพิ่ง accept / จ่ายไม่ครบจาก state ใหม่) —
+    // ห้าม flash สำเร็จ + ping LINE ทั้งที่ไม่มีอะไรเปลี่ยน (audit 2026-07-23 false-success class)
+    let applied = false;
+    dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.delivery?.method === method && !x.delivery.accepted_at; return d; });
     try { await store.flush(); } catch { /* persist error surface via onPersistError */ }
     setBusy(false);
+    if (!applied) { flash('ส่งคำขอไม่สำเร็จ — รีเฟรชหน้าแล้วลองใหม่ หรือทักแอดมิน'); return; }
     notifyAdminLine(`📦 คำขอรับของใหม่: ${ticket.ticket_no} · ${DELIVERY_METHOD_LABEL[method]}`);
     flash('ส่งคำขอแล้ว · รอแอดมินยืนยัน');
     setChoosing(false);

@@ -39,8 +39,19 @@ export default function ShippingPage() {
   const recentShipped = db.tickets.filter((t) => t.status === 'shipped').sort((a, b) => ((a.shipped_out_at ?? '') < (b.shipped_out_at ?? '') ? 1 : -1)).slice(0, 10);
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
 
+  // read-back หลัง dispatch — mutation guard อาจ no-op (แท็บอื่นจัดการไปแล้ว/สถานะเปลี่ยน):
+  // ห้าม flash ✓ + push หาลูกค้าทั้งที่ไม่มีอะไรเกิดขึ้น (audit 2026-07-23 false-success class)
+  const verify = (ticketId: string, pred: (t: PreorderTicket) => boolean) => {
+    let ok = false;
+    dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticketId); ok = !!x && pred(x); return d; });
+    return ok;
+  };
+  const staleFlash = () => flash('รายการนี้ถูกจัดการไปแล้ว/สถานะเปลี่ยน — ตรวจหน้าอีกครั้ง');
+  const dueOf = (t: PreorderTicket) => t.remaining_amount - t.remaining_paid;
+
   const accept = (t: PreorderTicket) => {
     dispatch(acceptDelivery(t.id));
+    if (!verify(t.id, (x) => !!x.delivery?.accepted_at)) return staleFlash();
     if (pushEnabled(db, 'parcel') && t.delivery) {
       const body = t.delivery.method === 'courier' ? 'เรียกรถเข้ามารับของได้เลย — นัดเวลากับแอดมินทางแชท'
         : t.delivery.method === 'pickup' ? 'เข้ามารับของได้เลย — นัดวัน-เวลากับแอดมินทางแชท'
@@ -51,8 +62,10 @@ export default function ShippingPage() {
   };
 
   const closeJob = (t: PreorderTicket) => {
-    if (!confirm(`ปิดงาน ${t.ticket_no} — ลูกค้ารับของแล้วใช่ไหม?`)) return;
+    const warn = dueOf(t) > 0 ? `\n⚠ ตั๋วนี้ยังค้างชำระ ${baht(dueOf(t))} — เก็บเงินก่อนปิดงาน!` : '';
+    if (!confirm(`ปิดงาน ${t.ticket_no} — ลูกค้ารับของแล้วใช่ไหม?${warn}`)) return;
     dispatch(closeDelivery(t.id));
+    if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 รับของเรียบร้อย', body: 'ขอบคุณที่อุดหนุนริวมะครับ 🙏', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
     flash(`ปิดงานแล้ว · ${t.ticket_no} ✓`);
@@ -69,6 +82,7 @@ export default function ShippingPage() {
     if (!confirm(`จัดส่ง ${t.ticket_no} ตามที่อยู่ที่ลงทะเบียนของ ${u?.display_name}?\n📍 ${u?.shipping_address}`)) return;
     dispatch(chooseDelivery(t.id, t.owner_id, 'registered'));
     dispatch(acceptDelivery(t.id));
+    if (!verify(t.id, (x) => x.delivery?.method === 'registered' && !!x.delivery.accepted_at)) return staleFlash();
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [t.owner_id]), { title: '✅ รับเรื่องจัดส่งแล้ว', body: 'แอดมินจัดส่งตามที่อยู่ที่ลงทะเบียนให้ — รอเลขพัสดุได้เลย', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
     flash(`เข้าคิวจัดส่งแล้ว · ${t.ticket_no} ✓`);
@@ -76,6 +90,7 @@ export default function ShippingPage() {
   const closeOffline = (t: PreorderTicket) => {
     if (!confirm(`ปิดงาน ${t.ticket_no} — ตั๋วนี้ส่ง/รับของกันนอกระบบไปแล้วใช่ไหม? (ไม่ push หาลูกค้า)`)) return;
     dispatch(markShippedOffline(t.id));
+    if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
     flash(`ปิดงานนอกระบบ · ${t.ticket_no} ✓`);
   };
 
@@ -146,6 +161,7 @@ export default function ShippingPage() {
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <span className="rounded-md bg-[#d97706]/20 px-1.5 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span>
                         <span className="text-[10.5px] text-ink-faint">ขอเมื่อ {fmtDate(t.delivery!.requested_at)}</span>
+                        {dueOf(t) > 0 && <span className="animate-blink rounded-md bg-[#b91c1c]/25 px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#f87171]">⚠ ค้างชำระ {baht(dueOf(t))}</span>}
                       </div>
                       {isShip && <div className="mt-1 line-clamp-2 text-[11.5px] text-ink-faint">📍 {to.name} {to.phone} · {to.address || '— ไม่มีที่อยู่ (ทักลูกค้า)'}</div>}
                     </div>
@@ -179,7 +195,7 @@ export default function ShippingPage() {
                 <Thumb ticket={t} size={44} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-semibold">{productLabel(db, t.product_id, t.variant_id)}{t.qty > 1 ? ` ×${t.qty}` : ''}</div>
-                  <div className="text-[11.5px] text-ink-faint">{userName(t.owner_id)} · <span className="rounded bg-[#2563eb]/20 px-1 py-0.5 text-[10px] font-bold text-[#60a5fa]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span> · รับเรื่อง {fmtDate(t.delivery!.accepted_at)}</div>
+                  <div className="text-[11.5px] text-ink-faint">{userName(t.owner_id)} · <span className="rounded bg-[#2563eb]/20 px-1 py-0.5 text-[10px] font-bold text-[#60a5fa]">{DELIVERY_METHOD_LABEL[t.delivery!.method]}</span> · รับเรื่อง {fmtDate(t.delivery!.accepted_at)}{dueOf(t) > 0 && <span className="ml-1.5 animate-blink rounded bg-[#b91c1c]/25 px-1 py-0.5 text-[10px] font-extrabold text-[#f87171]">⚠ ค้างชำระ {baht(dueOf(t))}</span>}</div>
                 </div>
                 <button onClick={() => closeJob(t)} className="shrink-0 rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">ปิดงาน ✓</button>
               </div>
@@ -229,9 +245,16 @@ function TrackRow({ ticket }: { ticket: PreorderTicket }) {
     finally { setBusy(false); }
   };
   const ship = () => {
+    if (busy) return; // กันดับเบิลคลิก = push "ส่งแล้ว" ซ้ำหาลูกค้า
     if (!carrier) return flash('เลือกขนส่งก่อน');
     if (!no.trim()) return flash('ใส่เลขพัสดุก่อน');
+    setBusy(true);
     dispatch(setParcel(ticket.id, carrier, no.trim(), img));
+    // read-back: setParcel no-op ถ้าตั๋ว shipped ไปแล้ว (แท็บอื่นชิงกด) — อย่า push/flash ซ้ำ
+    let applied = false;
+    dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.status === 'shipped' && x.parcel_no === no.trim(); return d; });
+    setBusy(false);
+    if (!applied) return flash('ตั๋วนี้ถูกจัดส่งไปแล้ว — ตรวจหน้าอีกครั้ง');
     const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
     // push "ส่งแล้ว" ให้ลูกค้าทันทีหลังกรอกเลข (เจ้าของ 2026-07-23 ข้อ 3)
     if (pushEnabled(db, 'parcel'))

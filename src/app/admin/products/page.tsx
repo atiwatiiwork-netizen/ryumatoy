@@ -632,8 +632,9 @@ function Products() {
     dispatch(upsertProduct(product));
     // variant products: each variant carries its own price; ALL share product.deposit_amount (sharedDeposit)
     dispatch(setProductVariants(product.id, draft.variants.map((v) => ({ id: v.id, name: v.name, price_total: Number(v.price), image_url: v.image }))));
-    // cascade the lifecycle status to this product's tickets (customer wallet tracking)
-    dispatch(setProductStatus(product.id, product.status));
+    // cascade สถานะลงตั๋วเฉพาะเมื่อ "สถานะเปลี่ยนจริง" — เซฟรูป/ราคา/คำอธิบายห้ามไปทับ
+    // product_status รายตั๋ว (รอบพิเศษ arrived / warehouse-confirmed shipping จะโดนล้างหมด, audit 2026-07-23)
+    if (!existing || existing.status !== product.status) dispatch(setProductStatus(product.id, product.status));
     // push notifications — best-effort, never blocks the save (ryuma push spec 1/2/4);
     // honors the Push Control switches + each customer's ค่าย/เรื่อง filter
     if (!editing) {

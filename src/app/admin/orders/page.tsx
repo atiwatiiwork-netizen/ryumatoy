@@ -30,8 +30,8 @@ export default function OrdersHubPage() {
   const pendingOrders = db.orders.filter((o) => o.status === 'pending_approval');
   // §2 pending remaining-balance slips
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
-  // §3 paid, still travelling — info only
-  const waitingArrival = db.tickets.filter((t) => t.product_status === 'shipping' && paidFull(t));
+  // §3 paid, still producing/travelling — info only (จ่ายครบแล้วแต่ของยังไม่ถึงไทย ทั้งขาผลิต+ขาเดินทาง)
+  const waitingArrival = db.tickets.filter((t) => ['production', 'shipping'].includes(t.product_status) && paidFull(t) && t.status !== 'shipped');
   // งานจัดส่ง (ย้ายไป /admin/shipping) — นับไว้โชว์บนแบนเนอร์
   const shippingJobs = awaitingChoice(db).length + deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
 
@@ -84,8 +84,11 @@ export default function OrdersHubPage() {
                   </div>
                   <button onClick={() => {
                     dispatch(approveRemainingPayment(r.id));
+                    // read-back: ยอดอาจยังไม่ครบจริง (แก้มัดจำย้อนหลังระหว่างรอตรวจ) — ห้ามบอก "ชำระครบ" มั่ว
+                    let full = false;
+                    dispatch((d) => { const x = d.tickets.find((t2) => t2.id === r.ticket_id); full = !!x && x.remaining_paid >= x.remaining_amount; return d; });
                     if (pushEnabled(db, 'rp_approved'))
-                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ชำระครบ — เลือกวิธีรับของได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
                     flash('อนุมัติส่วนต่างแล้ว');
                   }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
                 </div>
