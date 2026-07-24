@@ -39,11 +39,13 @@ const id = (p: string) => `${p}-${Date.now()}-${counter++}`;
 /** Generate a fresh id for a new catalog row (used by the admin forms). */
 export const genId = (prefix: string) => id(prefix);
 
-/** mirror เริ่มต้นของตั๋วใหม่: ซื้อจากรอบพิเศษ (batch) บน SKU ที่จบรอบก่อนไปแล้ว = การจองรอบใหม่
- *  ต้องเริ่ม 'open' — ห้ามลาก arrived/delivered/closed ของรอบเก่ามา (ไม่งั้นตั๋วเกิดมา "ถึงไทย"
- *  จ่ายส่วนต่าง/เข้าคิวจัดส่งได้ทั้งที่ของยังไม่ผลิต — audit 2026-07-23). */
-const mirrorStatusFor = (product: Product, batchId?: string | null): ProductStatus =>
-  batchId && ['arrived', 'delivered', 'closed'].includes(product.status) ? 'open' : product.status;
+/** mirror เริ่มต้นของตั๋วใหม่. กติกา (audit 2026-07-23):
+ *  - รอบ FULL-PAY (มัดจำ=ราคา) = ของอยู่ในมือจริง → สืบสถานะ SKU ได้ (arrived = ถูกต้อง เลือกวิธีรับของได้เลย)
+ *  - รอบ "มัดจำ" บน SKU ที่จบไปแล้ว (arrived/delivered/closed) = การจองผลิตใหม่ → ต้องเริ่ม 'open'
+ *    ห้ามลากสถานะรอบเก่ามา (ไม่งั้นตั๋วเกิดมา "ถึงไทย" จ่ายส่วนต่าง/เข้าคิวส่งทั้งที่ของยังไม่ผลิต)
+ *  - รอบมัดจำบน SKU production/shipping (legacy ของกำลังมา) = สืบตามจริง. */
+const mirrorStatusFor = (product: Product, batchId?: string | null, fullPay?: boolean): ProductStatus =>
+  batchId && !fullPay && ['arrived', 'delivered', 'closed'].includes(product.status) ? 'open' : product.status;
 
 /** Insert or replace a row by id within a collection. */
 function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
@@ -174,7 +176,7 @@ export const repairTickets = () => (db: Database): Database => {
         deposit_paid: unitDeposit * item.qty, remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
         // full-pay (in-stock) = paid_full ตั้งแต่เกิด — ให้ field status ตรงกับยอดจริงเหมือน grantSpecialTickets
         remaining_paid: 0, status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
-        product_status: mirrorStatusFor(product, item.batch_id), qr_code_url: '',
+        product_status: mirrorStatusFor(product, item.batch_id, unitPrice - unitDeposit <= 0), qr_code_url: '',
         created_at: when, approved_at: when,
       });
     }
@@ -214,7 +216,7 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
         remaining_paid: 0,
         // full-pay (in-stock) = paid_full ตั้งแต่เกิด — field status ตรงกับยอดจริง (เหมือน grantSpecialTickets)
         status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
-        product_status: mirrorStatusFor(product, item.batch_id),
+        product_status: mirrorStatusFor(product, item.batch_id, unitPrice - unitDeposit <= 0),
         qr_code_url: '',
         created_at: now,
         approved_at: now,
@@ -383,7 +385,7 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
       id: id('t'), ticket_no: alloc(franchiseOf(db, p)?.abbr ?? 'xx', issued),
       product_id: p.id, batch_id: b.id, owner_id: userId, original_buyer_id: userId, qty: q,
       deposit_paid: dep * q, remaining_amount: remainingEach * q, remaining_paid: 0,
-      status: remainingEach === 0 ? 'paid_full' : 'active', product_status: p.status, qr_code_url: '',
+      status: remainingEach === 0 ? 'paid_full' : 'active', product_status: mirrorStatusFor(p, b.id, remainingEach === 0), qr_code_url: '',
       created_at: when.toISOString(), approved_at: when.toISOString(),
     });
   }
@@ -897,7 +899,8 @@ export const approveSourcingStart = (requestId: string) => (db: Database): Datab
     id: id('t'), ticket_no: nextTicketNo(db, franchise?.abbr ?? 'xx'),
     product_id: pid, batch_id: batch.id, owner_id: r.user_id, original_buyer_id: r.user_id,
     qty: r.qty, deposit_paid: r.deposit * r.qty, remaining_amount: Math.max(0, r.price - r.deposit) * r.qty,
-    remaining_paid: 0, status: 'active', product_status: 'production', qr_code_url: '',
+    // full-pay (มัดจำ=ราคา) = paid_full ตั้งแต่เกิด — กติกาเดียวกับ approveOrder/grantSpecialTickets
+    remaining_paid: 0, status: r.price - r.deposit <= 0 ? 'paid_full' : 'active', product_status: 'production', qr_code_url: '',
     created_at: now, approved_at: now,
   };
   return {
