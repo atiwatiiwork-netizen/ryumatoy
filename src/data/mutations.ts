@@ -326,9 +326,10 @@ export const removeBatch = (batchId: string) => (db: Database): Database => ({
  *  round per SKU. `addSurplus` (legacy: physical stock we already hold) bumps surplus first; without it
  *  the round sells existing surplus (from a production close). Deposit = the SKU's deposit unless
  *  `fullPay` (จ่ายเต็ม/พร้อมส่ง → deposit = price). Existing buyers keep their snapshot (ryuma-preorder-stock-spec). */
-export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number; published?: boolean }) => (db: Database): Database => {
+export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number; published?: boolean; startStatus?: 'production' | 'shipping' | 'arrived' }) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p) return db;
+  if (p.is_stock) return db; // สินค้าพร้อมส่งขายผ่าน stock_qty — ห้ามเปิดรอบพรีทับ (concept 2026-07-23)
   if (db.batches.some((b) => b.product_id === productId && b.status === 'open')) return db; // one round at a time
   const qty = Math.max(0, Math.floor(opts.qty));
   if (qty <= 0) return db;
@@ -336,7 +337,20 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
   // custom deposit (e.g. finished-goods rate 1000฿) wins; capped at the price so the remaining is never negative
   const deposit = opts.fullPay ? price : Math.min(price, (opts.deposit && opts.deposit > 0 ? opts.deposit : p.deposit_amount));
   const now = new Date().toISOString();
-  const products = opts.addSurplus ? db.products.map((x) => (x.id === productId ? { ...x, surplus_qty: (x.surplus_qty ?? 0) + qty } : x)) : db.products;
+  // จุดเริ่ม flow ของรอบ (concept เจ้าของ 2026-07-23: รอบพิเศษเลือก ผลิต/เดินทาง/ของในมือ) —
+  // เซ็ตที่ตัวสินค้าเท่านั้น ไม่ cascade ตั๋วรอบเก่า (ตั๋วเดิมถือ product_status ของตัวเองอยู่แล้ว).
+  // SKU ที่พรีปกติยังเปิดจองอยู่ ('open') ไม่แตะ — รอบพิเศษวิ่งเคียงกระดานเดิม.
+  const startAs = opts.startStatus && p.status !== 'open' ? opts.startStatus : undefined;
+  const withStart = (x: Product): Product => (startAs
+    ? {
+        ...x, status: startAs,
+        shipped_at: startAs === 'shipping' ? now : undefined,
+        eta_note: startAs === 'arrived' ? 'พร้อมส่ง' : startAs === 'shipping' ? 'ระหว่างทาง' : 'ผลิต · รอเข้าโกดัง',
+      }
+    : x);
+  const products = db.products.map((x) => (x.id === productId
+    ? withStart(opts.addSurplus ? { ...x, surplus_qty: (x.surplus_qty ?? 0) + qty } : x)
+    : x));
   const stockAdditions = opts.addSurplus
     ? [{ id: id('sa'), product_id: productId, qty, note: `สต๊อกใบพรี (legacy) +${qty}`, created_at: now }, ...db.stockAdditions]
     : db.stockAdditions;
@@ -432,7 +446,7 @@ export const createLegacyStockProduct = (data: {
  * frozen per-batch) and opens a FRESH batch in the same mutation — no half-state where two rounds
  * are open. Price/deposit default to the previous round's snapshot; label defaults to "รอบ N".
  */
-export const restockSpecialRound = (productId: string, opts: { qty: number; price?: number; deposit?: number; label?: string }) => (db: Database): Database => {
+export const restockSpecialRound = (productId: string, opts: { qty: number; price?: number; deposit?: number; label?: string; startStatus?: 'production' | 'shipping' }) => (db: Database): Database => {
   const rounds = db.batches.filter((b) => b.product_id === productId);
   const last = [...rounds].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
   const price = opts.price && opts.price > 0 ? opts.price : (last?.price_total ?? db.products.find((p) => p.id === productId)?.price_total ?? 0);
@@ -443,12 +457,14 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
   // advanced status (which would show them "ถึงไทยแล้ว" + skip the warehouse gate). Old-round tickets
   // keep their own per-ticket status. fullPay = goods in hand → arrived; else new pre-order → production
   // (must pass ยืนยันโกดัง again). (audit W#1 — cross-round status bleed)
-  const newStatus: ProductStatus = fullPay ? 'arrived' : 'production';
+  // เจ้าของเลือกจุดเริ่มรอบใหม่ได้ (concept 2026-07-23): ผลิต (default, ผ่านโกดัง) / เดินทางแล้ว
+  const newStatus: ProductStatus = fullPay ? 'arrived' : (opts.startStatus ?? 'production');
+  const nowIso = new Date().toISOString();
   const closed: Database = {
     ...db,
     batches: db.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)),
     products: db.products.map((p) => (p.id === productId
-      ? { ...p, status: newStatus, shipped_at: undefined, eta_note: fullPay ? 'พร้อมส่ง' : 'ผลิต · รอเข้าโกดัง' }
+      ? { ...p, status: newStatus, shipped_at: newStatus === 'shipping' ? nowIso : undefined, eta_note: fullPay ? 'พร้อมส่ง' : newStatus === 'shipping' ? 'ระหว่างทาง' : 'ผลิต · รอเข้าโกดัง' }
       : p)),
   };
   return openSpecialRound(productId, {
@@ -816,6 +832,7 @@ const SOURCING_TTL_MS = 5 * 86400000;
 export const submitSourcingRequest = (data: {
   user_id: string; maker_id?: string; maker_name: string; franchise_id?: string; franchise_name: string;
   character_name: string; qty: number; images: string[]; note?: string; resent_from?: string;
+  source_product_id?: string; // อ้าง SKU ในระบบ (concept 1.3/3.1: พรีเก่า = ฐานข้อมูลหาของ)
 }) => (db: Database): Database => {
   const open = db.sourcingRequests.filter((r) => r.user_id === data.user_id
     && (r.status === 'requested' || r.status === 'paid'
@@ -829,6 +846,7 @@ export const submitSourcingRequest = (data: {
       franchise_id: data.franchise_id || undefined, franchise_name: data.franchise_name.trim(),
       character_name: data.character_name.trim(), qty: Math.max(1, Math.floor(data.qty)),
       images: data.images.slice(0, 3), note: data.note?.trim() || undefined,
+      source_product_id: data.source_product_id || undefined,
       status: 'requested', created_at: new Date().toISOString(), resent_from: data.resent_from,
     }, ...db.sourcingRequests],
   };
@@ -887,12 +905,17 @@ export const approveSourcingStart = (requestId: string) => (db: Database): Datab
   const pid = id('p');
   const franchise = db.franchises.find((f) => f.id === r.franchise_id);
   const buyer = db.users.find((u) => u.id === r.user_id);
+  // รูป: ถ้าลูกค้าเลือกจาก SKU ในระบบ (source_product_id) และไม่ได้แนบรูปเอง → ใช้รูปของ SKU นั้น
+  const srcProduct = r.source_product_id ? db.products.find((x) => x.id === r.source_product_id) : undefined;
+  const images = r.images.length ? r.images : (srcProduct?.images ?? []);
   const product: Product = {
     id: pid, franchise_id: r.franchise_id, manufacturer_id: r.maker_id,
     series_name: r.character_name, character_name: r.character_name,
-    type: 'other', description: `หาของให้ ${buyer?.display_name ?? ''}`.trim(), images: r.images,
-    eta_note: 'หาของ · เริ่มงานแล้ว', price_total: r.price, deposit_amount: r.deposit,
-    is_stock: false, has_variants: false, status: 'production', surplus_qty: 0, created_at: now,
+    type: 'other', description: `หาของให้ ${buyer?.display_name ?? ''}`.trim(), images,
+    // concept เจ้าของ 2026-07-23 ข้อ 3.3: หาของ = ของสำเร็จที่ตามหา ไม่ใช่สั่งผลิต →
+    // flow เริ่มที่ "กำลังเดินทางมาไทย" ทันทีที่เริ่มงาน (ไม่ผ่านขั้นผลิต/โกดัง)
+    eta_note: 'หาของ · กำลังเดินทางมาไทย', price_total: r.price, deposit_amount: r.deposit,
+    is_stock: false, has_variants: false, status: 'shipping', shipped_at: now, surplus_qty: 0, created_at: now,
   };
   const batch = { id: id('b'), product_id: pid, label: 'หาของ', price_total: r.price, deposit_amount: r.deposit, stock_qty: r.qty, status: 'closed' as const, created_at: now };
   const ticket: PreorderTicket = {
@@ -900,7 +923,7 @@ export const approveSourcingStart = (requestId: string) => (db: Database): Datab
     product_id: pid, batch_id: batch.id, owner_id: r.user_id, original_buyer_id: r.user_id,
     qty: r.qty, deposit_paid: r.deposit * r.qty, remaining_amount: Math.max(0, r.price - r.deposit) * r.qty,
     // full-pay (มัดจำ=ราคา) = paid_full ตั้งแต่เกิด — กติกาเดียวกับ approveOrder/grantSpecialTickets
-    remaining_paid: 0, status: r.price - r.deposit <= 0 ? 'paid_full' : 'active', product_status: 'production', qr_code_url: '',
+    remaining_paid: 0, status: r.price - r.deposit <= 0 ? 'paid_full' : 'active', product_status: 'shipping', qr_code_url: '',
     created_at: now, approved_at: now,
   };
   return {

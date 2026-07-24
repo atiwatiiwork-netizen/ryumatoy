@@ -101,7 +101,7 @@ function BaseRow({ r, right, footer }: { r: SourcingRequest; right?: React.React
             <div className="text-[14px] font-bold">{r.character_name}{r.qty > 1 ? ` ×${r.qty}` : ''}</div>
             {right}
           </div>
-          <div className="text-[12px] text-ink-muted2">{r.maker_name}{!r.maker_id && <em className="text-[#fbbf24]"> (ใหม่)</em>} · {r.franchise_name}{!r.franchise_id && <em className="text-[#fbbf24]"> (ใหม่)</em>}</div>
+          <div className="text-[12px] text-ink-muted2">{r.maker_name}{!r.maker_id && <em className="text-[#fbbf24]"> (ใหม่)</em>} · {r.franchise_name}{!r.franchise_id && <em className="text-[#fbbf24]"> (ใหม่)</em>}{r.source_product_id && <span className="ml-1.5 rounded bg-[#2563eb]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#60a5fa]">📎 อ้าง SKU ในระบบ</span>}</div>
           <div className="text-[11.5px] text-ink-faint">{buyer?.display_name ?? '—'} · {fmtDate(r.created_at)}{r.note ? ` · 📝 ${r.note}` : ''}{r.resent_from ? ' · 🔁 ส่งซ้ำ' : ''}</div>
         </div>
       </div>

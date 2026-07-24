@@ -240,14 +240,9 @@ function LegacyCreate() {
     if (hasOpenBatch(db, p.id)) return flash('SKU นี้มีรอบพิเศษเปิดอยู่แล้ว (ปิดรอบก่อน)');
     const q = Number(qty) || 0, pr = Number(price) || 0;
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
-    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined, published: publish }));
-    // setProductStatus cascades to EVERY ticket of the SKU. Only apply it on a SKU with NO existing
-    // buyers — otherwise opening a fresh special round would flip earlier-round buyers' status (and
-    // skip the warehouse gate). SKUs that already have tickets keep their per-ticket status; advance
-    // the new round via the ยืนยันโกดัง gate. (audit W#2 — pending per-batch-status refactor)
-    const hasExistingTickets = db.tickets.some((t) => t.product_id === p.id);
-    if (!fullPay && !hasExistingTickets) dispatch(setProductStatus(p.id, startStatus));
-    else if (!fullPay && hasExistingTickets) flash('เปิดรอบใหม่แล้ว — สถานะผู้พรีเดิมไม่ถูกแตะ (เลื่อนผ่านยืนยันโกดัง)');
+    // startStatus เข้า mutation ตรงๆ — เซ็ตเฉพาะตัวสินค้า ไม่ cascade ตั๋วรอบเก่า (concept 2026-07-23:
+    // รอบพิเศษเลือกจุดเริ่ม ผลิต/เดินทาง ได้แม้ SKU มีผู้พรีเดิม; full-pay = ของในมือ → arrived)
+    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined, published: publish, startStatus: fullPay ? 'arrived' : startStatus }));
     if (publish) pushNewRound(p, p.series_name, `/shop/${p.id}`, pr, fullPay ? pr : (depNum > 0 ? depNum : p.deposit_amount), fullPay);
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}${publish ? ' · แจ้งลูกค้าแล้ว' : ' · ร่างไว้ (ยังไม่ขึ้นหน้าร้าน)'}`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
@@ -652,10 +647,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [rq, setRq] = useState('');
   const [rp, setRp] = useState(String(b.price_total));
   const [rd, setRd] = useState(String(b.deposit_amount));
+  // จุดเริ่มรอบใหม่ (concept 2026-07-23): ผลิต (default, ผ่านโกดัง) / ของออกเดินทางแล้ว
+  const [rStart, setRStart] = useState<'production' | 'shipping'>('production');
   const doRestock = () => {
     const q = Number(rq) || 0;
     if (q <= 0) return flash('กรอกจำนวนที่มาเพิ่ม');
-    dispatch(restockSpecialRound(b.product_id, { qty: q, price: Number(rp) || undefined, deposit: Number(rd) || undefined }));
+    dispatch(restockSpecialRound(b.product_id, { qty: q, price: Number(rp) || undefined, deposit: Number(rd) || undefined, startStatus: rStart }));
     // อ่านรอบใหม่ที่เพิ่งเปิด (no-op dispatch) เพื่อลิงก์ push ให้ตรงรอบ
     let newBatchId = '';
     dispatch((d) => { newBatchId = d.batches.find((x) => x.product_id === b.product_id && x.status === 'open')?.id ?? ''; return d; });
@@ -751,6 +748,14 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
           <label className="text-[12px] text-ink-muted">มาเพิ่ม (ชิ้น)<input autoFocus className="ml-1 w-16 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={rq} onChange={(e) => setRq(e.target.value.replace(/[^\d]/g, ''))} placeholder="5" /></label>
           <label className="text-[12px] text-ink-muted">ราคา<input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={rp} onChange={(e) => setRp(e.target.value.replace(/[^\d]/g, ''))} /></label>
           <label className="text-[12px] text-ink-muted">มัดจำ<input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={rd} onChange={(e) => setRd(e.target.value.replace(/[^\d]/g, ''))} /></label>
+          {/* จุดเริ่มรอบใหม่ — เฉพาะรอบมัดจำ (มัดจำ >= ราคา = ของในมือ → arrived อัตโนมัติ) */}
+          {(Number(rd) || 0) < (Number(rp) || b.price_total) && (
+            <div className="inline-flex overflow-hidden rounded-lg border border-subtle">
+              {(['production', 'shipping'] as const).map((s) => (
+                <button key={s} onClick={() => setRStart(s)} className={cx('px-2.5 py-1.5 text-[11.5px] font-bold', rStart === s ? 'bg-primary text-white' : 'bg-surface-2 text-ink-muted2')}>{s === 'production' ? '🏭 เริ่ม: ผลิต' : '🚚 เริ่ม: เดินทางแล้ว'}</button>
+              ))}
+            </div>
+          )}
           <button onClick={doRestock} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">🔥 เปิดรอบใหม่ + แจ้งลูกค้า</button>
           <button onClick={() => setRestock(false)} className="py-2 text-[12px] text-ink-faint">ยกเลิก</button>
           <span className="w-full text-[11px] text-ink-faint">รอบเก่าจะถูกเก็บเข้าประวัติ (log คนซื้อแยกรอบ) · push "🔥 มาเพิ่มแล้ว!" ถึงลูกค้าที่เปิดแจ้งเตือน</span>

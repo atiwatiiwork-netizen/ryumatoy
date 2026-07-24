@@ -256,6 +256,20 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
   const [note, setNote] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  // เลือกจากสินค้าที่เคยมีในระบบ (concept 2026-07-23: พรีเก่า = ฐานข้อมูลหาของ) — เติมค่าให้อัตโนมัติ
+  const [srcQ, setSrcQ] = useState('');
+  const [srcId, setSrcId] = useState('');
+  const srcMatches = srcQ.trim().length >= 2
+    ? db.products.filter((p) => p.series_name.toLowerCase().includes(srcQ.trim().toLowerCase())).slice(0, 6)
+    : [];
+  const pickSource = (pid: string) => {
+    const p = db.products.find((x) => x.id === pid);
+    if (!p) return;
+    setSrcId(pid); setSrcQ(p.series_name);
+    setMakerId(p.manufacturer_id); setFrId(p.franchise_id);
+    setCname(p.character_name ?? p.series_name);
+    if (images.length === 0 && p.images.length) setImages(p.images.slice(0, 3)); // ใช้รูปในระบบ ไม่ต้องอัปเอง
+  };
 
   const addImage = async (file?: File) => {
     if (!file || images.length >= 3) return;
@@ -276,6 +290,7 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
       user_id: uid, maker_id: makerId === '__other' ? undefined : makerId, maker_name: mName,
       franchise_id: frId === '__other' ? undefined : frId, franchise_name: fName,
       character_name: cname.trim(), qty: Number(qty) || 1, images, note: note.trim() || undefined,
+      source_product_id: srcId || undefined,
     }));
     if (pushEnabled(db, 'sourcing_new'))
       sendPush(subsForAdmins(db), { title: '🔎 มีเรื่องหาของใหม่!', body: `${cname.trim()} · ${mName} · ${fName}`, url: '/admin/sourcing' }, dispatch).catch(() => {});
@@ -287,6 +302,25 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
     <div className="mb-5 rounded-2xl border border-accent-soft bg-surface-2 p-4">
       <div className="mb-3 flex items-center justify-between"><span className="font-bold">ส่งเรื่องหาของ</span><button onClick={onDone} className="text-ink-faint"><Icon name="x" size={17} /></button></div>
       <div className="flex flex-col gap-2.5">
+        {/* ทางลัด: ตัวที่เคยเปิดพรีในร้าน — พิมพ์ค้นหาแล้วแตะเลือก ระบบเติมค่าย/เรื่อง/รูปให้เอง */}
+        <div>
+          <span className="mb-1 block text-[12px] font-semibold text-ink-muted">เคยเห็นในร้านเรา? ค้นหาจากสินค้าในระบบ (ไม่บังคับ)</span>
+          <input className={inputCls} value={srcQ} onChange={(e) => { setSrcQ(e.target.value); setSrcId(''); }} placeholder="พิมพ์ชื่อ เช่น Zoro, Kaiba…" />
+          {srcMatches.length > 0 && !srcId && (
+            <div className="mt-1 overflow-hidden rounded-xl border border-subtle">
+              {srcMatches.map((p) => (
+                <button key={p.id} onClick={() => pickSource(p.id)} className="flex w-full items-center gap-2.5 border-b border-hair bg-surface-3 px-3 py-2 text-left last:border-0">
+                  <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">
+                    {p.images[0] && <img src={p.images[0]} alt="" className="h-full w-full object-cover" />}
+                  </div>
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{p.series_name}</span>
+                  <span className="text-[11px] text-ink-faint">เลือก →</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {srcId && <div className="mt-1 text-[11.5px] font-bold text-[#4ade80]">✓ อ้างอิงสินค้าในระบบแล้ว — ค่าย/เรื่อง/รูป ถูกเติมให้อัตโนมัติ</div>}
+        </div>
         <div className="grid grid-cols-2 gap-2.5">
           <label className="block"><span className="mb-1 block text-[12px] font-semibold text-ink-muted">ค่าย</span>
             <select className={inputCls} value={makerId} onChange={(e) => setMakerId(e.target.value)}>

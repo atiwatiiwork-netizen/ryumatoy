@@ -562,6 +562,7 @@ export interface SourcingRequest {
   qty: number;
   images: string[];        // 1..3, first required
   note?: string;
+  source_product_id?: string; // เลือกจาก SKU ที่เคยมีในระบบ (พรีเก่า = ฐานข้อมูลหาของ, migration v54)
   status: SourcingStatus;
   created_at: string;
   // quote (admin)
