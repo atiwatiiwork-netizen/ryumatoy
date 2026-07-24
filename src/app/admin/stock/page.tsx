@@ -10,9 +10,9 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets } from '@/data/mutations';
+import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
-import { ticketPrefixCounts } from '@/domain/services/tickets';
+import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
@@ -28,7 +28,9 @@ export default function StockPage() {
   return (
     <div>
       <div className="mb-1 text-2xl font-extrabold">สต๊อกใบพรี</div>
-      <div className="mb-5 text-[13px] text-ink-faint">เปิดขาย “พรีรอบพิเศษ” — ล็อตจำกัดจำนวนบน SKU เดิม/ของที่มีอยู่ · ราคา snapshot ไม่กระทบคนเดิม · ขายเป็นใบพรี · 1 SKU เปิดได้ทีละรอบ</div>
+      <div className="mb-3 text-[13px] text-ink-faint">เปิดขาย “พรีรอบพิเศษ” — ล็อตจำกัดจำนวนบน SKU เดิม/ของที่มีอยู่ · ราคา snapshot ไม่กระทบคนเดิม · ขายเป็นใบพรี · 1 SKU เปิดได้ทีละรอบ</div>
+
+      <SpecialGateSwitch />
 
       <div className="mb-4 flex gap-2">
         <TabBtn active={tab === 'legacy'} onClick={() => setTab('legacy')}>สร้างเอง (ของที่มี)</TabBtn>
@@ -40,6 +42,32 @@ export default function StockPage() {
       <WarehouseConfirm />
       <OpenRounds />
       <History />
+    </div>
+  );
+}
+
+/** สวิตช์ gate รอบพิเศษ (เจ้าของ 2026-07-23): เปิด = ต้องมีใบพรีถึงซื้อรอบพิเศษได้ · ปิด = ใครก็ซื้อได้ (ช่วงโปร) */
+function SpecialGateSwitch() {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const on = specialGateEnabled(db);
+  return (
+    <div className={cx('mb-4 flex flex-wrap items-center gap-3 rounded-2xl border p-4', on ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.06]' : 'border-[#d97706]/40 bg-[#d97706]/[0.06]')}>
+      <div className="min-w-0 flex-1">
+        <div className={cx('text-[13.5px] font-bold', on ? 'text-[#4ade80]' : 'text-[#fbbf24]')}>
+          🔒 Gate รอบพิเศษ: {on ? 'เปิดอยู่ — เฉพาะลูกค้าที่มีใบพรี' : 'ปิดอยู่ — ใครก็ซื้อรอบพิเศษได้'}
+        </div>
+        <div className="mt-0.5 text-[11.5px] text-ink-faint">
+          {on ? 'ลูกค้าที่ไม่เคยพรีจะซื้อรอบพิเศษไม่ได้ (พ่วงพรีปกติในตะกร้า = ผ่าน) — กันคนมาเอาแต่ของพิเศษ' : 'ปิดชั่วคราวได้ เช่น ช่วงจัดโปรเปิดให้ทุกคน — เปิดกลับเมื่อไหร่ก็ได้'}
+        </div>
+      </div>
+      <button
+        onClick={() => { dispatch(setSpecialGate(!on)); flash(!on ? '🔒 เปิด Gate แล้ว — เฉพาะลูกค้ามีใบพรี' : '🔓 ปิด Gate แล้ว — ใครก็ซื้อรอบพิเศษได้'); }}
+        className={cx('rounded-xl px-4 py-2.5 text-[13px] font-bold', on ? 'bg-cta text-white' : 'border border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]')}
+      >
+        {on ? 'ปิด Gate (เปิดให้ทุกคน)' : 'เปิด Gate'}
+      </button>
     </div>
   );
 }

@@ -938,6 +938,12 @@ export const approveSourcingStart = (requestId: string) => (db: Database): Datab
   };
 };
 
+/** สวิตช์ gate รอบพิเศษ (app_config 'special_gate') — เปิด = ต้องมีใบพรีถึงซื้อรอบพิเศษได้. */
+export const setSpecialGate = (enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: 'special_gate', value: { enabled } }, ...db.appConfig.filter((c) => c.key !== 'special_gate')],
+});
+
 /** Admin edits the transport ETA ranges (app_config 'sourcing_eta'). */
 export const setSourcingEta = (value: { truck_min: number; truck_max: number; ship_min: number; ship_max: number }) => (db: Database): Database => ({
   ...db,

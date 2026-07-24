@@ -31,8 +31,15 @@ export function hasPreorderTicket(db: Database, userId: string): boolean {
   });
 }
 
-/** ตะกร้านี้ซื้อรอบพิเศษได้ไหม: เคยมีใบพรีอยู่แล้ว หรือ ตะกร้าเดียวกันมีพรีปกติพ่วง (กำลังพรีอยู่ = ผ่าน). */
+/** สวิตช์เปิด/ปิด gate รอบพิเศษ (app_config key 'special_gate') — default เปิด. ปิด = ใครก็ซื้อได้ (ช่วงโปร). */
+export function specialGateEnabled(db: Database): boolean {
+  const row = db.appConfig.find((c) => c.key === 'special_gate');
+  return (row?.value as { enabled?: boolean } | undefined)?.enabled !== false;
+}
+
+/** ตะกร้านี้ซื้อรอบพิเศษได้ไหม: gate ปิดอยู่ = ได้เสมอ · เคยมีใบพรีอยู่แล้ว หรือ ตะกร้าเดียวกันมีพรีปกติพ่วง = ได้. */
 export function canBuySpecialWithLines(db: Database, userId: string, lines: { productId: string; batchId?: string }[]): boolean {
+  if (!specialGateEnabled(db)) return true;
   if (hasPreorderTicket(db, userId)) return true;
   return lines.some((l) => !l.batchId && !(db.products.find((p) => p.id === l.productId)?.is_stock));
 }
