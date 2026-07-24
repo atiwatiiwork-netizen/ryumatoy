@@ -20,6 +20,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
   };
 }
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
+import { pendingHeld } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
@@ -394,7 +395,10 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
     const q = Math.floor(it.qty);
     if (!b || !p || q < 1 || b.status !== 'open') continue;
     const sold = db.tickets.filter((t) => t.batch_id === b.id).reduce((s, t) => s + t.qty, 0) + (grantedPerBatch[b.id] ?? 0);
-    if (b.stock_qty - sold < q) continue; // ห้ามมอบเกินสต๊อกที่เหลือของรอบ
+    // นับ hold ของลูกค้าที่กำลังซื้อ/สลิปรอตรวจด้วย — เดิมมองแต่ตั๋ว แอดมินมอบทับของที่ลูกค้าจองค้างได้
+    // (audit 2026-07-23 บัญชีสต๊อกเดียว: ตั๋ว + hold ค้าง)
+    const held = pendingHeld(db, b.product_id, b.id);
+    if (b.stock_qty - sold - held < q) continue; // ห้ามมอบเกินสต๊อกที่เหลือจริงของรอบ
     grantedPerBatch[b.id] = (grantedPerBatch[b.id] ?? 0) + q;
     const dep = Math.max(0, Math.min(b.price_total, it.depEach != null ? it.depEach : b.deposit_amount));
     const remainingEach = Math.max(0, b.price_total - dep);

@@ -35,6 +35,12 @@ export default function SlipApprovalPage() {
   const firstProduct = db.products.find((p) => p.id === order.items[0]?.product_id);
   const nextTk = firstProduct ? nextTicketNo(db, franchiseOf(db, firstProduct)?.abbr ?? 'xx') : '';
   const approved = order.status === 'approved';
+  // ── watchdog hold สต๊อก (audit 2026-07-23): ออเดอร์ in-stock/รอบพิเศษต้องมี hold ค้างคุมของอยู่
+  // ระหว่างรอตรวจ — ถ้า hold หลุด (payReservation ล่ม/หมดอายุ) ของอาจถูกคนอื่นซื้อไป เตือนก่อนอนุมัติ
+  const stockItems = order.items.filter((it) => it.batch_id || db.products.find((p) => p.id === it.product_id)?.is_stock);
+  const myHolds = db.stockReservations.filter((r) => (order.reservation_ids ?? []).includes(r.id));
+  const holdsOk = myHolds.filter((r) => r.status === 'paid' || r.status === 'confirmed' || (r.status === 'active' && r.reserved_until && new Date(r.reserved_until) > new Date()));
+  const holdLost = !approved && stockItems.length > 0 && holdsOk.length < stockItems.length;
 
   const approve = async () => {
     const grantsBefore = db.couponGrants.filter((g) => g.user_id === order.user_id).length;
@@ -131,6 +137,12 @@ export default function SlipApprovalPage() {
             <div className="mb-4 flex items-center gap-2 rounded-[10px] border border-dashed border-[#f59e0b]/50 px-3 py-2.5 text-[12.5px] text-[#fbbf24]">
               <Icon name="bell" size={17} className="text-[#fbbf24]" />
               <span>โปรดตรวจสลิปกับยอด {baht(order.total_deposit)} ก่อนกดอนุมัติ · จะออก Ticket: <b className="font-mono">{nextTk}</b></span>
+            </div>
+          )}
+          {holdLost && (
+            <div className="mb-4 flex items-start gap-2 rounded-[10px] border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] px-3 py-2.5 text-[12.5px] leading-relaxed text-primary-soft">
+              <Icon name="warning" size={17} className="mt-0.5 shrink-0" />
+              <span><b>Hold สต๊อกของออเดอร์นี้หลุด/หมดอายุ</b> — ของอาจถูกลูกค้าคนอื่นจองไประหว่างรอ เช็คจำนวนคงเหลือจริงก่อนอนุมัติ (อนุมัติทั้งที่ของไม่พอ = ขายเกิน)</span>
             </div>
           )}
 
