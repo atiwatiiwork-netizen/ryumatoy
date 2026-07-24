@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { pushSupported, currentPushSubscription, enablePush, disablePush } from '@/lib/push';
+import { detectPlatform, isStandalone, inAppBrowser } from '@/lib/pwa';
 import { setPushPrefs } from '@/data/mutations';
 import { Icon } from './Icon';
 import { cx } from './ui';
@@ -16,18 +17,32 @@ export function PushToggle({ userId, divider }: { userId: string; divider?: bool
   const { flash } = useToast();
   const [state, setState] = useState<'loading' | 'unsupported' | 'off' | 'on'>('loading');
   const [busy, setBusy] = useState(false);
+  const [hint, setHint] = useState('iPhone: กด แชร์ → เพิ่มลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน');
 
   // "on" means the browser holds a subscription AND that endpoint is saved under MY account —
   // a leftover subscription from a previous login on a shared device must read as "off"
   // (RLS: I only see my own rows, so a plain some() is exactly the ownership check).
   const myEndpoints = db.pushSubscriptions.filter((s) => s.user_id === userId).map((s) => s.endpoint);
+  // ติดตั้งแล้วหรือยัง (จาก DB — จำได้ข้ามเบราว์เซอร์: กันเคสลูกค้าติดตั้งแล้วแต่เปิดผ่าน Messenger/Safari
+  // แล้วงงว่าทำไม "ไม่รองรับ" — เคส Peerapat 2026-07-23)
+  const installedBefore = !!db.users.find((u) => u.id === userId)?.installed_at;
   useEffect(() => {
-    if (!pushSupported()) { setState('unsupported'); return; }
+    if (!pushSupported()) {
+      setState('unsupported');
+      // ข้อความชี้ทางตามสถานการณ์จริง — ไม่ใช่ประโยคเดียวเหมาทุกเคส
+      const { inApp } = inAppBrowser();
+      if (isStandalone()) setHint('iOS ของเครื่องเก่าเกินไป — อัปเดต iOS (ตั้งค่า → ทั่วไป → อัปเดตซอฟต์แวร์) แล้วลองใหม่');
+      else if (inApp && installedBefore) setHint('คุณติดตั้งแล้ว ✓ — หน้านี้เปิดจาก Messenger/LINE เปิดกระดิ่งไม่ได้ · ปิดหน้านี้ แล้วเปิดจากไอคอน Ryuma บนหน้าจอ');
+      else if (inApp) setHint('หน้านี้เปิดจาก Messenger/LINE — เปิดใน Safari/Chrome ก่อน แล้วเพิ่มลงหน้าจอโฮม');
+      else if (installedBefore) setHint('คุณติดตั้งแล้ว ✓ — ปิดหน้านี้ แล้วเปิดจากไอคอน Ryuma บนหน้าจอ ค่อยกดเปิดกระดิ่ง');
+      else setHint(detectPlatform() === 'ios' ? 'iPhone: กด แชร์ → เพิ่มลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน' : 'เพิ่ม Ryuma ลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน');
+      return;
+    }
     currentPushSubscription()
       .then((s) => setState(s && myEndpoints.includes(s.endpoint) ? 'on' : 'off'))
       .catch(() => setState('off'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, myEndpoints.join('|')]);
+  }, [userId, myEndpoints.join('|'), installedBefore]);
 
   const toggle = async () => {
     if (busy || state === 'loading' || state === 'unsupported') return;
@@ -46,7 +61,7 @@ export function PushToggle({ userId, divider }: { userId: string; divider?: bool
         <Icon name="bell" size={20} className={state === 'on' ? 'text-[#4ade80]' : 'text-primary-soft'} />
         <span className="flex-1">
           <span className="block text-sm font-medium">การแจ้งเตือน</span>
-          {state === 'unsupported' && <span className="block text-[10.5px] text-ink-faint">iPhone: กด แชร์ → เพิ่มลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน</span>}
+          {state === 'unsupported' && <span className={cx('block text-[10.5px]', hint.includes('ติดตั้งแล้ว ✓') ? 'font-semibold text-[#fbbf24]' : 'text-ink-faint')}>{hint}</span>}
         </span>
         {state === 'loading' || busy ? (
           <span className="text-[11px] text-ink-faint">…</span>
