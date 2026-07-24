@@ -102,11 +102,14 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
             ))}
           </div>
         )}
-        <div className="mt-1.5 flex items-baseline gap-1.5">
-          {fromPrice && <span className="text-[10px] font-semibold text-ink-faint">เริ่ม</span>}
-          <span className="text-[15px] font-extrabold text-primary-soft">{baht(memberPrice)}</span>
-          {saved && <span className="text-[11px] text-ink-faint line-through">{baht(basePrice)}</span>}
-        </div>
+        {/* สินค้าหมด = ไม่โชว์ราคา (เจ้าของ 2026-07-23 — ราคาค้างบนของหมดชวนงง/ต่อรอง) */}
+        {!soldOut && (
+          <div className="mt-1.5 flex items-baseline gap-1.5">
+            {fromPrice && <span className="text-[10px] font-semibold text-ink-faint">เริ่ม</span>}
+            <span className="text-[15px] font-extrabold text-primary-soft">{baht(memberPrice)}</span>
+            {saved && <span className="text-[11px] text-ink-faint line-through">{baht(basePrice)}</span>}
+          </div>
+        )}
         {sel && <div className="truncate text-[10px] font-semibold text-ink-muted2">{sel.name}</div>}
         {/* พรีที่ปิดกระดานแล้วกำลังเดินทางมาไทย (รอบพิเศษยังขายได้ระหว่างของมา) → ป้ายกระพริบเรียกสายตา */}
         {!product.is_stock && product.status === 'shipping' && (
@@ -114,9 +117,11 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
         )}
         {stockLeft != null && (stockLeft <= 0
           ? <div className="text-[10.5px] font-bold text-ink-faint">สินค้าหมด</div>
-          : stockLeft <= 3
-            ? <div className="text-[10.5px] font-bold text-[#fbbf24]">พร้อมส่ง · เหลือน้อย</div>
-            : <div className="text-[10.5px] font-bold text-[#4ade80]">พร้อมส่ง</div>)}
+          : stockLeft === 1
+            ? <div className="animate-blink text-[10.5px] font-extrabold text-[#f87171]">🔥 ชิ้นสุดท้าย!</div>
+            : stockLeft <= 3
+              ? <div className="text-[10.5px] font-bold text-[#fbbf24]">พร้อมส่ง · เหลือน้อย</div>
+              : <div className="text-[10.5px] font-bold text-[#4ade80]">พร้อมส่ง</div>)}
         {saved && <div className="text-[10px] font-bold text-[#f1d27a]">ราคาสมาชิก ✦</div>}
         {quickAdd && (
           canQuickAdd

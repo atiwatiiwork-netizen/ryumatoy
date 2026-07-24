@@ -110,7 +110,8 @@ export default function ProductDetailPage() {
           <Icon name="tag" size={13} className="text-primary-soft" /> ซีรีย์ {series.name} · ดูตัวอื่น →
         </Link>
       )}
-      <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>
+      {/* สินค้าหมดไม่โชว์ราคา (เจ้าของ 2026-07-23 — นโยบายเดียวกับการ์ดหน้า shop) */}
+      {!soldOut && <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>}
       {dimensionLabel(product) && <div className="mb-1.5 text-[13.5px] font-semibold text-ink-muted">{dimensionLabel(product)}</div>}
       {product.description && <div className="mb-4 text-[13.5px] leading-relaxed text-ink-muted2">{product.description}</div>}
 
