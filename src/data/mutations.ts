@@ -65,6 +65,18 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     // Gate รอบพิเศษ (เจ้าของ 2026-07-23): มีรายการ batch แต่ไม่เคยมีใบพรี + ตะกร้านี้ไม่มีพรีปกติพ่วง
     // → ปัดตกทั้งออเดอร์ (authoritative guard — UI กันไว้ชั้นนอกแล้ว, กันยิงตรง/ตะกร้าค้างข้ามเครื่อง)
     if (lines.some((l) => l.batchId) && !canBuySpecialWithLines(db, userId, lines)) return db;
+    // ของต้อง "ยังขายอยู่จริง" ตอนกดส่ง (status audit F9/F10): ตะกร้าเก็บใน localStorage ข้ามวันได้
+    // → รอบที่ปิด/ยังเป็นร่าง หรือสินค้าพรีที่ปิดรับจองไปแล้ว เคยสั่งซื้อผ่านตะกร้าค้างได้เงียบๆ
+    const sellable = lines.every((l) => {
+      const p = db.products.find((x) => x.id === l.productId);
+      if (!p) return false;
+      if (l.batchId) {
+        const b = db.batches.find((x) => x.id === l.batchId);
+        return !!b && b.status === 'open' && b.published !== false;
+      }
+      return p.is_stock || p.status === 'open';
+    });
+    if (!sellable) return db;
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
     const items: OrderItem[] = lines.map((l) => {
@@ -548,33 +560,40 @@ export const editBatch = (batchId: string, patch: { price?: number; qty?: number
 export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply) => (db: Database): Database => {
   const now = new Date().toISOString();
   const ticket = db.tickets.find((t) => t.id === ticketId);
-  const due = ticket ? ticket.remaining_amount - ticket.remaining_paid : 0;
+  // guards (money audit F8): ต้องเป็นตั๋วของตัวเอง · ยังค้างจริง · ไม่มีสลิปค้างตรวจอยู่แล้ว
+  if (!ticket || ticket.owner_id !== userId) return db;
+  if (ticket.remaining_paid >= ticket.remaining_amount) return db;
+  if (db.remainingPayments.some((r) => r.ticket_id === ticketId && r.status === 'pending')) return db;
+  const due = ticket.remaining_amount - ticket.remaining_paid;
   // SECURITY: re-derive from the coupon TEMPLATE + re-validate (active/expiry/scope=pre-order/target)
   // — never trust the client-passed discount. (audit H1/H2)
-  let validGrant = coupon && ticket ? db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active') : undefined;
+  let validGrant = coupon ? db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active') : undefined;
   let discount = 0;
-  if (validGrant && ticket) {
+  if (validGrant) {
     const tpl = db.coupons.find((c) => c.id === validGrant!.coupon_id);
     const product = db.products.find((p) => p.id === ticket.product_id);
     const ok = !!tpl && tpl.active && !couponExpired(tpl, new Date()) && scopeAllows(tpl.scope, false) && (!product || couponMatchesProduct(tpl, product));
     discount = ok ? couponDiscount(tpl!, due) : 0;
     if (discount <= 0) validGrant = undefined;
   }
+  // ⚠ ยอดที่บันทึกคำนวณจากส่วนลดที่ "ผ่านการตรวจจริง" เสมอ (money audit F7): เดิมใช้ค่า amount จากหน้าจอ
+  // ถ้าคูปองถูกใช้ที่อื่นไปแล้วระหว่างนั้น ลูกค้าจะโอนตามยอดลด แต่ระบบไม่ลดให้ = ค้างเงินงงๆ
+  const payAmount = Math.max(0, Math.min(due - discount, amount || due - discount));
   return {
     ...db,
-    // drop the discount off the ticket's remaining_amount so the (already reduced) slip settles it in full
-    tickets: discount > 0 ? db.tickets.map((t) => (t.id === ticketId ? { ...t, remaining_amount: t.remaining_amount - discount } : t)) : db.tickets,
+    // ⚠ ไม่แตะ remaining_amount ตอนนี้ (money/status audit F3/F14): ส่วนลดจะถูกหักตอน "อนุมัติ" เท่านั้น
+    // เดิมหักทันทีที่ส่งสลิป → สลิปปลอม/ไม่ผ่าน = ยอดหนี้หายถาวร + คูปองถูกเผาโดยไม่มีทางคืน
     couponGrants: validGrant
       ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, ticket_id: ticketId, discount_amount: discount } : g))
       : db.couponGrants,
     remainingPayments: [
-      { id: id('rp'), ticket_id: ticketId, user_id: userId, amount, slip_url: slipUrl, status: 'pending', created_at: now, coupon_grant_id: validGrant ? validGrant.id : undefined, coupon_discount: validGrant ? discount : undefined },
+      { id: id('rp'), ticket_id: ticketId, user_id: userId, amount: payAmount, slip_url: slipUrl, status: 'pending', created_at: now, coupon_grant_id: validGrant ? validGrant.id : undefined, coupon_discount: validGrant ? discount : undefined },
       ...db.remainingPayments,
     ],
   };
 };
 
-/** Admin approves a remaining payment → add to the ticket's remaining_paid; mark paid_full when settled. */
+/** Admin approves a remaining payment → หักส่วนลดคูปอง (ถ้ามี) + บวกยอดที่จ่าย; ครบแล้วเป็น paid_full. */
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
   const pay = db.remainingPayments.find((r) => r.id === paymentId);
   if (!pay || pay.status !== 'pending') return db;
@@ -583,9 +602,25 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
     tickets: db.tickets.map((t) => {
       if (t.id !== pay.ticket_id) return t;
-      const paid = t.remaining_paid + pay.amount;
-      return { ...t, remaining_paid: paid, status: paid >= t.remaining_amount ? 'paid_full' : t.status };
+      // ส่วนลดคูปองมาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
+      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0));
+      const paid = Math.min(remaining, t.remaining_paid + pay.amount);
+      return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
+  };
+};
+
+/** Admin ปฏิเสธสลิปส่วนต่าง (สลิปปลอม/ยอดผิด) → คืนคูปองให้ลูกค้า + ยอดหนี้คงเดิม (ไม่เคยถูกหัก).
+ *  เดิมไม่มีทางนี้เลย: สลิปค้างคิวถาวร + คูปองหาย + ยอดหนี้ถูกลดไปแล้ว (money/status audit F3/F14). */
+export const rejectRemainingPayment = (paymentId: string) => (db: Database): Database => {
+  const pay = db.remainingPayments.find((r) => r.id === paymentId);
+  if (!pay || pay.status !== 'pending') return db;
+  return {
+    ...db,
+    remainingPayments: db.remainingPayments.filter((r) => r.id !== paymentId),
+    couponGrants: pay.coupon_grant_id
+      ? db.couponGrants.map((g) => (g.id === pay.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, ticket_id: undefined, discount_amount: undefined } : g))
+      : db.couponGrants,
   };
 };
 
@@ -1120,7 +1155,9 @@ export function listForResale(ticketId: string, fromUserId: string, askingPrice:
 const repricedFromFormula = (settings: Database['settings'], p: Product): Product => {
   if (p.is_stock || p.status !== 'open') return p; // only products still taking bookings re-price
   const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
-  const deposit_amount = p.wcf_type ? depositFor(settings, p.wcf_type) : p.deposit_amount;
+  // มัดจำต้องไม่เกินราคา (money audit F12): เรทมัดจำ Mega สูงกว่าของถูกบางตัว → deposit >= price
+  // ทำให้ระบบมองเป็น "จ่ายเต็ม" → สิทธิ์ลดมัดจำของ Gold หายเงียบ + เก็บเกินราคาสินค้า
+  const deposit_amount = p.wcf_type ? Math.min(price_total, depositFor(settings, p.wcf_type)) : p.deposit_amount;
   return price_total === p.price_total && deposit_amount === p.deposit_amount ? p : { ...p, price_total, deposit_amount };
 };
 
@@ -1162,10 +1199,18 @@ export const upsertProduct = (p: Product) => (db: Database): Database => ({ ...d
  * `extra` carries tracking_no/shipped_at when the lot starts shipping.
  */
 export const setProductStatus = (productId: string, status: ProductStatus, extra?: { tracking_no?: string; shipped_at?: string }) => (db: Database): Database => {
+  // ⚠ cascade แบบมีขอบเขต (status audit 2026-07-25 F1/D1): เดิมยิงทุกตั๋วของ SKU ทุกใบทุกรอบ
+  // → กด "เดินทาง" บน SKU ทำให้ตั๋วรอบเก่าที่ "ถึงไทย/ส่งแล้ว" ถอยสถานะ → ลูกค้าเสียปุ่มเลือกวิธีรับของ
+  // และตั๋วหายจากคิวแอดมินทุกคิว. ตอนนี้: แตะเฉพาะตั๋วของ "กระดานหลัก" (ไม่มี batch_id) ที่ยังไม่จบงาน
+  // และไม่ถอยหลัง — ตั๋วรอบพิเศษมีเส้นทางของตัวเอง (arriveSpecialRound/confirmWarehouse)
+  const ORDER: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered', 'closed'];
+  const rank = (s: ProductStatus) => ORDER.indexOf(s);
   const base: Database = {
     ...db,
     products: db.products.map((p) => (p.id === productId ? { ...p, status, ...(extra ?? {}) } : p)),
-    tickets: db.tickets.map((t) => (t.product_id === productId ? { ...t, product_status: status } : t)),
+    tickets: db.tickets.map((t) => (t.product_id === productId && !t.batch_id && t.status !== 'shipped' && rank(t.product_status) < rank(status)
+      ? { ...t, product_status: status }
+      : t)),
   };
   // สต๊อกใบพรี auto-finish: when a special-round product is DELIVERED, archive its open round(s) and
   // auto-flip any leftover surplus → in-stock (only if the round is settled — no unpaid tickets). (ryuma-preorder-stock-spec)
@@ -1189,6 +1234,9 @@ export const setParcel = (ticketId: string, carrier: Carrier, parcelNo: string, 
   const t0 = db.tickets.find((t) => t.id === ticketId);
   // shipped ไปแล้ว = no-op — กันกดซ้ำ (double-click) เขียนทับ shipped_out_at + push ซ้ำหาลูกค้า
   if (!t0 || t0.status === 'shipped') return db;
+  // ห้ามส่งของทั้งที่ยังค้างเงิน (status audit F4) — คิวกรองไว้แล้ว แต่ถ้าแอดมินแก้มัดจำย้อนหลัง
+  // ระหว่างที่หน้ายังเปิดอยู่ ปุ่มเดิมจะยิงตั๋วที่กลายเป็นค้างเงินให้จบงานได้
+  if ((t0.remaining_paid ?? 0) < (t0.remaining_amount ?? 0)) return db;
   return {
     ...db,
     tickets: db.tickets.map((t) =>
@@ -1429,6 +1477,9 @@ export const convertToInStock = (productId: string, price: number) => (db: Datab
       // ตัดจากใบพรี (ผลิตใหม่เพิ่งถึงไทย) → auto สภาพ "มือ 1" ครบทุกอย่าง (เจ้าของ spec 2026-07-17)
       ? { ...x, is_stock: true, stock_qty: surplus, surplus_qty: 0, price_total: price, deposit_amount: price, status: 'open', eta_note: 'พร้อมส่ง', stock_origin: 'preorder' as const, stock_cond: x.stock_cond ?? NEW_STOCK_COND }
       : x)),
+    // แถว variant ต้องกลายเป็น "จ่ายเต็ม" ด้วย (money audit F1): เดิมแก้แต่ product → variant ยังถือมัดจำพรีเก่า
+    // แล้ว livePrice อ่าน variant ก่อน → เก็บเงินแค่ค่ามัดจำจากของพร้อมส่ง = เงินหายทั้งก้อน
+    variants: db.variants.map((v) => (v.product_id === productId ? { ...v, deposit_amount: v.price_total } : v)),
     stockAdditions: [{ id: id('sa'), product_id: productId, qty: surplus, note: 'แปลงจากพรี (ส่วนเกิน)', created_at: now }, ...db.stockAdditions],
   };
 };
@@ -1446,9 +1497,15 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
   ...db,
   tickets: db.tickets.map((t) => {
     if (t.id !== ticketId) return t;
-    const total = t.deposit_paid + t.remaining_amount;
-    const dep = Math.max(0, Math.min(newDeposit, total));
-    return { ...t, deposit_paid: dep, remaining_amount: total - dep };
+    // ราคาเต็มของตั๋วตาม snapshot = มัดจำ + ส่วนต่างทั้งก้อน (remaining_paid เป็นส่วนหนึ่งของ
+    // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
+    const grandTotal = t.deposit_paid + t.remaining_amount;
+    const dep = Math.max(0, Math.min(newDeposit, grandTotal));
+    const remaining = grandTotal - dep;
+    const paid = Math.min(t.remaining_paid, remaining); // กันจ่ายเกินยอดใหม่
+    // สถานะต้องคำนวณใหม่เสมอ — เดิมค้าง 'paid_full' ทั้งที่ยอดเพิ่งถูกขยับให้ค้างอีก (F4/F6)
+    const status: PreorderTicket['status'] = t.status === 'shipped' ? 'shipped' : paid >= remaining ? 'paid_full' : 'active';
+    return { ...t, deposit_paid: dep, remaining_amount: remaining, remaining_paid: paid, status };
   }),
 });
 

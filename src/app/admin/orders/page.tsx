@@ -7,7 +7,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { approveRemainingPayment } from '@/data/mutations';
+import { approveRemainingPayment, rejectRemainingPayment } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
@@ -91,6 +91,15 @@ export default function OrdersHubPage() {
                       sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
                     flash('อนุมัติส่วนต่างแล้ว');
                   }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
+                  {/* ปฏิเสธสลิปส่วนต่าง (audit 2026-07-25): เดิมไม่มีทางนี้ → สลิปปลอมค้างคิวถาวร
+                      + คูปองลูกค้าหายฟรี. ปฏิเสธ = คืนคูปอง ยอดหนี้คงเดิม */}
+                  <button onClick={() => {
+                    if (!confirm(`ปฏิเสธสลิปส่วนต่างนี้? (${baht(r.amount)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
+                    dispatch(rejectRemainingPayment(r.id));
+                    if (pushEnabled(db, 'order_rejected'))
+                      sendPush(subsForUsers(db, [r.user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${tk?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                    flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
+                  }} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>
                 </div>
               );
             })}

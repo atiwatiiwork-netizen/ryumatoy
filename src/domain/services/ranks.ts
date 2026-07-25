@@ -48,9 +48,10 @@ export function depositPctForRank(settings: ShopSettings, rank: RankName): numbe
   return 100; // bronze / silver
 }
 
-/** Deposit amount for a rank given the standard deposit (no rounding — total price unchanged). */
+/** Deposit amount for a rank given the standard deposit. ปัดเป็นจำนวนเต็มบาท — ยอดเศษสตางค์
+ *  เคยไหลเข้า order.total_deposit/ticket.deposit_paid แล้วโชว์ปัดขึ้น (ลูกค้าเห็น 124 แต่ระบบคิด 123.75). */
 export function depositForRank(settings: ShopSettings, baseDeposit: number, rank: RankName): number {
-  return (baseDeposit * depositPctForRank(settings, rank)) / 100;
+  return Math.round((baseDeposit * depositPctForRank(settings, rank)) / 100);
 }
 
 /** Deposit actually collected for ONE unit of a purchase line — THE single place that decides
@@ -60,7 +61,10 @@ export function depositForRank(settings: ShopSettings, baseDeposit: number, rank
  *  submitOrder must all call this so a "พร้อมส่ง จ่ายเต็ม" batch never gets its deposit halved. */
 export function lineDepositForRank(settings: ShopSettings, line: { deposit: number; price: number; isStock: boolean }, rank: RankName): number {
   const fullPay = line.isStock || line.deposit >= line.price;
-  return fullPay ? line.deposit : depositForRank(settings, line.deposit, rank);
+  // full-pay = เก็บ "ราคาเต็ม" เสมอ ไม่ใช่ค่า deposit ที่บันทึกไว้ — กันเคส variant ของ SKU ที่ถูก convert
+  // เป็นพร้อมส่ง: แถว variant ยังถือมัดจำพรีเก่า (เช่น 300) → เคยเก็บแค่ 300 จากของราคา 2,500 แล้วลูกค้า
+  // จ่ายเพิ่มไม่ได้ตลอดกาล (mirror='open' → canPay=false) = เงินหาย 2,200 (money audit 2026-07-25 F1)
+  return fullPay ? line.price : depositForRank(settings, line.deposit, rank);
 }
 
 /** In-stock discount for a rank (Gold+ only this round). Returns null when none. */

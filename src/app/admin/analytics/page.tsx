@@ -5,14 +5,20 @@ import { useDatabase } from '@/state/DataProvider';
 import { Icon, type IconName } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { ticketsInMonth, topFranchises, topMakers, ticketMonths, bellAdoption, installAdoption, currentYm, type RankRow } from '@/domain/services/analytics';
+import { cashIn, outstanding, debtors, cashMonths } from '@/domain/services/money';
+import { baht } from '@/lib/theme';
 
 const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 const monthLabel = (ym: string) => { const [y, m] = ym.split('-').map(Number); return `${THAI_MONTHS[m - 1]} ${y}`; };
 
 export default function AnalyticsPage() {
   const db = useDatabase();
-  const months = useMemo(() => ticketMonths(db), [db]);
+  // เดือนที่เลือกได้ = เดือนที่มีใบพรี "หรือ" มีเงินเข้า (บางเดือนเก็บส่วนต่างอย่างเดียว ไม่มีตั๋วใหม่)
+  const months = useMemo(() => [...new Set([...ticketMonths(db), ...cashMonths(db)])].sort().reverse(), [db]);
   const [ym, setYm] = useState(() => currentYm());
+  const cash = useMemo(() => cashIn(db, ym), [db, ym]);
+  const owed = useMemo(() => outstanding(db), [db]);
+  const owing = useMemo(() => debtors(db).slice(0, 8), [db]);
 
   const tickets = useMemo(() => ticketsInMonth(db, ym), [db, ym]);
   const franchises = useMemo(() => topFranchises(db, tickets), [db, tickets]);
@@ -30,7 +36,7 @@ export default function AnalyticsPage() {
       <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="text-2xl font-extrabold">วิเคราะห์รายเดือน</div>
-          <div className="text-[13px] text-ink-faint">ยอดใบพรีแยกตามเรื่อง/ค่าย + การเปิดกระดิ่งแจ้งเตือน</div>
+          <div className="text-[13px] text-ink-faint">เงินเข้า-เงินค้าง + ยอดใบพรีแยกตามเรื่อง/ค่าย + การเปิดกระดิ่ง</div>
         </div>
         <label className="text-[11px] text-ink-faint">
           เลือกเดือน
@@ -48,6 +54,43 @@ export default function AnalyticsPage() {
         <Stat label="เปิดกระดิ่ง" value={`${bell.enabled}/${bell.total}`} sub={`${bellPct}%`} icon="bell" green />
       </div>
 
+      {/* ── เส้นเงิน (flow review 2026-07-25): เงินเข้าแยกที่มา + ค้างเก็บ ── */}
+      <div className="mb-[18px] rounded-2xl border border-[#16a34a]/35 bg-[#16a34a]/[0.05] p-5">
+        <div className="mb-3 flex items-center gap-2 text-base font-bold text-[#4ade80]"><Icon name="payments" size={18} /> เงินเข้า · {monthLabel(ym)}</div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <MoneyCard label="รับเข้าทั้งหมด" value={baht(cash.total)} tone="text-[#4ade80]" big />
+          <MoneyCard label="มัดจำ / เต็มจำนวน" value={baht(cash.deposits)} sub={`${cash.orders} ออเดอร์อนุมัติ`} />
+          <MoneyCard label="ส่วนต่างที่เก็บได้" value={baht(cash.remaining)} sub="ตอนของถึงไทย" />
+          <MoneyCard label="มัดจำหาของ" value={baht(cash.sourcing)} sub="เริ่มงานแล้ว" />
+        </div>
+        <div className="mt-2 text-[11px] text-ink-faint">นับตามวันที่ “รับเงินจริง” (วันอนุมัติสลิป) · ยอดมัดจำเป็นยอดสุทธิหลังหักคูปองแล้ว</div>
+      </div>
+
+      {/* ค้างเก็บ + ใครค้างบ้าง */}
+      <div className="mb-[18px] rounded-2xl border border-[#d97706]/35 bg-[#d97706]/[0.05] p-5">
+        <div className="mb-1 flex flex-wrap items-center gap-2 text-base font-bold text-[#fbbf24]">
+          <Icon name="warning" size={18} /> ค้างเก็บทั้งระบบ <span className="text-[19px] text-primary-soft">{baht(owed.total)}</span>
+          <span className="text-[12px] font-semibold text-ink-faint">{owed.tickets} ใบ · {owed.customers} คน</span>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-1.5 text-[11.5px] font-bold">
+          <span className="rounded-md bg-[#d97706]/20 px-2 py-0.5 text-[#fbbf24]">ทวงได้แล้ว {baht(owed.collectable)} · ของถึงไทย</span>
+          <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-ink-muted2">ยังไม่ถึงกำหนด {baht(owed.notYet)} · ของยังไม่ถึง</span>
+          {owed.shippedUnpaid > 0 && <span className="animate-blink rounded-md bg-[#b91c1c]/25 px-2 py-0.5 text-[#f87171]">⚠ ส่งของแล้วยังค้าง {baht(owed.shippedUnpaid)}</span>}
+        </div>
+        {owing.length === 0 ? <div className="text-[13px] text-ink-faint">ไม่มีใครค้าง 🎉</div> : (
+          <div className="flex flex-col divide-y divide-hair">
+            {owing.map((d) => (
+              <div key={d.userId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-[13px]">
+                <span className="min-w-[130px] flex-1 truncate font-semibold">{d.name}</span>
+                <span className="text-[11.5px] text-ink-faint">{d.tickets.length} ใบ</span>
+                {d.collectable > 0 && <span className="rounded-md bg-[#d97706]/20 px-1.5 py-0.5 text-[11px] font-bold text-[#fbbf24]">ทวงได้ {baht(d.collectable)}</span>}
+                <span className="w-[92px] text-right font-extrabold text-primary-soft">{baht(d.due)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="grid gap-[18px] lg:grid-cols-2">
         <RankCard title="ยอดใบพรี · เรื่องไหนเยอะสุด" emptyText="ยังไม่มีใบพรีเดือนนี้" rows={franchises} accent="#f472b6" />
         <RankCard title="ยอดใบพรี · ค่ายไหนเยอะสุด" emptyText="ยังไม่มีใบพรีเดือนนี้" rows={makers} accent="#60a5fa" />
@@ -59,6 +102,16 @@ export default function AnalyticsPage() {
         <AdoptionCard icon="bell" title="เปิดกระดิ่งแจ้งเตือน" hint="สมาชิกที่เปิดรับแจ้งเตือนอย่างน้อย 1 เครื่อง จากสมาชิกอนุมัติทั้งหมด" done={bell.enabled} total={bell.total} pct={bellPct} color="#4ade80" fill="#16a34a" remainText="ยังไม่เปิด" />
       </div>
       <div className="mt-2 text-[11.5px] text-ink-faint">💡 ตัวช่วยดันยอด: แบนเนอร์ + ป๊อปอัพในแอปคอยแนะนำคนที่ยังไม่ติดตั้ง/ยังไม่เปิดกระดิ่งอัตโนมัติ (ทุก 3 วัน)</div>
+    </div>
+  );
+}
+
+function MoneyCard({ label, value, sub, tone, big }: { label: string; value: string; sub?: string; tone?: string; big?: boolean }) {
+  return (
+    <div className="rounded-xl border border-subtle bg-surface-2 px-3.5 py-3">
+      <div className="text-[11.5px] text-ink-muted">{label}</div>
+      <div className={cx('mt-0.5 font-extrabold', big ? 'text-[22px]' : 'text-[16px]', tone ?? 'text-ink')}>{value}</div>
+      {sub && <div className="text-[10.5px] text-ink-faint">{sub}</div>}
     </div>
   );
 }

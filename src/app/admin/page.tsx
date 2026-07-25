@@ -17,6 +17,8 @@ import { orphanUsedGrants } from '@/domain/services/coupons';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
 import { productLabel, lineImage, canConvertToInStock, stockRemaining } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
+import { cashIn, outstanding } from '@/domain/services/money';
+import { currentYm } from '@/domain/services/analytics';
 import type { ProductStatus, PreorderTicket } from '@/domain/entities';
 
 const PROGRESS_STATUSES: ProductStatus[] = ['open', 'production', 'shipping', 'arrived'];
@@ -39,13 +41,17 @@ export default function AdminDashboardPage() {
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
   const totalPre = db.tickets.length + pending.reduce((s, o) => s + o.items.length, 0);
-  // real revenue from approved orders (by approval date) — no demo fallback
+  // เงินเข้า — ผ่าน services/money (แหล่งเดียว): มัดจำ + ส่วนต่าง + มัดจำหาของ.
+  // เดิมนับเฉพาะ orders.total_deposit → ส่วนต่าง/หาของ หายจากรายงานทั้งหมด (flow review 2026-07-25)
   const now = new Date();
   const sameDay = (d?: string) => d != null && new Date(d).toDateString() === now.toDateString();
-  const sameMonth = (d?: string) => d != null && new Date(d).getFullYear() === now.getFullYear() && new Date(d).getMonth() === now.getMonth();
-  const approved = db.orders.filter((o) => o.status === 'approved');
-  const todayIncome = approved.filter((o) => sameDay(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0);
-  const monthIncome = approved.filter((o) => sameMonth(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0);
+  const monthCash = cashIn(db, currentYm());
+  const owed = outstanding(db);
+  const todayIncome =
+    db.orders.filter((o) => o.status === 'approved' && sameDay(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0)
+    + db.remainingPayments.filter((r) => r.status === 'approved' && sameDay(r.approved_at ?? r.created_at)).reduce((s, r) => s + r.amount, 0)
+    + db.sourcingRequests.filter((r) => ['paid', 'working'].includes(r.status) && sameDay(r.paid_at)).reduce((s, r) => s + (r.deposit ?? 0) * (r.qty ?? 1), 0);
+  const monthIncome = monthCash.total;
   const lowStock = db.products.filter((p) => p.is_stock && (p.stock_qty ?? 0) <= 5).length;
   const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
   const dateLabel = `${now.getDate()} ${THAI_MONTHS[now.getMonth()]} ${now.getFullYear()}`;
@@ -165,6 +171,27 @@ export default function AdminDashboardPage() {
         <Stat label="ยอดเงินวันนี้" value={baht(todayIncome)} icon="payments" green />
         <Stat label="Stock ใกล้หมด" value={String(lowStock)} icon="bolt" />
       </div>
+
+      {/* เส้นเงิน (flow review 2026-07-25): เงินเข้าเดือนนี้แยกที่มา + ค้างเก็บที่ทวงได้แล้ว */}
+      <button onClick={() => router.push('/admin/analytics')} className="mb-[22px] block w-full rounded-2xl border border-subtle bg-surface-2 p-5 text-left">
+        <div className="mb-2.5 flex items-center gap-2 text-base font-bold text-ink">
+          <Icon name="payments" size={18} className="text-[#4ade80]" /> เงินเดือนนี้
+          <span className="ml-auto text-[12px] font-semibold text-ink-faint">ดูรายเดือน →</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <MoneyBit label="รับเข้าทั้งหมด" value={baht(monthCash.total)} tone="text-[#4ade80]" big />
+          <MoneyBit label="มัดจำ/เต็มจำนวน" value={baht(monthCash.deposits)} sub={`${monthCash.orders} ออเดอร์`} />
+          <MoneyBit label="ส่วนต่างที่เก็บได้" value={baht(monthCash.remaining)} />
+          <MoneyBit label="มัดจำหาของ" value={baht(monthCash.sourcing)} />
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-hair pt-3 text-[12px]">
+          <span className="text-ink-muted">ค้างเก็บทั้งระบบ</span>
+          <b className="text-[15px] text-primary-soft">{baht(owed.total)}</b>
+          <span className="text-ink-faint">({owed.tickets} ใบ · {owed.customers} คน)</span>
+          {owed.collectable > 0 && <span className="rounded-md bg-[#d97706]/20 px-2 py-0.5 font-bold text-[#fbbf24]">ทวงได้แล้ว {baht(owed.collectable)} (ของถึงไทย)</span>}
+          {owed.shippedUnpaid > 0 && <span className="animate-blink rounded-md bg-[#b91c1c]/25 px-2 py-0.5 font-extrabold text-[#f87171]">⚠ ส่งของแล้วยังค้าง {baht(owed.shippedUnpaid)}</span>}
+        </div>
+      </button>
 
       {(hasAnomaly || acceptedUnpaid.length > 0 || parcelNotShipped.length > 0) && (
         <div className="mb-[22px] rounded-2xl border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] p-5">
@@ -416,6 +443,17 @@ function ToShipCard({ ticket, tone, tag, onGo }: { ticket: PreorderTicket; tone:
       </div>
       <span className={cx('shrink-0 rounded-md bg-white/[0.06] px-2 py-1 text-[10.5px] font-bold', tone)}>{tag}</span>
     </button>
+  );
+}
+
+/** ตัวเลขเงินย่อยในการ์ด "เงินเดือนนี้" */
+function MoneyBit({ label, value, sub, tone, big }: { label: string; value: string; sub?: string; tone?: string; big?: boolean }) {
+  return (
+    <div className="rounded-xl border border-subtle bg-surface-3 px-3 py-2.5">
+      <div className="text-[11px] text-ink-muted">{label}</div>
+      <div className={cx('mt-0.5 font-extrabold', big ? 'text-[20px]' : 'text-[15px]', tone ?? 'text-ink')}>{value}</div>
+      {sub && <div className="text-[10.5px] text-ink-faint">{sub}</div>}
+    </div>
   );
 }
 

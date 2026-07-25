@@ -35,10 +35,11 @@ export const ticketDone = (t: PreorderTicket): boolean =>
 export const ticketBadgeKey = (t: PreorderTicket): string => {
   if (t.status === 'shipped') return 'shipped';
   if (t.delivery && ticketPaidFull(t)) return 'awaiting_ship';
-  // ตัดสินด้วยยอดจริง ไม่ใช่ field status — ตั๋ว in-stock จาก checkout เกิดมา remaining 0/0 แต่
-  // status ค้าง 'active' ตลอด (มีแต่ admin approve ส่วนต่าง/grant ที่เซ็ต 'paid_full') → เคยโชว์ "เปิดจอง"
-  // ทั้งที่จ่ายครบ (audit 2026-07-23, เคส Taweesin)
-  if (t.status === 'paid_full' || ticketPaidFull(t)) return 'paid_full';
+  // ตัดสินด้วย "ยอดจริง" เท่านั้น — ห้ามเชื่อ field status (audit 2026-07-25 T3):
+  // ตั๋ว in-stock จาก checkout เกิดมา remaining 0/0 แต่ status ค้าง 'active' (เคยโชว์ "เปิดจอง" ทั้งที่จ่ายครบ
+  // — เคส Taweesin) · กลับกัน ถ้าแอดมินแก้มัดจำย้อนหลังจน status='paid_full' ค้างทั้งที่ยอดไม่ครบ
+  // การเชื่อ field จะโกหกลูกค้าว่า "จ่ายครบ ✓" ทั้งที่ยังค้างเงิน
+  if (ticketPaidFull(t)) return 'paid_full';
   return t.product_status;
 };
 

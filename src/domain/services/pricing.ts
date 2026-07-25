@@ -7,7 +7,8 @@ import type { Database, ShopSettings, WcfType } from '../entities';
  * Constants live in ShopSettings so admin can adjust them as the rate moves.
  */
 export function priceFromYuan(settings: ShopSettings, yuan: number): number {
-  return Math.round(settings.baht_base + (yuan - settings.yuan_base) * settings.baht_per_yuan);
+  // floor ที่ 0 — สูตรเชิงเส้นให้ค่าติดลบได้ถ้า yuan ต่ำกว่า yuan_base มากๆ (money audit F12)
+  return Math.max(0, Math.round(settings.baht_base + (yuan - settings.yuan_base) * settings.baht_per_yuan));
 }
 
 /** Default deposit for a product's tier — Mega WCF is higher than standard WCF. */
