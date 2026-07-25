@@ -11,6 +11,7 @@ import { StatusBadge, ProgressBar, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { EventBanner } from '@/components/EventBits';
 import { paidPercent } from '@/domain/services/tickets';
+import { ticketDue } from '@/domain/services/money';
 import { inClosedBoard } from '@/domain/services/catalog';
 import { ticketBadgeKey } from '@/domain/services/delivery';
 
@@ -43,8 +44,11 @@ export default function HomePage() {
           <SectionHeader title="อัปเดตพรีของคุณ" href="/wallet" link="ไปกระเป๋าใบพรี →" />
           <div className="mb-8 flex gap-3 overflow-x-auto pb-1.5 no-scrollbar lg:grid lg:grid-cols-3 lg:overflow-visible">
             {myTickets.map((t) => {
-              const product = db.products.find((p) => p.id === t.product_id)!;
-              const due = t.remaining_amount - t.remaining_paid;
+              // ⚠ ห้าม non-null assertion ตรงนี้ (audit 2026-07-25): ถ้าสินค้าถูกลบ/RLS ซ่อน
+              // หน้าแรกของลูกค้าจะจอขาวทั้งหน้า — ข้ามการ์ดใบนั้นแทน (กระเป๋าตั๋วก็ทำแบบนี้)
+              const product = db.products.find((p) => p.id === t.product_id);
+              if (!product) return null;
+              const due = ticketDue(t);
               // ข้อความ + สี ผูกกับ ticketBadgeKey ตัวเดียว — ห้ามตัดสินเองจาก field ดิบ (การ์ดเคยขัดแย้งกันเอง)
               const badgeKey = ticketBadgeKey(t);
               const sub = badgeKey === 'shipped' ? 'เสร็จสิ้น รับของเรียบร้อย ✓'

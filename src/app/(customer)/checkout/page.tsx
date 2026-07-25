@@ -229,7 +229,7 @@ export default function CheckoutPage() {
               <div className="mt-3 flex flex-col items-center gap-1 text-[12.5px] text-ink-muted2">
                 {deadLines.map((l) => <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')}>• {productLabel(db, l.productId, l.variantId)} ×{l.qty} — หมดแล้ว</div>)}
               </div>
-              <button onClick={() => { deadLines.forEach((l) => cart.remove(l.productId, l.variantId)); flash('เอาสินค้าที่หมดออกแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">เอาสินค้าที่หมดออกจากตะกร้า</button>
+              <button onClick={() => { deadLines.forEach((l) => cart.remove(l.productId, l.variantId, l.batchId)); flash('เอาสินค้าที่หมดออกแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">เอาสินค้าที่หมดออกจากตะกร้า</button>
             </>
           )}
           <button onClick={() => router.push('/shop')} className="mt-2.5 w-full rounded-btn border border-subtle py-3 text-sm font-semibold text-ink-muted2">← กลับหน้าร้าน</button>

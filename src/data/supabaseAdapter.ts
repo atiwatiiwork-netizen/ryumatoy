@@ -170,50 +170,63 @@ export const supabaseAdapter: PersistenceAdapter = {
 
   async persist(next, base) {
     const sb = client();
-    await syncTable(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]);
-    await syncTable(sb, 'categories', next.categories as unknown as Row[], base.categories as unknown as Row[]);
-    await syncTable(sb, 'manufacturers', next.manufacturers as unknown as Row[], base.manufacturers as unknown as Row[]);
-    await syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]);
-    await syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]);
-    await syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]);
-    await syncTable(sb, 'preorder_boards', next.boards as unknown as Row[], base.boards as unknown as Row[]);
-    await syncTable(sb, 'board_close_logs', next.boardLogs as unknown as Row[], base.boardLogs as unknown as Row[]);
-    await syncTable(sb, 'product_batches', next.batches as unknown as Row[], base.batches as unknown as Row[]);
-    await syncTable(sb, 'stock_additions', next.stockAdditions as unknown as Row[], base.stockAdditions as unknown as Row[]);
-    await syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]);
-    await syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]);
-    await syncTable(sb, 'coupon_grants', next.couponGrants as unknown as Row[], base.couponGrants as unknown as Row[]);
-    await syncTable(sb, 'campaigns', next.campaigns as unknown as Row[], base.campaigns as unknown as Row[]);
-    await syncTable(sb, 'campaign_awards', next.campaignAwards as unknown as Row[], base.campaignAwards as unknown as Row[]);
-    await syncTable(sb, 'push_subscriptions', next.pushSubscriptions as unknown as Row[], base.pushSubscriptions as unknown as Row[]);
-    await syncTable(sb, 'push_prefs', next.pushPrefs as unknown as Row[], base.pushPrefs as unknown as Row[], 'user_id');
-    await syncTable(sb, 'push_config', next.pushConfig as unknown as Row[], base.pushConfig as unknown as Row[], 'key');
-    await syncTable(sb, 'sourcing_requests', next.sourcingRequests as unknown as Row[], base.sourcingRequests as unknown as Row[]);
-    await syncTable(sb, 'sourcing_memos', next.sourcingMemos as unknown as Row[], base.sourcingMemos as unknown as Row[]);
-    await syncTable(sb, 'mission_submissions', next.missionSubmissions as unknown as Row[], base.missionSubmissions as unknown as Row[]);
-    await syncTable(sb, 'app_config', next.appConfig as unknown as Row[], base.appConfig as unknown as Row[], 'key');
-    await syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]);
+    // ⚠ FAULT ISOLATION (data-linking audit 2026-07-25 — รากของบั๊ก "ข้อมูลหาย"):
+    // เดิม persist เขียนแบบ fail-fast → ตารางแรกที่พัง (เช่น coupon_grants โดน RLS ปฏิเสธในเซสชันลูกค้า)
+    // ทำให้ตารางที่เหลือ "ทั้งหมด" หลังจากนั้น (orders → order_items → preorder_tickets →
+    // remaining_payments → push_subscriptions …) ไม่ถูกเขียนเลย และพังซ้ำทุก flush ตลอดไป
+    // ตอนนี้: เขียนทุกตารางเสมอ เก็บ error ไว้ แล้วโยนรวมตอนจบ (store rewind+retry เหมือนเดิม)
+    const errs: string[] = [];
+    const step = async (label: string, run: () => Promise<unknown>) => {
+      try { await run(); } catch (e) { errs.push(`${label}: ${(e as { message?: string })?.message ?? String(e)}`); }
+    };
+    await step('users', () => syncTable(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]));
+    await step('categories', () => syncTable(sb, 'categories', next.categories as unknown as Row[], base.categories as unknown as Row[]));
+    await step('manufacturers', () => syncTable(sb, 'manufacturers', next.manufacturers as unknown as Row[], base.manufacturers as unknown as Row[]));
+    await step('franchises', () => syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]));
+    await step('series', () => syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]));
+    await step('products', () => syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]));
+    await step('preorder_boards', () => syncTable(sb, 'preorder_boards', next.boards as unknown as Row[], base.boards as unknown as Row[]));
+    await step('board_close_logs', () => syncTable(sb, 'board_close_logs', next.boardLogs as unknown as Row[], base.boardLogs as unknown as Row[]));
+    await step('product_batches', () => syncTable(sb, 'product_batches', next.batches as unknown as Row[], base.batches as unknown as Row[]));
+    await step('stock_additions', () => syncTable(sb, 'stock_additions', next.stockAdditions as unknown as Row[], base.stockAdditions as unknown as Row[]));
+    await step('product_variants', () => syncTable(sb, 'product_variants', next.variants as unknown as Row[], base.variants as unknown as Row[]));
+    await step('coupons', () => syncTable(sb, 'coupons', next.coupons as unknown as Row[], base.coupons as unknown as Row[]));
+    await step('coupon_grants', () => syncTable(sb, 'coupon_grants', next.couponGrants as unknown as Row[], base.couponGrants as unknown as Row[]));
+    await step('campaigns', () => syncTable(sb, 'campaigns', next.campaigns as unknown as Row[], base.campaigns as unknown as Row[]));
+    await step('campaign_awards', () => syncTable(sb, 'campaign_awards', next.campaignAwards as unknown as Row[], base.campaignAwards as unknown as Row[]));
+    await step('push_subscriptions', () => syncTable(sb, 'push_subscriptions', next.pushSubscriptions as unknown as Row[], base.pushSubscriptions as unknown as Row[]));
+    await step('push_prefs', () => syncTable(sb, 'push_prefs', next.pushPrefs as unknown as Row[], base.pushPrefs as unknown as Row[], 'user_id'));
+    await step('push_config', () => syncTable(sb, 'push_config', next.pushConfig as unknown as Row[], base.pushConfig as unknown as Row[], 'key'));
+    await step('sourcing_requests', () => syncTable(sb, 'sourcing_requests', next.sourcingRequests as unknown as Row[], base.sourcingRequests as unknown as Row[]));
+    await step('sourcing_memos', () => syncTable(sb, 'sourcing_memos', next.sourcingMemos as unknown as Row[], base.sourcingMemos as unknown as Row[]));
+    await step('mission_submissions', () => syncTable(sb, 'mission_submissions', next.missionSubmissions as unknown as Row[], base.missionSubmissions as unknown as Row[]));
+    await step('app_config', () => syncTable(sb, 'app_config', next.appConfig as unknown as Row[], base.appConfig as unknown as Row[], 'key'));
+    await step('payment_accounts', () => syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]));
 
-    await syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never));
-    await syncTable(
+    await step('orders', () => syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never)));
+    await step('order_items', () => syncTable(
       sb,
       'order_items',
       next.orders.flatMap((o) => o.items) as unknown as Row[],
       base.orders.flatMap((o) => o.items) as unknown as Row[],
-    );
+    ));
 
-    await syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]);
-    await syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]);
-    await syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]);
-    await syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]);
-    await syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name');
+    await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
+    await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
+    await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
+    await step('ticket_transfers', () => syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]));
+    await step('rank_tiers', () => syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name'));
 
     // Only write settings when they actually changed — otherwise every customer
     // save would try to upsert shop_settings, which RLS blocks for non-admins.
     if (JSON.stringify(next.settings) !== JSON.stringify(base.settings)) {
-      const { error } = await sb.from('shop_settings').upsert({ id: 'default', ...next.settings });
-      if (error) throw error;
+      await step('shop_settings', async () => {
+        const { error } = await sb.from('shop_settings').upsert({ id: 'default', ...next.settings });
+        if (error) throw error;
+      });
     }
+    // ทุกตารางถูกพยายามเขียนครบแล้ว — ค่อยแจ้ง error รวม (store rewind + retry + onPersistError toast)
+    if (errs.length) throw new Error(errs.join(' | '));
   },
 
   async reset(): Promise<Database> {

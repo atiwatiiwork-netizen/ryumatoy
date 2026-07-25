@@ -50,6 +50,9 @@ export default function TicketDetailPage() {
 
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
   if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
+  // สินค้าถูกลบ/ซ่อน → แสดงข้อความแทนการ crash ทั้งหน้า (audit 2026-07-25)
+  if (!db.products.find((p) => p.id === ticket.product_id))
+    return <div className="p-10 text-ink-faint">ตั๋วนี้อ้างอิงสินค้าที่ไม่มีในระบบแล้ว — ทักแอดมินเพื่อตรวจสอบครับ</div>;
 
   const product = db.products.find((p) => p.id === ticket.product_id)!;
   const ticketImg = lineImage(db, ticket.product_id, ticket.variant_id); // honour the picked variant's image

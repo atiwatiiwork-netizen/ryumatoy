@@ -68,17 +68,20 @@ export function CustomerShell({ children }: { children: ReactNode }) {
       flash(`กู้คืนใบพรีที่หายไป ${missingItems.length} ใบแล้ว ✓`);
     })();
   }, [db, CURRENT_USER_ID, dispatch, flash]);
-  // SELF-HEAL #2: coupons burned by a split flush (grant 'used' but its order/final-payment never
-  // persisted) come back automatically too.
+  // ⚠ SELF-HEAL #2 (คืนคูปองที่ถูกเผาโดยเซฟไม่สมบูรณ์) — ปิดจากฝั่งลูกค้าถาวร (audit 2026-07-25):
+  // RLS trigger ryuma_guard_coupon_grant (v39) ห้าม non-admin ตั้ง status='active' → การเขียนนี้
+  // ถูกปฏิเสธเสมอ และ (ก่อนแก้ persist วันนี้) ทำให้ทุกตารางหลัง coupon_grants — orders, order_items,
+  // preorder_tickets, remaining_payments — ไม่ถูกเซฟเลยตลอดกาลสำหรับลูกค้าคนนั้น
+  // = รากของอาการ "ข้อมูลหาย". การคืนคูปองย้ายไปเป็นงานฝั่งแอดมิน (ปุ่มกวาดใน /admin/coupons).
+  // เหลือไว้แค่แจ้งให้ลูกค้ารู้ว่ามีคูปองค้างสถานะ เพื่อทักแอดมินได้
   const reclaimed = useRef(false);
   useEffect(() => {
     if (reclaimed.current || !CURRENT_USER_ID) return;
     const orphans = orphanUsedGrants(db, CURRENT_USER_ID).length;
     if (orphans === 0) return;
     reclaimed.current = true;
-    dispatch(reclaimOrphanCouponGrants(CURRENT_USER_ID));
-    flash(`↩️ คืนคูปอง ${orphans} ใบ (การใช้ครั้งก่อนไม่สมบูรณ์)`);
-  }, [db, CURRENT_USER_ID, dispatch, flash]);
+    flash(`↩️ พบคูปอง ${orphans} ใบที่ใช้ไม่สมบูรณ์ — ทักแอดมินเพื่อรับคืนได้เลย`);
+  }, [db, CURRENT_USER_ID, flash]);
   const { needsApproval, isLoggedIn, authReady } = useAuth();
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   // install-rate: stamp installed_at the first time a logged-in member opens the app in standalone

@@ -30,8 +30,8 @@ interface CartState {
   coupon: string | null;
   count: number;
   add: (line: Omit<CartLine, 'qty'> & { qty?: number }) => void;
-  setQty: (productId: string, variantId: string | undefined, qty: number) => void;
-  remove: (productId: string, variantId?: string) => void;
+  setQty: (productId: string, variantId: string | undefined, qty: number, batchId?: string) => void;
+  remove: (productId: string, variantId?: string, batchId?: string) => void;
   applyCoupon: (code: string | null) => void;
   clear: () => void;
   depositTotal: () => number;
@@ -39,8 +39,11 @@ interface CartState {
 
 const CartContext = createContext<CartState | null>(null);
 
-const same = (a: CartLine, productId: string, variantId?: string) =>
-  a.productId === productId && a.variantId === variantId;
+// ⚠ ต้องเทียบ batchId ด้วยเสมอ (audit 2026-07-25): สินค้าเดียวกันมีได้ 2 บรรทัด — พรีปกติ กับ รอบพิเศษ
+// (คนละราคา/มัดจำ). เดิม setQty/remove เทียบแค่ product+variant → ลบบรรทัดรอบพิเศษที่ของหมด
+// แล้วบรรทัดพรีปกติของลูกค้าโดนลบไปด้วย และปุ่ม +/− ขยับพร้อมกันทั้งคู่
+const same = (a: CartLine, productId: string, variantId?: string, batchId?: string) =>
+  a.productId === productId && a.variantId === variantId && a.batchId === batchId;
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>(() => loadCart().lines);
@@ -56,7 +59,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setLines((prev) => {
       // match on batchId too, so a special-round line (its own price) never MERGES into a normal
       // pre-order line of the same product and inherits the wrong deposit/price. (audit: cart batchId)
-      const i = prev.findIndex((l) => same(l, line.productId, line.variantId) && l.batchId === line.batchId);
+      const i = prev.findIndex((l) => same(l, line.productId, line.variantId, line.batchId));
       if (i >= 0) {
         const next = [...prev];
         next[i] = { ...next[i], qty: next[i].qty + qty };
@@ -66,14 +69,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setQty = useCallback((productId: string, variantId: string | undefined, qty: number) => {
+  const setQty = useCallback((productId: string, variantId: string | undefined, qty: number, batchId?: string) => {
     setLines((prev) =>
-      prev.map((l) => (same(l, productId, variantId) ? { ...l, qty } : l)).filter((l) => l.qty > 0),
+      prev.map((l) => (same(l, productId, variantId, batchId) ? { ...l, qty } : l)).filter((l) => l.qty > 0),
     );
   }, []);
 
-  const remove = useCallback((productId: string, variantId?: string) => {
-    setLines((prev) => prev.filter((l) => !same(l, productId, variantId)));
+  const remove = useCallback((productId: string, variantId?: string, batchId?: string) => {
+    setLines((prev) => prev.filter((l) => !same(l, productId, variantId, batchId)));
   }, []);
 
   const clear = useCallback(() => {

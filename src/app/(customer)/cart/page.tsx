@@ -61,13 +61,13 @@ export default function CartPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex justify-between gap-2">
                   <div className="text-[13px] font-semibold leading-tight">{productLabel(db, l.productId, l.variantId)}</div>
-                  <button onClick={() => cart.remove(l.productId, l.variantId)} className="text-ink-faint"><Icon name="x" size={16} /></button>
+                  <button onClick={() => cart.remove(l.productId, l.variantId, l.batchId)} className="text-ink-faint"><Icon name="x" size={16} /></button>
                 </div>
                 <span className={cx('mt-1.5 inline-block rounded-md px-2 py-0.5 text-[10.5px] font-semibold', isPre ? 'bg-[#16a34a]/[0.14] text-[#4ade80]' : 'bg-[#2563eb]/[0.14] text-[#60a5fa]')}>
                   {isPre ? 'พรีออเดอร์ · มัดจำ' : 'พร้อมส่ง · เต็มจำนวน'}
                 </span>
                 <div className="mt-2 flex items-center justify-between">
-                  <Stepper qty={l.qty} onChange={(q) => cart.setQty(l.productId, l.variantId, q)} />
+                  <Stepper qty={l.qty} onChange={(q) => cart.setQty(l.productId, l.variantId, q, l.batchId)} />
                   <span className="text-sm font-bold text-primary-soft">{baht(unitDeposit(l) * l.qty)}</span>
                 </div>
               </div>
