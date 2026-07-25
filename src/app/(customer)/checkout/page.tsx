@@ -16,6 +16,7 @@ import { submitOrder } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel } from '@/domain/services/catalog';
+import { batchAvailable, availableFor } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
@@ -71,6 +72,17 @@ export default function CheckoutPage() {
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
   const stockLines = validLines.filter((l) => l.batchId || db.products.find((p) => p.id === l.productId)?.is_stock);
   const needsReserve = canLogin && stockLines.length > 0;
+  // เช็คของหมดจาก client ทันที (บัญชีเดียว: ตั๋ว+hold ค้าง) — ไม่ต้องรอ RPC ตอบ. เคส Kid Naruto
+  // 2026-07-24: ของหมดแต่ตะกร้าค้างของเก่า → หน้าโอนเงินโชว์ก่อนแบนเนอร์หมด → ลูกค้าโอนเงินฟรี!
+  // ของหมด = ห้ามเห็นเลขบัญชี/ช่องสลิป/ปุ่มส่ง ตั้งแต่แรก
+  const deadLines = stockLines.filter((l) => {
+    const p = db.products.find((pp) => pp.id === l.productId);
+    if (!p) return false;
+    const b = l.batchId ? db.batches.find((bb) => bb.id === l.batchId) : undefined;
+    const avail = b ? batchAvailable(db, b) : availableFor(db, p);
+    return l.qty > avail;
+  });
+  const clientSoldOut = deadLines.length > 0;
   const [resIds, setResIds] = useState<string[]>([]);
   const [resUntil, setResUntil] = useState<number | null>(null);
   const [soldOut, setSoldOut] = useState(false);
@@ -80,6 +92,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (started.current || mustLogin || needsApproval || !needsReserve) return;
+    if (clientSoldOut) return; // ของหมดตั้งแต่ยังไม่เริ่ม — ไม่ต้อง hold (ลูกค้าต้องเอาของหมดออกก่อน)
     started.current = true;
     (async () => {
       const ids: string[] = []; let earliest = Infinity;
@@ -101,7 +114,8 @@ export default function CheckoutPage() {
 
   const secsLeft = resUntil ? Math.max(0, Math.floor((resUntil - nowTs) / 1000)) : 0;
   const mmss = `${String(Math.floor(secsLeft / 60)).padStart(2, '0')}:${String(secsLeft % 60).padStart(2, '0')}`;
-  const blockedByStock = needsReserve && (soldOut || expired);
+  // hard-block ทั้งหน้า: ของหมด (เช็ค client ทันที หรือ server ปฏิเสธ) / หมดเวลาจอง — ห้ามเห็นช่องทางโอน
+  const blockedByStock = clientSoldOut || (needsReserve && (soldOut || expired));
 
   const onSlip = async (file?: File) => {
     if (!file) return;
@@ -196,7 +210,28 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {noPayment ? (
+      {blockedByStock ? (
+        /* ของหมด/หมดเวลา = บล็อกทั้งส่วนชำระเงิน — ห้ามโชว์เลขบัญชี/ช่องสลิป/ปุ่มส่งเด็ดขาด
+           (เคส Kid Naruto 2026-07-24: ลูกค้าเห็นเลขบัญชีก่อนแบนเนอร์หมดขึ้น → โอนเงินไปฟรี) */
+        <div className="mb-4 rounded-card border border-accent bg-[#b91c1c]/[0.12] p-5 text-center">
+          <Icon name="warning" size={26} className="mx-auto mb-2 text-primary-soft" />
+          <div className="text-[15px] font-extrabold text-primary-soft">
+            {!clientSoldOut && !soldOut && expired ? 'หมดเวลาชำระ · การจองถูกคืนแล้ว' : 'สินค้าถูกจองครบแล้ว · สั่งไม่ได้ในรอบนี้'}
+          </div>
+          <div className="mt-1.5 text-[12.5px] text-ink-muted2">
+            {!clientSoldOut && !soldOut && expired ? 'กรุณากลับไปเริ่มสั่งใหม่อีกครั้ง' : 'ระบบปิดช่องทางโอนเงินไว้ — จะได้ไม่โอนแล้วไม่ได้ของ 🙏'}
+          </div>
+          {deadLines.length > 0 && (
+            <>
+              <div className="mt-3 flex flex-col items-center gap-1 text-[12.5px] text-ink-muted2">
+                {deadLines.map((l) => <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')}>• {productLabel(db, l.productId, l.variantId)} ×{l.qty} — หมดแล้ว</div>)}
+              </div>
+              <button onClick={() => { deadLines.forEach((l) => cart.remove(l.productId, l.variantId)); flash('เอาสินค้าที่หมดออกแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">เอาสินค้าที่หมดออกจากตะกร้า</button>
+            </>
+          )}
+          <button onClick={() => router.push('/shop')} className="mt-2.5 w-full rounded-btn border border-subtle py-3 text-sm font-semibold text-ink-muted2">← กลับหน้าร้าน</button>
+        </div>
+      ) : noPayment ? (
         <div className="mb-4 rounded-card border border-[#8b5cf6]/40 bg-[#8b5cf6]/[0.10] p-[18px] text-center">
           <Icon name="verified" size={26} className="mx-auto mb-1.5 text-[#c4b5fd]" />
           <div className="text-sm font-bold text-[#c4b5fd]">{couponFree ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · ไม่ต้องมัดจำ'}</div>
@@ -260,19 +295,19 @@ export default function CheckoutPage() {
         </div>
       ) : (
         <>
-          {needsReserve && !soldOut && resUntil && !expired && (
+          {!blockedByStock && needsReserve && resUntil && (
             <div className="mb-3 flex items-center justify-center gap-2 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.12] py-2.5 text-[13px] font-bold text-[#fbbf24]">
               <Icon name="bell" size={16} /> จองสินค้าไว้ให้แล้ว · ชำระภายใน {mmss}
             </div>
           )}
-          {needsReserve && soldOut && (
-            <div className="mb-3 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3 text-center text-[13px] font-bold text-primary-soft">สินค้าถูกจองครบแล้ว · ขออภัย สั่งไม่ได้ในรอบนี้</div>
+          {/* ของหมด/หมดเวลา: แผงแดงด้านบนแทนที่ทุกอย่างแล้ว — ไม่มีปุ่มส่งให้กดเลย (เดิมปุ่ม disabled
+              แต่ยังมองเห็น ลูกค้าเข้าใจว่ากดได้) */}
+          {!blockedByStock && (
+            <>
+              <Button disabled={(!slip && !noPayment) || busy} onClick={submit}>{noPayment ? 'ยืนยัน · รับตั๋วเลย' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}</Button>
+              <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">{noPayment ? 'ยืนยันแล้วได้ตั๋วทันที · จ่ายเต็มจำนวนตอนของถึงไทย' : 'เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ'}</div>
+            </>
           )}
-          {needsReserve && expired && !soldOut && (
-            <div className="mb-3 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3 text-center text-[13px] font-bold text-primary-soft">หมดเวลาชำระ · การจองถูกคืนแล้ว กรุณาเริ่มสั่งใหม่</div>
-          )}
-          <Button disabled={(!slip && !noPayment) || busy || blockedByStock} onClick={submit}>{noPayment ? 'ยืนยัน · รับตั๋วเลย' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}</Button>
-          <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">{noPayment ? 'ยืนยันแล้วได้ตั๋วทันที · จ่ายเต็มจำนวนตอนของถึงไทย' : 'เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ'}</div>
         </>
       )}
     </div>
