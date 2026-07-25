@@ -132,12 +132,6 @@ export default function CheckoutPage() {
     if (validLines.some((l) => l.batchId) && !canBuySpecialWithLines(db, currentUserId, validLines))
       return flash('🔒 รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เพิ่มพรีปกติลงตะกร้า หรือเปิดพรีก่อนนะครับ');
     setBusy(true);
-    // slip submitted → stop the 15-min timer on each hold (kept until admin decides)
-    await Promise.all(resIds.map((rid) => payReservation(rid)));
-    // coupon fully covered an in-stock order → we auto-approve here with no admin step, so the stock
-    // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
-    // stay 'paid' and the stock would be held forever.
-    if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
     // Diamond / coupon-covered (payNow 0) → auto-approve issues the ticket right here in the CUSTOMER
     // session, where RLS hides other customers' tickets → client numbering would collide. Reserve the
     // numbers from the server first (migration v47); seed/preview returns {} → mutation falls back.
@@ -146,7 +140,16 @@ export default function CheckoutPage() {
     // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
     let submitted = false;
     dispatch((d) => { submitted = d.orders.length > db.orders.length; return d; });
+    // ⚠ ลำดับสำคัญ (เคส Madara/Pl Tree 2026-07-25): payReservation ต้องเรียก "หลัง" รู้ว่าออเดอร์เกิดจริง
+    // เท่านั้น — เดิมเรียกก่อน แล้วออเดอร์โดนปัดตก → hold ค้าง 'paid' ถาวร ขวางสต๊อกโดยไม่มีออเดอร์คู่.
+    // ถ้าไม่ผ่าน: hold ยังเป็น active มีนาฬิกา 15 นาที → คืนของเองอัตโนมัติ
     if (!submitted) { setBusy(false); return flash('ส่งออเดอร์ไม่สำเร็จ — ตรวจสิทธิ์รอบพิเศษ/รีเฟรชหน้าแล้วลองใหม่'); }
+    // ออเดอร์เกิดแล้ว → หยุดนาฬิกา hold (กันของจนแอดมินตรวจ)
+    await Promise.all(resIds.map((rid) => payReservation(rid)));
+    // coupon fully covered an in-stock order → we auto-approve here with no admin step, so the stock
+    // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
+    // stay 'paid' and the stock would be held forever.
+    if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
     cart.clear();
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.
