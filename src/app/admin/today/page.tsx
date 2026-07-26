@@ -102,14 +102,17 @@ function PlansTab() {
   const today = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
 
   const remind = (planId: string, userId: string, amount: number) => {
-    if (pushEnabled(db, 'plan_due'))
-      sendPush(subsForUsers(db, [userId]), { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${baht(amount)} — โอนแล้วแจ้งแอดมินได้เลย`, url: '/wallet' }, dispatch).catch(() => {});
+    // ⚠ ลำดับสำคัญ: ต้องรู้ก่อนว่า "เตือนได้จริงไหม" แล้วค่อยยิง push — ยิงไปแล้วเรียกคืนไม่ได้
+    // (เดิมยิงก่อนอ่านกลับ → ลูกค้าที่เพิ่งจ่ายไปเมื่อครู่ยังโดนทวง audit v57 #7)
     dispatch(markPlanReminded(planId));
-    // อ่านกลับก่อนค่อยบันทึกประวัติ+ฟ้อง: ถ้านัดถูกปิดไปแล้วจากอีกเครื่อง markPlanReminded จะเป็น no-op
     let stamped = false;
     dispatch((d) => { stamped = !!d.paymentPlans.find((p) => p.id === planId)?.reminded_at; return d; });
-    if (!stamped) return flash('นัดนี้ถูกปิดไปแล้ว — ไม่ได้บันทึกการเตือน');
+    if (!stamped) return flash('นัดนี้ถูกปิดไปแล้ว — ไม่ได้ส่งเตือน');
     dispatch(logActivity(me, 'remind_plan', `เตือนนัดชำระ ${baht(amount)}`, { targetId: planId, amount }));
+    if (!pushEnabled(db, 'plan_due')) return flash('บันทึกการเตือนแล้ว — แต่ปิดแจ้งเตือน plan_due อยู่ (ลูกค้าไม่ได้รับ)');
+    const devices = subsForUsers(db, [userId]);
+    if (devices.length === 0) return flash('บันทึกการเตือนแล้ว — แต่ลูกค้ายังไม่เปิดกระดิ่ง ต้องทักเอง');
+    sendPush(devices, { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${baht(amount)} — กดจ่ายได้เลยที่เมนู "นัดชำระ"`, url: '/plans' }, dispatch).catch(() => {});
     flash('ส่งเตือนลูกค้าแล้ว 🔔');
   };
   const close = (planId: string, status: 'done' | 'cancelled', amount: number) => {
@@ -218,7 +221,11 @@ function NewPlanForm() {
   const shown = q.trim() ? opts.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase())) : opts.slice(0, 12);
 
   // มัดจำต่อชิ้นคิดตาม "ขั้นของลูกค้าคนนั้น" ไม่ใช่ของแอดมิน (DNA: ทุกมัดจำต้องผ่าน ranks.ts)
-  const eachOf = (o: Opt) => lineDepositForRank(db.settings, { deposit: o.deposit, price: o.price, isStock: o.kind !== 'pre' }, rank);
+  // isStock ต้องอ่านจาก "สินค้า" ไม่ใช่ชนิดของตัวเลือก — รอบพิเศษบน SKU พรีเป็นรอบ "มัดจำ"
+  // ถ้าตีว่าเป็นของพร้อมส่งจะได้ยอด = ราคาเต็ม แล้วหน้าลูกค้าคิดเป็นมัดจำ → ตัวเลขไม่ตรงกัน
+  // (ยอดในนัด/ยอดใน push/ยอดในคิวแอดมินบวมทั้งหมด) audit v57 #3
+  const eachOf = (o: Opt) => lineDepositForRank(db.settings,
+    { deposit: o.deposit, price: o.price, isStock: db.products.find((p) => p.id === o.productId)?.is_stock ?? true }, rank);
   const lines = Object.entries(picked).filter(([, n]) => n > 0)
     .map(([k, n]) => ({ opt: opts.find((o) => o.key === k), qty: n }))
     .filter((x): x is { opt: Opt; qty: number } => !!x.opt);

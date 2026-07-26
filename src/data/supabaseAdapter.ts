@@ -106,7 +106,9 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('payment_accounts').select('*'),
         // limit ต้อง ≥ cap ในหน่วยความจำ (400 ใน logActivity) ไม่งั้นแถวที่ถูกตัดจะดูเหมือน "ถูกลบ"
         sb.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(400),
-        sb.from('payment_plans').select('*').order('due_date', { ascending: true }).limit(500),
+        // ใหม่สุดก่อนเสมอ: เรียงตาม due_date ขึ้น + limit จะ "ปักหน้าต่างไว้ที่นัดเก่าสุด"
+        // พอมีครบ 500 แถว นัดที่ออกใหม่จะหลุดหน้าต่างทั้งหมด = ฟีเจอร์ตายเงียบ (audit v57 #15)
+        sb.from('payment_plans').select('*').order('created_at', { ascending: false }).limit(500),
         sb.from('shop_settings').select('*'),
       ]);
 

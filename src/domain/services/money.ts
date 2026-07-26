@@ -25,11 +25,12 @@ export interface MoneyRow {
   deposits: number;   // มัดจำ/เต็มจำนวน จากออเดอร์ที่อนุมัติ (สุทธิหลังคูปอง = เงินที่โอนเข้าจริง)
   remaining: number;  // ส่วนต่างที่อนุมัติแล้ว
   sourcing: number;   // มัดจำหาของที่ลูกค้าจ่ายแล้ว (paid/working)
+  granted: number;    // มัดจำของตั๋วที่แอดมินมอบเอง (เก็บเงินนอกระบบ ไม่มีออเดอร์)
   total: number;      // รวมเงินเข้า
   orders: number;     // จำนวนออเดอร์ที่อนุมัติ
 }
 
-const empty = (): MoneyRow => ({ deposits: 0, remaining: 0, sourcing: 0, total: 0, orders: 0 });
+const empty = (): MoneyRow => ({ deposits: 0, remaining: 0, sourcing: 0, granted: 0, total: 0, orders: 0 });
 
 /**
  * เงินเข้าในเดือน ym (YYYY-MM local) — ถ้าไม่ระบุ = ทั้งหมดตั้งแต่เปิดร้าน.
@@ -56,8 +57,38 @@ export function cashIn(db: Database, ym?: string): MoneyRow {
     if (!inMonth(s.paid_at ?? s.created_at)) continue;
     row.sourcing += (s.deposit ?? 0) * (s.qty ?? 1);
   }
-  row.total = row.deposits + row.remaining + row.sourcing;
+  // ตั๋วที่แอดมิน "มอบ" เอง (ไล่เก็บใบพรีเก่า — เก็บเงินนอกระบบแล้วออกตั๋วให้)
+  // ไม่มีออเดอร์คู่ → เดิมมัดจำก้อนนี้ไม่โผล่ในยอดไหนเลย ทั้งที่ค้างของก้อนเดียวกัน
+  // กลับโผล่ใน outstanding() = บัญชีเห็นครึ่งเดียว (บั๊กทรงเดียวกับ ฿224,180) audit money #3
+  for (const t of db.tickets) {
+    if (!t.batch_id || (t.deposit_paid ?? 0) <= 0) continue;
+    if (grantedTicketIds(db).has(t.id) === false) continue;
+    if (!inMonth(t.approved_at ?? t.created_at)) continue;
+    row.granted += t.deposit_paid ?? 0;
+  }
+  row.total = row.deposits + row.remaining + row.sourcing + row.granted;
   return row;
+}
+
+/** ตั๋วที่ไม่มีออเดอร์รองรับ = แอดมินมอบเอง (เก็บเงินนอกระบบ). แคชต่อ db เพื่อไม่ให้ O(n²) */
+const grantedCache = new WeakMap<Database, Set<string>>();
+export function grantedTicketIds(db: Database): Set<string> {
+  const hit = grantedCache.get(db);
+  if (hit) return hit;
+  // ออเดอร์ที่อนุมัติแล้วครอบคลุมตั๋วใบไหนบ้าง — จับคู่ด้วย เจ้าของ+สินค้า+รอบ แบบใช้ครั้งเดียว
+  const covered = new Set<string>();
+  for (const o of db.orders) {
+    if (o.status !== 'approved') continue;
+    for (const it of o.items) {
+      const t = db.tickets.find((x) => !covered.has(x.id) && x.owner_id === o.user_id
+        && x.product_id === it.product_id && (x.batch_id ?? null) === (it.batch_id ?? null)
+        && (x.variant_id ?? null) === (it.variant_id ?? null));
+      if (t) covered.add(t.id);
+    }
+  }
+  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id)).map((t) => t.id));
+  grantedCache.set(db, granted);
+  return granted;
 }
 
 export interface Outstanding {

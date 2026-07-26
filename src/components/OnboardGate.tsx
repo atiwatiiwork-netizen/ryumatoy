@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '@/state/ToastProvider';
 import { detectPlatform, isStandalone, inAppBrowser, type Platform, type InAppKind } from '@/lib/pwa';
 import { copyText } from '@/lib/clipboard';
+import { readStore, writeStore } from '@/lib/safeStorage';
 import { PublicLanding } from './PublicLanding';
 import { Icon } from './Icon';
 import { cx } from './ui';
@@ -42,8 +43,8 @@ export function OnboardGate() {
       setPlatform(p);
       const { inApp, kind: k } = inAppBrowser();
       if (isStandalone() || p === 'desktop') setScreen('landing');           // installed / desktop → normal
-      else if (inApp && sessionStorage.getItem(INAPP_SKIP_KEY) !== '1') { setKind(k); setScreen('inapp'); }
-      else if (localStorage.getItem(SKIP_KEY) === '1') setScreen('landing'); // they chose to skip before
+      else if (inApp && readStore('session', INAPP_SKIP_KEY) !== '1') { setKind(k); setScreen('inapp'); }
+      else if (readStore('local', SKIP_KEY) === '1') setScreen('landing'); // they chose to skip before
       else setScreen('install');                                            // mobile browser, not installed
     } catch {
       setScreen('landing');
@@ -53,8 +54,10 @@ export function OnboardGate() {
   }, []);
 
   if (screen === 'wait') return <Splash />;
-  if (screen === 'inapp') return <OpenInBrowser kind={kind} platform={platform} onSkip={() => { sessionStorage.setItem(INAPP_SKIP_KEY, '1'); setScreen('landing'); }} />;
-  if (screen === 'install') return <InstallFirst platform={platform} deferred={deferred} onInstalled={() => setScreen('landing')} onSkip={() => { localStorage.setItem(SKIP_KEY, '1'); setScreen('landing'); }} />;
+  // ⚠ setScreen ต้องรันเสมอ แม้เขียน storage ไม่ได้ — ไม่งั้นปุ่ม "ข้าม" ตายสนิท
+  //   (เปิดจาก LINE + บล็อกคุกกี้ = ลูกค้าไปหน้าล็อกอินไม่ได้เลยตลอดกาล) audit persist #8
+  if (screen === 'inapp') return <OpenInBrowser kind={kind} platform={platform} onSkip={() => { writeStore('session', INAPP_SKIP_KEY, '1'); setScreen('landing'); }} />;
+  if (screen === 'install') return <InstallFirst platform={platform} deferred={deferred} onInstalled={() => setScreen('landing')} onSkip={() => { writeStore('local', SKIP_KEY, '1'); setScreen('landing'); }} />;
   return <PublicLanding />;
 }
 

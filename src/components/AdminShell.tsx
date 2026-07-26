@@ -33,13 +33,22 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const firedRef = useRef(false);
   useEffect(() => {
     if (firedRef.current || !isAdmin) return;
-    const targets = plansDue(db).filter((p) => !p.reminded_at);
+    if (!pushEnabled(db, 'plan_due')) return;   // ปิดสวิตช์อยู่ → อย่าประทับ reminded_at (v57 #6)
+    const today = new Date();
+    const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const targets = plansDue(db)
+      .filter((p) => !p.reminded_at)
+      // นัดที่เพิ่งออกวันนี้ไม่ต้องเตือนซ้ำ — แอดมินเพิ่งยิง "แอดมินส่งนัดชำระให้คุณ" ไปหมาดๆ (v57 #8)
+      .filter((p) => !p.created_at || ymd(new Date(p.created_at)) < ymd(today))
+      .filter((p) => subsForUsers(db, [p.user_id]).length > 0);
     if (targets.length === 0) return;
     firedRef.current = true;
     (async () => {
       for (const p of targets) store.update(markPlanReminded(p.id));
-      await store.flush();               // ประทับ+เซฟก่อน แล้วค่อยยิง — กันเตือนซ้ำเมื่อเปิดสองเครื่อง
-      if (!pushEnabled(db, 'plan_due')) return;
+      // เซฟก่อนยิง: ถ้าเซฟไม่ผ่านห้ามยิง (ไม่งั้นลูกค้าได้แจ้งเตือนของสิ่งที่ไม่ได้บันทึก)
+      // ⚠ ยังกันเตือนซ้ำข้ามเครื่องไม่ได้ 100% — สองเครื่องเปิดพร้อมกันอาจยิงคนละครั้ง
+      //   (ต้องมี RPC ฝั่ง server ถึงจะกันได้จริง) แต่ผลเสียแค่ลูกค้าได้ 2 เด้ง
+      if (await store.flush()) return;
       for (const p of targets)
         sendPush(subsForUsers(db, [p.user_id]), { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${p.amount.toLocaleString()} บาท — กดจ่ายได้เลยที่เมนู "นัดชำระ"`, url: '/plans' }, (m) => store.update(m)).catch(() => {});
       flash(`เตือนนัดชำระอัตโนมัติ ${targets.length} รายการแล้ว 🔔`);

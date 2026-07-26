@@ -293,6 +293,11 @@ export const rejectOrder = (orderId: string) => (db: Database): Database => {
     couponGrants: order?.coupon_grant_id
       ? db.couponGrants.map((g) => (g.id === order.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, discount_amount: undefined } : g))
       : db.couponGrants,
+    // สลิปไม่ผ่าน → "นัดชำระ" ที่ปิดไปตอนส่งสลิปต้องกลับมาเปิด ไม่งั้นยอดนั้นหายจากคิวทวงถาวร
+    // และลูกค้าเห็นว่า "จ่ายแล้ว ✓" ทั้งที่ยังไม่ได้จ่าย (audit v57 #1)
+    paymentPlans: db.paymentPlans.map((p) => (p.order_id === orderId && p.status === 'done'
+      ? { ...p, status: 'open' as const, order_id: undefined, closed_at: undefined }
+      : p)),
   };
 };
 
@@ -462,6 +467,13 @@ export const createLegacyStockProduct = (data: {
   const withProduct = { ...db, products: [product, ...db.products] };
   return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit, published: data.published })(withProduct);
 };
+
+/** สร้าง SKU ใหม่ + เปิดรอบพิเศษ **หลายรายการในครั้งเดียว** (เจ้าของ 2026-07-26).
+ *  ใช้ mutation เดี่ยวเรียงกันใน db เดียว — สำคัญ: ต้องเป็นการเปลี่ยนสถานะครั้งเดียว
+ *  ไม่ใช่ dispatch ทีละตัว ไม่งั้นแต่ละตัวจะตั้งเวลาเซฟของตัวเอง แล้วถ้าล้มกลางทาง
+ *  จะได้ของครึ่งๆ กลางๆ (สินค้าเกิดแต่รอบไม่เกิด). คืน db เดิมถ้าไม่มีรายการที่ใช้ได้เลย. */
+export const bulkCreateStockRounds = (items: Parameters<typeof createLegacyStockProduct>[0][]) => (db: Database): Database =>
+  items.reduce((acc, it) => (it.character_name?.trim() && it.qty > 0 && it.price > 0 ? createLegacyStockProduct(it)(acc) : acc), db);
 
 /**
  * มีของเพิ่ม → เปิดรอบใหม่ (restock): closes the product's current open round (its buyer log stays
@@ -1462,10 +1474,16 @@ export const convertToInStock = (productId: string, price: number) => (db: Datab
   // customer tickets, so using surplus_qty (raw) would double-count and oversell. (found by test T6)
   const surplus = stockRemaining(db, p);
   const now = new Date().toISOString();
+  // ⚠ ต้องปิดรอบพิเศษที่ยังเปิดของ SKU นี้ด้วย — ไม่งั้น "ของกองเดียวกัน" ขายได้ 2 ทาง
+  //   (ในรอบพิเศษราคาเก่า + ในหน้า In-Stock ราคาใหม่) = ขายเกินเท่าตัว (audit money #2)
+  //   arriveSpecialRound / setProductStatus('delivered') ปิดให้อยู่แล้ว — ทางนี้เคยลืม
+  const closeRounds = (bs: Database['batches']) =>
+    bs.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b));
   const merge = sameInStock(db.products, p, productId);
   if (merge) {
     return {
       ...db,
+      batches: closeRounds(db.batches),
       products: db.products.map((x) => {
         if (x.id === merge.id) return { ...x, stock_qty: (x.stock_qty ?? 0) + surplus };
         if (x.id === productId) return { ...x, surplus_qty: 0 };
@@ -1476,6 +1494,7 @@ export const convertToInStock = (productId: string, price: number) => (db: Datab
   }
   return {
     ...db,
+    batches: closeRounds(db.batches),
     products: db.products.map((x) => (x.id === productId
       // ตัดจากใบพรี (ผลิตใหม่เพิ่งถึงไทย) → auto สภาพ "มือ 1" ครบทุกอย่าง (เจ้าของ spec 2026-07-17)
       ? { ...x, is_stock: true, stock_qty: surplus, surplus_qty: 0, price_total: price, deposit_amount: price, status: 'open', eta_note: 'พร้อมส่ง', stock_origin: 'preorder' as const, stock_cond: x.stock_cond ?? NEW_STOCK_COND }

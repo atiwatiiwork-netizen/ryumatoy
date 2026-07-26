@@ -39,6 +39,7 @@ export class Store {
   private saving: Promise<void> = Promise.resolve();
   private pendingSaves = 0; // >0 while a persist is in flight (block idle-reload from clobbering un-synced rows)
   private reloadSeq = 0;
+  private lastFailure: string | null = null; // ข้อความ error ของการเซฟรอบล่าสุดที่ล้ม (ให้ flush() คืน)
   /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
    *  silently losing data. Called with the backend error message. */
   onPersistError?: (message: string) => void;
@@ -79,13 +80,22 @@ export class Store {
     return this.db;
   };
 
-  flush = async (): Promise<void> => {
+  /** เซฟทันที. คืน `null` = เซฟผ่าน, คืนข้อความ = เซฟไม่ผ่าน (audit v57 #5).
+   *  ⚠ ตัวนี้ **ไม่ throw** (โดยตั้งใจ — จะได้ไม่ทำ flow พัง) ดังนั้นจุดไหนที่จะทำอะไร
+   *  "ย้อนกลับไม่ได้" ต่อจากเซฟ (ยิง push / ส่ง LINE / บอกลูกค้าว่าสำเร็จ) **ต้องเช็คค่าที่คืนมา**
+   *  ไม่ใช่แค่ `await store.flush()` เฉยๆ ไม่งั้นจะแจ้งเรื่องที่ไม่ได้เกิดขึ้นจริง. */
+  flush = async (): Promise<string | null> => {
     clearTimeout(this.timer);
-    if (!this.ready) return; // never persist the in-memory seed before the real load finishes (would clobber DB)
+    if (!this.ready) return null; // never persist the in-memory seed before the real load finishes (would clobber DB)
     const base = this.lastSynced;
     const target = this.db;
-    if (base === target) return;
+    // ⚠ ไม่มีอะไรใหม่ให้ส่ง "ไม่ได้แปลว่าเซฟเสร็จแล้ว" — ตัวจับเวลา 350ms อาจเพิ่งคว้า target ก้อนเดียวกัน
+    //   ไปอัปโหลดอยู่ (ระหว่างนั้น checkout ยัง await RPC จองของอยู่นานกว่า 350ms เสมอ)
+    //   เดิม return ทันที → เคลียร์ตะกร้า/บอกสำเร็จ/เด้งหน้าทั้งที่ตั๋วยังไม่ขึ้นเซิร์ฟเวอร์ (audit persist #1)
+    //   ต้องรอคิวที่ค้างอยู่ให้จบก่อนเสมอ
+    if (base === target) { await this.saving; return this.lastFailure; }
     this.lastSynced = target;
+    this.lastFailure = null;
     this.pendingSaves++;
     this.saving = this.saving
       .then(() => withTimeout(this.adapter.persist(target, base), PERSIST_TIMEOUT, 'persist'))
@@ -93,10 +103,12 @@ export class Store {
         console.error('[store] persist failed', err);
         // rewind so the next change re-attempts these rows instead of treating them as synced
         this.lastSynced = base;
-        this.onPersistError?.(err instanceof Error ? err.message : String(err));
+        this.lastFailure = err instanceof Error ? err.message : String(err);
+        this.onPersistError?.(this.lastFailure);
       })
       .finally(() => { this.pendingSaves--; });
     await this.saving;
+    return this.lastFailure;
   };
 
   reset = async (): Promise<void> => {

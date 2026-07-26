@@ -16,7 +16,12 @@ export async function uploadImage(file: File, prefix: string): Promise<string> {
   }
   const ext = file.name.split('.').pop() || 'jpg';
   const path = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-  const { error } = await supabase.storage.from('logos').upload(path, file, { upsert: true, contentType: file.type });
+  // DNA: ต้องมีเพดานเวลา — เน็ตอ่อนๆ ตอนแนบสลิปเคยทำให้ปุ่มค้าง "กำลังอัปโหลด…" ตลอดกาล
+  // (ปุ่มส่งถูก disable ด้วย busy) ลูกค้าต้องปิดแอปทิ้ง = สลิปหาย (audit persist #6)
+  const { error } = await Promise.race([
+    supabase.storage.from('logos').upload(path, file, { upsert: true, contentType: file.type }),
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('อัปโหลดรูปช้าเกินไป — ลองใหม่อีกครั้ง')), 45_000)),
+  ]);
   if (error) throw error;
   return supabase.storage.from('logos').getPublicUrl(path).data.publicUrl;
 }

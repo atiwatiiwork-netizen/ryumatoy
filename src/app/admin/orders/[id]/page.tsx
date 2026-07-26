@@ -13,6 +13,7 @@ import { confirmReservation, releaseReservation } from '@/lib/reserve';
 import { franchiseOf, productLabel } from '@/domain/services/catalog';
 import { nextTicketNo, ticketPrefixCounts } from '@/domain/services/tickets';
 import { reserveTicketNos } from '@/lib/ticketno';
+import { store } from '@/data/store';
 
 export default function SlipApprovalPage() {
   const { id } = useParams<{ id: string }>();
@@ -46,13 +47,25 @@ export default function SlipApprovalPage() {
 
   const approve = async () => {
     const grantsBefore = db.couponGrants.filter((g) => g.user_id === order.user_id).length;
+    const ticketsBefore = db.tickets.filter((t) => t.owner_id === order.user_id).length;
     // reserve server ticket numbers so the counter stays authoritative across sessions (migration v47)
     const startNos = await reserveTicketNos(ticketPrefixCounts(db, order.items.map((it) => it.product_id)));
     dispatch(approveOrder(order.id, { startNos }));
     // read the post-mutation state synchronously (no-op mutation) — approveOrder may have just
     // auto-minted event reward coupons; the diff tells us whether to send the 🎁 push too
     let grantsAfter = grantsBefore;
-    dispatch((d) => { grantsAfter = d.couponGrants.filter((g) => g.user_id === order.user_id).length; return d; });
+    let issued = 0;
+    dispatch((d) => {
+      grantsAfter = d.couponGrants.filter((g) => g.user_id === order.user_id).length;
+      issued = d.tickets.filter((t) => t.owner_id === order.user_id).length;
+      return d;
+    });
+    // ⚠ ต้องเซฟให้จบก่อน แล้วค่อยยิง push / confirm hold / เด้งหน้า — สามอย่างนี้ย้อนกลับไม่ได้
+    //   เดิมไม่มี flush เลย: เน็ตสะดุด → ลูกค้าได้ push "อนุมัติแล้ว" แต่กระเป๋าว่าง,
+    //   สต๊อกถูกตัดถาวร, ออเดอร์ยังค้าง pending หลังรีโหลด และแอดมินไม่รู้เลย (audit persist #2)
+    if (issued <= ticketsBefore) { flash('อนุมัติไม่สำเร็จ — ออเดอร์อาจถูกอนุมัติ/ปฏิเสธไปแล้ว ลองรีเฟรช'); return; }
+    const failed = await store.flush();
+    if (failed) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่ตัดสต๊อก ลองอนุมัติใหม่อีกครั้ง');
     const mySubs = subsForUsers(db, [order.user_id]);
     // in-stock (ของพร้อมส่ง) จ่ายครบตั้งแต่ซื้อ → ชวนไปเลือกวิธีรับของทันที (เคส Taweesin: ลูกค้าไม่รู้ว่าต้องเลือก)
     const hasInStock = order.items.some((it) => db.products.find((p) => p.id === it.product_id)?.is_stock);
@@ -70,6 +83,10 @@ export default function SlipApprovalPage() {
   const reject = async () => {
     if (!confirm('ปฏิเสธสลิปนี้? สต๊อกที่จองไว้จะถูกคืน')) return;
     dispatch(rejectOrder(order.id));
+    let ok = false;
+    dispatch((d) => { ok = d.orders.find((o) => o.id === order.id)?.status === 'rejected'; return d; });
+    if (!ok) return flash('ปฏิเสธไม่สำเร็จ — ออเดอร์นี้อาจถูกอนุมัติไปแล้ว ลองรีเฟรช');
+    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่คืนสต๊อก ลองใหม่อีกครั้ง');
     if (pushEnabled(db, 'order_rejected'))
       sendPush(subsForUsers(db, [order.user_id]), { title: '❌ สลิปไม่ผ่านการตรวจ', body: 'ยอด/สลิปไม่ถูกต้อง — ติดต่อแอดมิน หรือสั่งใหม่อีกครั้ง', url: '/' }, dispatch).catch(() => {});
     await Promise.all((order.reservation_ids ?? []).map((rid) => releaseReservation(rid)));

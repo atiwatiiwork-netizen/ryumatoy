@@ -97,9 +97,20 @@ export default function TicketDetailPage() {
     catch { flash('อัปโหลดไม่สำเร็จ'); }
     finally { setBusy(false); }
   };
-  const payRemaining = () => {
-    if (!slip) return;
+  const payRemaining = async () => {
+    if (!slip || busy) return;
+    setBusy(true);
+    // อ่านกลับ + เซฟให้จบก่อนค่อยบอกสำเร็จ/ทิ้งสลิป — submitRemainingPayment มี guard เงียบ 3 ชั้น
+    // (ไม่ใช่เจ้าของ / จ่ายครบแล้ว / มีสลิปรออยู่แล้ว) เดิมบอกสำเร็จทุกกรณีแล้วล้างรูปทิ้ง
+    // = ลูกค้าโอนเงินแล้วเชื่อว่าส่งสลิปแล้ว แต่ไม่มีอะไรเข้าคิวเลย (audit persist #4)
+    const before = db.remainingPayments.length;
     dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, payable, slip, selectedCoupon ? { grantId: selectedCoupon.grant.id, discount: couponOff } : undefined));
+    let after = before;
+    dispatch((d) => { after = d.remainingPayments.length; return d; });
+    if (after === before) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — อาจมีสลิปรอตรวจอยู่แล้ว หรือยอดนี้จ่ายครบแล้ว'); }
+    const failed = await store.flush();
+    setBusy(false);
+    if (failed) return flash('บันทึกไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (สลิปยังอยู่)');
     notifyAdminLine(`💸 สลิปส่วนต่างใหม่: ${ticket.ticket_no} · ${payable.toLocaleString()} บาท`);
     flash('ส่งสลิปส่วนต่างแล้ว · รอ Admin ตรวจสอบ');
     setPaying(false); setSlip(null); setCouponGrantId('');

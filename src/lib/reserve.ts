@@ -2,10 +2,24 @@ import { supabase } from '@/data/supabaseClient';
 
 type Res = { ok?: boolean; error?: string; reservation_id?: string; until?: string; available?: number };
 
+// DNA: ทุก await ที่วิ่งเน็ตต้องมีเพดานเวลา. ตรงนี้เคยไม่มี → บน resume ที่ socket ตายแล้ว
+// request ไม่ settle เลย → ปุ่ม "ส่งคำขอ" ค้าง busy ตลอดกาลหลังลูกค้าโอนเงินไปแล้ว
+// และร้ายกว่านั้น: ลูป reserveStock ค้างที่บรรทัดแรก แต่ started.current เป็น true ไปแล้ว
+// → resIds ว่าง, soldOut/expired ไม่เคยเป็น true → ออเดอร์ผ่านโดย "ไม่มีการกันสต๊อกเลย" = ขายเกิน
+// (audit persist #5). timeout → คืน error ปกติ → UI เดินต่อและแจ้งลูกค้าได้
+const RPC_TIMEOUT = 12_000;
+
 async function call(fn: string, args: Record<string, unknown>): Promise<Res> {
   if (!supabase) return { error: 'no_server' };
-  const { data, error } = await supabase.rpc(fn, args);
-  return (data ?? { error: error?.message ?? 'error' }) as Res;
+  try {
+    const { data, error } = await Promise.race([
+      supabase.rpc(fn, args),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${fn} timed out`)), RPC_TIMEOUT)),
+    ]);
+    return (data ?? { error: error?.message ?? 'error' }) as Res;
+  } catch (e) {
+    return { error: (e as Error)?.message ?? 'timeout' };
+  }
 }
 
 /** Reserve `qty` of an in-stock product/batch for 15 min (atomic, oversell-proof). */

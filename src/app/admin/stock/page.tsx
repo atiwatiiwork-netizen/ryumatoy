@@ -11,6 +11,7 @@ import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
 import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
+import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { store } from '@/data/store';
@@ -223,6 +224,7 @@ function LegacyCreate() {
   const { flash } = useToast();
   const st = db.settings;
   const [sub, setSub] = useState<'existing' | 'new'>('existing');
+  const [bulk, setBulk] = useState(false); // สร้าง SKU ใหม่ทีละหลายรายการ (เจ้าของ 2026-07-26)
   const [qty, setQty] = useState('');
   const [price, setPrice] = useState('');
   const [fullPay, setFullPay] = useState(false);
@@ -291,11 +293,19 @@ function LegacyCreate() {
     setCname(''); setHeight(''); setQty(''); setPrice(''); setLabel(''); setDep(''); setImages([]);
   };
 
+  // โหมดหลายรายการ = คนละฟอร์มไปเลย (ระบบเดียวกับ "เพิ่มสินค้าหลายรายการ" ของ Pre-Order)
+  if (bulk) return <BulkNewSku onDone={() => setBulk(false)} />;
+
   return (
     <div className="mb-6 rounded-2xl border border-subtle bg-surface-2 p-5">
-      <div className="mb-3 flex gap-2">
+      <div className="mb-3 flex flex-wrap gap-2">
         <SubBtn active={sub === 'existing'} onClick={() => setSub('existing')}>ผูก SKU เดิม</SubBtn>
         <SubBtn active={sub === 'new'} onClick={() => setSub('new')}>สร้าง SKU ใหม่</SubBtn>
+        {sub === 'new' && (
+          <button onClick={() => setBulk(true)} className="ml-auto rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12.5px] font-bold text-[#c4b5fd]">
+            📸 สร้างหลายรายการ (เลือกรูปทีเดียว)
+          </button>
+        )}
       </div>
 
       {sub === 'existing' ? (
@@ -452,14 +462,23 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
     try {
       // จองเลขตั๋วจาก server ทีเดียวทั้งชุด (นับต่อ prefix) — allocator ใน mutation แชร์ตัวนับ ไม่ชนกัน
       const startNos = await reserveTicketNos(ticketPrefixCounts(db, chosen.map((b) => b.product_id)));
+      const want = chosen.reduce((s, b) => s + (Number(row(b).qty) || 1), 0);
+      const before = db.tickets.length;
       dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0) })), startNos));
-      try { await store.flush(); } catch { /* onPersistError โชว์เอง */ }
+      // ⚠ grantSpecialTickets ข้ามรายการที่ของไม่พอแบบเงียบๆ (continue) และหน้าจอเช็คแค่ "ตั๋วที่ออกแล้ว"
+      //   ไม่ได้หัก hold ที่ลูกค้าคนอื่นค้างอยู่ → เคยขึ้น "มอบตั๋วแล้ว ✓" + ยิง push ทั้งที่ไม่มีตั๋วเกิดเลย
+      //   (เงินที่เก็บนอกระบบหายไปเฉยๆ) audit money #7
+      let issued = 0;
+      dispatch((d) => { issued = d.tickets.length - before; return d; });
+      if (issued === 0) { setBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (มีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
+      if (await store.flush()) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
+      if (issued < want) flash(`⚠ มอบได้ ${issued} จาก ${want} ใบ — บางรายการของไม่พอ`);
       // push ครั้งเดียว บอกว่าได้รายการไหนมาเพิ่ม (DNA: ไม่บอกจำนวนสต๊อก)
       if (pushEnabled(db, 'order_approved')) {
         const names = chosen.map((b) => db.products.find((x) => x.id === b.product_id)?.series_name ?? '').filter(Boolean);
         sendPush(subsForUsers(db, [u.id]), { title: `🎫 ได้รับใบพรีใหม่ ${chosen.length} รายการ!`, body: `${names.join(' · ').slice(0, 110)} — แตะดูตั๋วของคุณ`, url: '/wallet' }, dispatch).catch(() => {});
       }
-      flash(`มอบตั๋ว ${chosen.length} รายการ ให้ ${u.display_name} แล้ว ✓ แจ้งเตือนลูกค้าแล้ว`);
+      flash(`มอบตั๋ว ${issued} ใบ ให้ ${u.display_name} แล้ว ✓ แจ้งเตือนลูกค้าแล้ว`);
       setOpenPanel(false); setRows({}); setUserSel('');
     } finally { setBusy(false); }
   };

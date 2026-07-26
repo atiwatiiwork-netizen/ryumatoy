@@ -115,7 +115,16 @@ export function dataIssues(db: Database): DataIssue[] {
   const P = (id: string) => db.products.find((p) => p.id === id)?.series_name ?? '—';
 
   // 1) hold สต๊อกค้างแบบไม่มีออเดอร์ (ขวางของขายไม่ได้)
-  const stuckHolds = db.stockReservations.filter((r) => r.status === 'paid' && !db.orders.some((o) => o.id === r.order_id));
+  // ⚠ ต้องเทียบจาก orders.reservation_ids เท่านั้น — คอลัมน์ stock_reservations.order_id
+  //   **ไม่เคยถูกเขียนเลย** (RPC ryuma_reserve/pay ไม่รับ order id) เดิมเช็ค `o.id === r.order_id`
+  //   จึงเป็นจริงกับ hold ทุกใบ → ออเดอร์ที่รอตรวจสลิป "ทุกใบ" ถูกป้ายว่าเป็นข้อมูลเสีย
+  //   พร้อมปุ่ม "ปล่อยของ" → กดแล้วของหลุดขายซ้ำ ลูกค้าที่โอนมาแล้วไม่ได้ของ (audit money #1)
+  // + ต้องค้างเกิน 6 ชม.ก่อน ถึงจะเรียกว่าค้างจริง (ออเดอร์ที่เพิ่งเข้ายังรอเราตรวจอยู่ ปกติดี)
+  const HOLD_STALE_MS = 6 * 60 * 60 * 1000;
+  const linked = new Set(db.orders.flatMap((o) => o.reservation_ids ?? []));
+  const stuckHolds = db.stockReservations.filter((r) => r.status === 'paid'
+    && !linked.has(r.id)
+    && (!r.created_at || Date.now() - new Date(r.created_at).getTime() > HOLD_STALE_MS));
   if (stuckHolds.length) out.push({
     key: 'holds', severity: 'high', fix: 'release_hold',
     title: 'ของถูกกันไว้แต่ไม่มีออเดอร์',

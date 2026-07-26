@@ -57,11 +57,12 @@ export default function AnalyticsPage() {
       {/* ── เส้นเงิน (flow review 2026-07-25): เงินเข้าแยกที่มา + ค้างเก็บ ── */}
       <div className="mb-[18px] rounded-2xl border border-[#16a34a]/35 bg-[#16a34a]/[0.05] p-5">
         <div className="mb-3 flex items-center gap-2 text-base font-bold text-[#4ade80]"><Icon name="payments" size={18} /> เงินเข้า · {monthLabel(ym)}</div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <MoneyCard label="รับเข้าทั้งหมด" value={baht(cash.total)} tone="text-[#4ade80]" big />
           <MoneyCard label="มัดจำ / เต็มจำนวน" value={baht(cash.deposits)} sub={`${cash.orders} ออเดอร์อนุมัติ`} />
           <MoneyCard label="ส่วนต่างที่เก็บได้" value={baht(cash.remaining)} sub="ตอนของถึงไทย" />
           <MoneyCard label="มัดจำหาของ" value={baht(cash.sourcing)} sub="เริ่มงานแล้ว" />
+          <MoneyCard label="ตั๋วที่มอบเอง" value={baht(cash.granted)} sub="เก็บเงินนอกระบบ" />
         </div>
         <div className="mt-2 text-[11px] text-ink-faint">นับตามวันที่ “รับเงินจริง” (วันอนุมัติสลิป) · ยอดมัดจำเป็นยอดสุทธิหลังหักคูปองแล้ว</div>
       </div>

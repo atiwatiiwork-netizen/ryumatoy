@@ -5,6 +5,7 @@ import { useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { pushSupported, currentPushSubscription, enablePush } from '@/lib/push';
 import { detectPlatform, isStandalone, inAppBrowser, type Platform } from '@/lib/pwa';
+import { readStore, writeStore } from '@/lib/safeStorage';
 import { Icon } from './Icon';
 import { cx } from './ui';
 
@@ -43,7 +44,7 @@ export function InstallBellNudge({ userId }: { userId: string }) {
   useEffect(() => {
     setPlatform(detectPlatform());
     setInApp(inAppBrowser().inApp);
-    setBannerOff(sessionStorage.getItem(BANNER_KEY) === '1');
+    setBannerOff(readStore('session', BANNER_KEY) === '1');
     const onBIP = (e: Event) => { e.preventDefault(); setDeferred(e as BIPEvent); };
     const onInstalled = () => { setInstalled(true); setDeferred(null); };
     window.addEventListener('beforeinstallprompt', onBIP);
@@ -61,14 +62,14 @@ export function InstallBellNudge({ userId }: { userId: string }) {
   // auto-เด้ง modal ครั้งแรก/ทุก 3 วัน ถ้ายังไม่ครบ
   useEffect(() => {
     if (!show) return;
-    const last = Number(localStorage.getItem(LAST_KEY) || 0);
-    if (Date.now() - last > NUDGE_INTERVAL) { setOpen(true); localStorage.setItem(LAST_KEY, String(Date.now())); }
+    const last = Number(readStore('local', LAST_KEY) || 0);
+    if (Date.now() - last > NUDGE_INTERVAL) { setOpen(true); writeStore('local', LAST_KEY, String(Date.now())); }
   }, [show]);
 
   if (!show) return null;
 
-  const closeModal = () => { localStorage.setItem(LAST_KEY, String(Date.now())); setOpen(false); };
-  const dismissBanner = () => { sessionStorage.setItem(BANNER_KEY, '1'); setBannerOff(true); };
+  const closeModal = () => { writeStore('local', LAST_KEY, String(Date.now())); setOpen(false); };
+  const dismissBanner = () => { writeStore('session', BANNER_KEY, '1'); setBannerOff(true); };
 
   const doInstall = async () => {
     if (!deferred) return;

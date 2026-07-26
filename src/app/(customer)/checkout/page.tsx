@@ -74,15 +74,23 @@ export default function CheckoutPage() {
   // ── stock reservation (in-stock / batch lines get a 15-min hold) ──────────
   const stockLines = validLines.filter((l) => l.batchId || db.products.find((p) => p.id === l.productId)?.is_stock);
   const needsReserve = canLogin && stockLines.length > 0;
+  const stockKey = stockLines.map((l) => `${l.productId}|${l.batchId ?? ''}|${l.qty}`).join(',');
   // เช็คของหมดจาก client ทันที (บัญชีเดียว: ตั๋ว+hold ค้าง) — ไม่ต้องรอ RPC ตอบ. เคส Kid Naruto
   // 2026-07-24: ของหมดแต่ตะกร้าค้างของเก่า → หน้าโอนเงินโชว์ก่อนแบนเนอร์หมด → ลูกค้าโอนเงินฟรี!
   // ของหมด = ห้ามเห็นเลขบัญชี/ช่องสลิป/ปุ่มส่ง ตั้งแต่แรก
-  const deadLines = stockLines.filter((l) => {
+  // ⚠ ต้องเช็ค "ทุกบรรทัด" ไม่ใช่เฉพาะของที่มีจำนวนจำกัด — พรีปกติที่ปิดรับจองไปแล้ว
+  //   เคยไม่ถูกเช็คเลย: หน้าจอโชว์เลขบัญชี → ลูกค้าโอน → submitOrder ปัดตกด้วย sellable guard
+  //   = โอนแล้วไม่มีออเดอร์ (เคสเดียวกับ Kid Naruto คนละประตู) audit v57 #2
+  const deadLines = validLines.filter((l) => {
     const p = db.products.find((pp) => pp.id === l.productId);
-    if (!p) return false;
-    const b = l.batchId ? db.batches.find((bb) => bb.id === l.batchId) : undefined;
-    const avail = b ? batchAvailable(db, b) : availableFor(db, p);
-    return l.qty > avail;
+    if (!p) return true;
+    if (l.batchId) {
+      const b = db.batches.find((bb) => bb.id === l.batchId);
+      if (!b || b.status !== 'open' || b.published === false) return true;   // รอบปิด/ยังเป็นร่าง
+      return l.qty > batchAvailable(db, b);
+    }
+    if (p.is_stock) return l.qty > availableFor(db, p);
+    return p.status !== 'open';                                             // พรีปกติปิดรับจองแล้ว
   });
   const clientSoldOut = deadLines.length > 0;
   const [resIds, setResIds] = useState<string[]>([]);
@@ -106,7 +114,11 @@ export default function CheckoutPage() {
       setResIds(ids);
       if (earliest !== Infinity) setResUntil(earliest);
     })();
-  }, [mustLogin, needsApproval, needsReserve, stockLines, currentUserId]);
+    // ⚠ deps ต้องเป็น "ค่าคงที่" ไม่ใช่ stockLines ที่สร้างใหม่ทุก render — ไม่งั้น effect วิ่งทุกเฟรม
+    //   แล้วมีแค่ started.current กันไว้ชั้นเดียว ถ้าใครแก้โค้ดจน ref นั้นเลื่อน = ยิง reserveStock รัว
+    //   จนสต๊อกถูกกันจนหมด (audit persist #15)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mustLogin, needsApproval, needsReserve, stockKey, currentUserId]);
 
   useEffect(() => {
     if (!resUntil) return;
@@ -156,10 +168,14 @@ export default function CheckoutPage() {
     // ปิดนัดชำระ "ตอนส่งสลิป" (ไม่ใช่ตอนแอดมินอนุมัติ) — นัดจบหน้าที่แล้ว เตือนต่อไม่มีประโยชน์
     // ต้องสั่งก่อน flush() เพื่อให้ไปกับรอบเซฟเดียวกับออเดอร์
     if (planId) dispatch(markPlanPaid(planId, newOrderId));
+    // ⚠ ต้องรู้ผลเซฟ "ก่อน" เคลียร์ตะกร้า/บอกสำเร็จ/เด้งหน้า — เดิมเคลียร์ก่อนแล้วค่อยเซฟ
+    //   ถ้าเซฟไม่ผ่าน ลูกค้าโอนเงินไปแล้ว แต่ไม่มีทั้งออเดอร์และตะกร้าให้กดใหม่ (audit persist #1/#12)
+    const failed = await store.flush();
+    if (failed) {
+      setBusy(false);
+      return flash('บันทึกออเดอร์ไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (ตะกร้ายังอยู่ครบ)');
+    }
     cart.clear();
-    // make sure the order + (Diamond) tickets are actually saved before we navigate away —
-    // otherwise a fast route change / mobile backgrounding can drop the debounced write.
-    await store.flush();
     // ping the shop owner's LINE (fire-and-forget; no-op if LINE env isn't set)
     const buyerName = db.users.find((x) => x.id === currentUserId)?.display_name ?? 'ลูกค้า';
     notifyAdminLine(noPayment
@@ -233,7 +249,11 @@ export default function CheckoutPage() {
           {deadLines.length > 0 && (
             <>
               <div className="mt-3 flex flex-col items-center gap-1 text-[12.5px] text-ink-muted2">
-                {deadLines.map((l) => <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')}>• {productLabel(db, l.productId, l.variantId)} ×{l.qty} — หมดแล้ว</div>)}
+                {deadLines.map((l) => {
+                  const p = db.products.find((pp) => pp.id === l.productId);
+                  const why = !p ? 'ถูกนำออกจากร้านแล้ว' : (!l.batchId && !p.is_stock) ? 'ปิดรับจองรอบนี้แล้ว' : 'หมดแล้ว';
+                  return <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')}>• {productLabel(db, l.productId, l.variantId)} ×{l.qty} — {why}</div>;
+                })}
               </div>
               <button onClick={() => { deadLines.forEach((l) => cart.remove(l.productId, l.variantId, l.batchId)); flash('เอาสินค้าที่หมดออกแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">เอาสินค้าที่หมดออกจากตะกร้า</button>
             </>
