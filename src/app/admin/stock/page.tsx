@@ -43,6 +43,7 @@ export default function StockPage() {
       <WarehouseConfirm />
       <OpenRounds />
       <History />
+      <RoundLog />
     </div>
   );
 }
@@ -580,6 +581,99 @@ function History() {
     <div className="mb-6">
       <div className="mb-2 text-[15px] font-bold text-ink-muted">ประวัติรอบที่ปิดแล้ว ({closed.length})</div>
       <div className="grid gap-2.5 lg:grid-cols-2">{closed.map((b) => <RoundRow key={b.id} batch={b} readOnly />)}</div>
+    </div>
+  );
+}
+
+/** ── History Log (เจ้าของ 2026-07-26) ─────────────────────────────────────
+ *  ตารางเดียวเห็นทุกรอบที่เคยเปิด: วันที่ · รายการ · จำนวน (ขาย/ทั้งหมด) · สถานะ
+ *  + กางดูรายชื่อคนพรีของรอบนั้นได้เลย. ต่างจากการ์ดด้านบนตรงที่ "ไล่อ่านย้อนหลังได้เร็ว"
+ *  ไม่ต้องเลื่อนหาการ์ด และเห็นรอบที่ยังเป็นร่างด้วย. */
+function RoundLog() {
+  const db = useDatabase();
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<'all' | 'draft' | 'open' | 'closed'>('all');
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const nameOf = (b: ProductBatch) => db.products.find((p) => p.id === b.product_id)?.series_name ?? '(สินค้าถูกลบ)';
+  const kindOf = (b: ProductBatch) => (b.status !== 'open' ? 'closed' : b.published === false ? 'draft' : 'open');
+  const rows = db.batches
+    .filter((b) => (filter === 'all' ? true : kindOf(b) === filter))
+    .filter((b) => !q.trim() || nameOf(b).toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+  const KIND: Record<string, { label: string; cls: string }> = {
+    draft: { label: '📝 ร่าง', cls: 'bg-[#d97706]/20 text-[#fbbf24]' },
+    open: { label: '🚀 เปิดขาย', cls: 'bg-[#16a34a]/20 text-[#4ade80]' },
+    closed: { label: 'ปิดรอบ', cls: 'bg-white/[0.07] text-ink-muted2' },
+  };
+  const Tab = ({ v, children }: { v: typeof filter; children: React.ReactNode }) => (
+    <button onClick={() => setFilter(v)} className={cx('rounded-lg border px-2.5 py-1 text-[12px] font-bold', filter === v ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>{children}</button>
+  );
+
+  return (
+    <div className="mb-6 rounded-2xl border border-subtle bg-surface-2 p-4">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <span className="text-[15px] font-bold">📋 History Log · ทุกรอบที่เคยเปิด</span>
+        <span className="text-[11.5px] text-ink-faint">วันที่ · รายการ · จำนวน · คนพรี</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ค้นหาชื่อสินค้า"
+          className="ml-auto w-full max-w-[220px] rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] outline-none placeholder:text-ink-faint" />
+      </div>
+      <div className="mb-2.5 flex flex-wrap gap-1.5">
+        <Tab v="all">ทั้งหมด ({db.batches.length})</Tab>
+        <Tab v="draft">ร่าง ({db.batches.filter((b) => kindOf(b) === 'draft').length})</Tab>
+        <Tab v="open">เปิดขาย ({db.batches.filter((b) => kindOf(b) === 'open').length})</Tab>
+        <Tab v="closed">ปิดแล้ว ({db.batches.filter((b) => kindOf(b) === 'closed').length})</Tab>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="py-8 text-center text-[13px] text-ink-faint">ไม่พบรายการ</div>
+      ) : (
+        <div className="flex flex-col divide-y divide-hair">
+          {rows.map((b) => {
+            const p = db.products.find((x) => x.id === b.product_id);
+            const buyers = batchBuyers(db, b.id);
+            const sold = buyers.reduce((s, x) => s + x.qty, 0);
+            const k = KIND[kindOf(b)];
+            const isOpen = openId === b.id;
+            const roundNo = db.batches.filter((x) => x.product_id === b.product_id).sort((x, y) => (x.created_at < y.created_at ? -1 : 1)).findIndex((x) => x.id === b.id) + 1;
+            return (
+              <div key={b.id} className="py-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+                  <span className="w-[92px] shrink-0 text-[11.5px] text-ink-faint">{new Date(b.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })}</span>
+                  <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">
+                    {p?.images?.[0] && <img src={p.images[0]} alt="" className="h-full w-full object-cover" />}
+                  </div>
+                  <span className="min-w-[150px] flex-1 truncate font-semibold">{nameOf(b)} <span className="text-[11px] font-normal text-ink-faint">· รอบ {roundNo}{b.label ? ` · ${b.label}` : ''}</span></span>
+                  <span className={cx('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-extrabold', k.cls)}>{k.label}</span>
+                  <span className="w-[104px] shrink-0 text-right">
+                    <b className={sold >= b.stock_qty ? 'text-[#f87171]' : 'text-ink'}>{sold}</b>
+                    <span className="text-ink-faint">/{b.stock_qty} ชิ้น</span>
+                  </span>
+                  <button onClick={() => setOpenId(isOpen ? null : b.id)} disabled={buyers.length === 0}
+                    className={cx('w-[104px] shrink-0 rounded-lg border px-2 py-1 text-[11.5px] font-bold',
+                      buyers.length === 0 ? 'border-subtle text-ink-faint' : 'border-[#d4af37]/45 bg-[#d4af37]/[0.1] text-[#f1d27a]')}>
+                    🎫 คนพรี ({buyers.length}) {buyers.length > 0 && (isOpen ? '▲' : '▼')}
+                  </button>
+                </div>
+                {isOpen && buyers.length > 0 && (
+                  <div className="ml-[100px] mt-1.5 flex flex-col divide-y divide-hair rounded-lg border border-subtle bg-surface-3/40 px-2.5">
+                    {buyers.map((x) => (
+                      <div key={x.ticket_no} className="flex flex-wrap items-center gap-x-3 py-1.5 text-[11.5px]">
+                        <span className="min-w-[120px] flex-1 font-semibold">{x.name}</span>
+                        <span className="font-mono text-[10.5px] text-ink-faint">{x.ticket_no}</span>
+                        <span className="text-ink-muted2">×{x.qty}</span>
+                        <span className="w-[76px] text-right font-bold text-primary-soft">{baht(x.paid)}</span>
+                        <span className="w-[74px] text-right text-[10.5px] text-ink-faint">{new Date(x.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

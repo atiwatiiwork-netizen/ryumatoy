@@ -11,7 +11,6 @@ import { cx } from '@/components/ui';
 import { seriesForFranchise, makersForFranchise } from '@/domain/services/catalog';
 import { depositFor } from '@/domain/services/pricing';
 import { genId, bulkCreateStockRounds } from '@/data/mutations';
-import { sendPush, subsForNewProduct, pushEnabled } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { store } from '@/data/store';
 import type { WcfType } from '@/domain/entities';
@@ -22,7 +21,7 @@ const DRAFT_KEY = 'ryuma_bulk_sku_draft';
 interface Row { key: string; image?: string; name: string; series_id: string; height: string; price: string; dep: string; qty: string; sel: boolean }
 interface Shared {
   manufacturer_id: string; franchise_id: string; wcf_type: WcfType;
-  fullPay: boolean; startStatus: 'production' | 'shipping'; publish: boolean; label: string;
+  fullPay: boolean; startStatus: 'production' | 'shipping'; label: string;
 }
 
 /**
@@ -42,7 +41,7 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
     if (s) { try { return JSON.parse(s).sd as Shared; } catch { /* ร่างเสีย — เริ่มใหม่ */ } }
     return {
       manufacturer_id: db.manufacturers[0]?.id ?? '', franchise_id: db.franchises[0]?.id ?? '',
-      wcf_type: 'wcf', fullPay: false, startStatus: 'shipping', publish: false, label: '',
+      wcf_type: 'wcf', fullPay: false, startStatus: 'shipping', label: '',
     };
   });
   const [rows, setRows] = useState<Row[]>(() => {
@@ -121,7 +120,7 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
     if (validRows.length === 0) return flash('ยังไม่มีแถวที่กรอกครบ (ต้องมี ชื่อ + ราคา + จำนวน)');
     const n = validRows.length;
     const pieces = validRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-    if (!confirm(`สร้าง ${n} สินค้า (รวม ${pieces} ชิ้น)\n${sd.publish ? '⚠ เปิดขายทันที + แจ้งลูกค้า' : 'ร่างไว้ก่อน (ยังไม่ขึ้นหน้าร้าน)'}`)) return;
+    if (!confirm(`สร้าง ${n} สินค้า (รวม ${pieces} ชิ้น)\n\nทุกตัวจะเป็น "ร่าง" — ยังไม่ขึ้นหน้าร้าน ไม่มีการแจ้งลูกค้า\nกดปุ่ม "เปิดขาย" ที่การ์ดรอบทีละตัวเมื่อพร้อม`)) return;
     setBusy(true);
     const items = validRows.map((r) => {
       const character = r.name.trim();
@@ -136,7 +135,9 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
         qty: Number(r.qty) || 0, price: Number(r.price) || 0, fullPay: sd.fullPay,
         label: sd.label.trim() || undefined,
         deposit: depNum > 0 ? depNum : undefined,
-        startStatus: sd.startStatus, published: sd.publish,
+        // v58 (เจ้าของ 2026-07-26): สร้างแบบชุดต้องเป็น "ร่าง" เสมอ ห้ามปล่อยขายทันที
+        // — ของเข้าหน้าร้านได้ต่อเมื่อแอดมินกด "เปิดขาย" ที่การ์ดรอบทีละตัวเท่านั้น
+        startStatus: sd.startStatus, published: false,
       };
     });
     const before = db.products.length;
@@ -151,13 +152,9 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
     if (failed) return flash('บันทึกไม่สำเร็จ — ร่างยังอยู่ครบ เช็คเน็ตแล้วกดสร้างใหม่อีกครั้ง');
     removeStore('session', DRAFT_KEY);
     setRows([]);
-    flash(`สร้าง ${made} สินค้า + เปิดรอบพิเศษแล้ว 🎉${sd.publish ? ' · แจ้งลูกค้าแล้ว' : ' · เป็นร่าง (กดเปิดขายทีหลัง)'}`);
-    // push สรุปครั้งเดียวทั้งชุด — DNA: ห้ามบอกจำนวน/สต๊อกเด็ดขาด (ชื่อ+ราคา+มัดจำเท่านั้น)
-    if (sd.publish && pushEnabled(db, 'restock')) {
-      const names = items.slice(0, 3).map((i) => i.series_name).join(' · ');
-      sendPush(subsForNewProduct(db, { manufacturer_id: sd.manufacturer_id, franchise_id: sd.franchise_id }),
-        { title: `🔥 เปิดพรีรอบพิเศษ ${made} รายการ`, body: names + (made > 3 ? ` และอีก ${made - 3}` : ''), url: '/shop' }, dispatch).catch(() => {});
-    }
+    // ไม่ยิง push ที่นี่เลย — ของยังเป็นร่าง ยังไม่มีอะไรให้ลูกค้าดู
+    // push "เปิดพรีรอบพิเศษ" จะยิงตอนแอดมินกด "เปิดขาย" ที่การ์ดรอบ (publishBatch) เท่านั้น
+    flash(`สร้าง ${made} สินค้าแล้ว 📝 เป็นร่างทั้งหมด — กด "เปิดขาย" ที่การ์ดรอบเมื่อพร้อม`);
   };
 
   return (
@@ -194,15 +191,20 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
             <Chip on={sd.startStatus === 'production'} onClick={() => setSd((d) => ({ ...d, startStatus: 'production' }))}>เริ่ม: ผลิต (รอโกดัง)</Chip>
             <Chip on={sd.startStatus === 'shipping'} onClick={() => setSd((d) => ({ ...d, startStatus: 'shipping' }))}>เริ่ม: เดินทางแล้ว</Chip>
           </>}
-          <span className="mx-1 text-ink-faint">|</span>
-          <Chip on={!sd.publish} onClick={() => setSd((d) => ({ ...d, publish: false }))} tone="draft">📝 ร่างไว้ก่อน</Chip>
-          <Chip on={sd.publish} onClick={() => setSd((d) => ({ ...d, publish: true }))} tone="live">🚀 เปิดขาย + แจ้งลูกค้า</Chip>
+          <span className="ml-auto rounded-lg border border-[#d97706]/60 bg-[#d97706]/15 px-2.5 py-1.5 text-[12px] font-bold text-[#fbbf24]">
+            📝 สร้างเป็น “ร่าง” เสมอ — กดเปิดขายทีละตัวทีหลัง
+          </span>
         </div>
 
-        <label className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">
-          <Icon name={uploading ? 'box' : 'camera'} size={16} className={uploading ? 'animate-pulse' : ''} /> {uploading ? 'กำลังอัปโหลด…' : 'เลือกรูปหลายรูป'}
-          <input type="file" accept="image/*" multiple className="hidden" disabled={uploading} onChange={(e) => addImages(e.target.files)} />
-        </label>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">
+            <Icon name={uploading ? 'box' : 'camera'} size={16} className={uploading ? 'animate-pulse' : ''} /> {uploading ? 'กำลังอัปโหลด…' : 'เลือกรูปหลายรูป'}
+            <input type="file" accept="image/*" multiple className="hidden" disabled={uploading} onChange={(e) => addImages(e.target.files)} />
+          </label>
+          {/* ต้องเพิ่มแถวได้แม้ไม่มีรูป — ของบางล็อตยังไม่มีภาพ ห้ามบล็อกงานไว้ที่รูป */}
+          <button onClick={() => setRows((rs) => [...rs, freshRow(undefined, rs)])} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] font-semibold text-ink-muted2">＋ เพิ่มแถวเปล่า</button>
+          {rows.length > 0 && <span className="text-[11.5px] text-ink-faint">{rows.length} แถว · ใส่รูปทีหลังได้ที่หน้าแก้ไขสินค้า</span>}
+        </div>
       </div>
 
       {/* แถบจัดการแถวที่เลือก */}
