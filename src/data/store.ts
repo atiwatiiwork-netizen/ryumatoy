@@ -107,6 +107,10 @@ export class Store {
         this.lastSynced = base;
         const msg = err instanceof Error ? err.message : String(err);
         this.onPersistError?.(msg);
+        // ⚠ ต้องนัดลองใหม่เสมอ — หลัง rewind จะได้ lastSynced !== db ค้างอยู่ ซึ่งทำให้
+        //   reloadIfIdle (ตัวรีเฟรชอัตโนมัติ) ถูกบล็อกถาวร → คิวแอดมินหยุดอัปเดตทั้งแท็บ
+        //   แล้วแอดมินทำงานบนข้อมูลเก่าโดยไม่รู้ตัว (ต้นตอของเคสอนุมัติซ้ำ) audit concurrency #10
+        this.scheduleFlush(5_000);   // ถอยหลังพอสมควร ไม่ยิงรัวจนแบตหมด
         return msg;
       })
       .finally(() => {
@@ -130,6 +134,11 @@ export class Store {
   // an explicit reload right after signup). Only the most-recently-STARTED reload is
   // applied, so a stale in-flight fetch can never clobber fresher data.
   reload = async (): Promise<void> => {
+    // ⚠ ต้องเซฟงานที่ค้างอยู่ก่อนเสมอ — reload เขียนทับทั้ง db และ lastSynced
+    //   ถ้ามีของที่ยังไม่ขึ้นเซิร์ฟเวอร์ (เพิ่งกดรับเรื่องจัดส่ง/แก้มัดจำ/เริ่มงานหาของ ซึ่งรอ debounce 350ms อยู่)
+    //   งานนั้นจะหายไปเงียบๆ แล้ว flush รอบถัดไปจะรายงานว่า "เซฟสำเร็จ" เพราะ lastSynced === db แล้ว
+    //   (AuthProvider เรียก reload ตอน resume/ล็อกอิน ซึ่งชนกับการกดปุ่มพอดีได้) audit concurrency #5
+    if (this.lastSynced !== this.db || this.pendingSaves > 0) await this.flush();
     const seq = ++this.reloadSeq;
     let data: Database;
     try {
@@ -169,9 +178,9 @@ export class Store {
     this.emit();
   };
 
-  private scheduleFlush() {
+  private scheduleFlush(ms = 350) {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.flush(), 350);
+    this.timer = setTimeout(() => void this.flush(), ms);
   }
 
   private emit() {

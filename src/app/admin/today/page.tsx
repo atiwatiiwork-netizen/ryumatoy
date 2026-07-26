@@ -344,7 +344,11 @@ function HealthTab({ issues }: { issues: DataIssue[] }) {
   const doFix = async (iss: DataIssue, rowId: string, label: string) => {
     if (iss.fix === 'release_hold') {
       if (!confirm(`ปล่อยของที่ถูกกันไว้: ${label}?`)) return;
-      await releaseReservation(rowId).catch(() => {});
+      // ⚠ ตาราง stock_reservations ไม่ได้อยู่ในรายการเซฟ (ฝั่ง server เป็นเจ้าของ) —
+      //   ถ้า RPC ไม่สำเร็จ การแก้ในหน่วยความจำจะโดน poll ถัดไปทับกลับ แต่จอบอกว่า "ปล่อยแล้ว ✓"
+      //   → แอดมินขายของชิ้นนั้นต่อ ทั้งที่เซิร์ฟเวอร์ยังกันไว้ = ขายเกิน (audit concurrency #15)
+      const res = await releaseReservation(rowId).catch(() => ({ error: 'network' } as { ok?: boolean; error?: string }));
+      if (!res || res.error || res.ok === false) return flash(`ปล่อยของไม่สำเร็จ: ${res?.error ?? 'ลองใหม่อีกครั้ง'} — สต๊อกยังถูกกันอยู่`);
       dispatch(releaseStuckHold(rowId));
       dispatch(logActivity(me, 'release_hold', `ปล่อย hold ค้าง: ${label}`, { targetId: rowId }));
       flash('ปล่อยของกลับเข้าสต๊อกแล้ว ✓');

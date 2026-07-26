@@ -21,6 +21,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 import { EventProgress } from '@/components/EventBits';
 import { StockCondCard } from '@/components/StockCond';
+import { copyText } from '@/lib/clipboard';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -34,7 +35,12 @@ export default function ProductDetailPage() {
 
   const product = db.products.find((p) => p.id === id);
   const variants = product ? variantsOf(db, product.id) : [];
-  const [variantId, setVariantId] = useState<string | undefined>(variants[0]?.id);
+  const [picked, setPicked] = useState<string | undefined>(undefined);
+  // ⚠ ห้ามตั้งค่าเริ่มต้นด้วย useState(variants[0]?.id) — render แรกของแอปคือข้อมูล seed เสมอ
+  //   (store.init อยู่ใน useEffect) พอเปิดลิงก์ตรงมาที่หน้านี้ ค่าจะถูกแช่เป็น undefined ตลอด
+  //   → ไม่มีแบบไหนถูกไฮไลต์ ราคาตกไปใช้ราคา product และตั๋วที่ออกไม่รู้ว่าเป็นแบบไหน (audit ลูกค้า #1)
+  const variantId = picked && variants.some((v) => v.id === picked) ? picked : variants[0]?.id;
+  const setVariantId = setPicked;
 
   if (!product) return <div className="p-10 text-ink-faint">ไม่พบสินค้า</div>;
 
@@ -69,7 +75,15 @@ export default function ProductDetailPage() {
 
   // Gate รอบพิเศษ (เจ้าของ 2026-07-23): ต้องเคยมีใบพรี (หรือมีพรีปกติในตะกร้า) ถึงซื้อรอบพิเศษได้
   const specialLocked = !!batch && !canBuySpecialWithLines(db, CURRENT_USER_ID, cart.lines);
+  // กดลิงก์รอบพิเศษมา แต่รอบถูกปิด/ถอนขายไปแล้ว → ห้ามให้กลายเป็น "พรีปกติราคาอื่น" เงียบๆ
+  const wantedBatch = params.get('batch');
+  const batchGone = !!wantedBatch && !batch;
+  // สินค้าพรีที่ปิดรับจองแล้ว (ผลิต/เดินทาง/ถึงไทย) ห้ามใส่ตะกร้า — เดิมปุ่มยังกดได้
+  // แล้วไปตายที่ checkout ตอนกดส่ง (audit ลูกค้า #8)
+  const closedForOrder = !product.is_stock && !batch && product.status !== 'open';
   const addToCart = () => {
+    if (batchGone) return flash('รอบพิเศษนี้ปิดไปแล้ว — กลับไปดูรอบที่เปิดอยู่ได้ที่หน้าร้าน');
+    if (closedForOrder) return flash('ปิดรับจองรอบนี้แล้ว — รอรอบถัดไปนะครับ 🙏');
     if (soldOut) return flash('สินค้าหมด/ถูกจองครบแล้ว');
     if (specialLocked) return flash('รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เปิดพรีสักตัวก่อนนะครับ 🙏');
     cart.add({ productId: product.id, variantId: batch ? undefined : variantId, batchId: batch?.id, depositEach: deposit, priceEach: price });
@@ -84,8 +98,17 @@ export default function ProductDetailPage() {
         onBack={goBack}
         right={
           <div className="flex gap-2">
-            <button className="grid h-[38px] w-[38px] place-items-center rounded-full border border-subtle bg-surface-3 text-ink"><Icon name="heart" size={18} /></button>
-            <button className="grid h-[38px] w-[38px] place-items-center rounded-full border border-subtle bg-surface-3 text-ink"><Icon name="share" size={18} /></button>
+            {/* ปุ่มที่ยังไม่มีระบบรองรับ ต้องดู "ปิดอยู่" ให้เห็น ไม่ใช่กดแล้วเงียบ (audit ลูกค้า #12) */}
+            <button disabled title="เร็วๆ นี้" className="grid h-[38px] w-[38px] place-items-center rounded-full border border-subtle bg-surface-3 text-ink-faint opacity-45"><Icon name="heart" size={18} /></button>
+            <button
+              onClick={async () => {
+                const url = typeof window !== 'undefined' ? window.location.href : '';
+                try {
+                  if (typeof navigator !== 'undefined' && navigator.share) await navigator.share({ title: product.series_name, url });
+                  else flash((await copyText(url)) ? 'คัดลอกลิงก์แล้ว ✓ ส่งให้เพื่อนได้เลย' : 'คัดลอกไม่สำเร็จ');
+                } catch { /* ผู้ใช้กดยกเลิกแชร์ — ไม่ต้องทำอะไร */ }
+              }}
+              className="grid h-[38px] w-[38px] place-items-center rounded-full border border-subtle bg-surface-3 text-ink"><Icon name="share" size={18} /></button>
           </div>
         }
       />
@@ -175,9 +198,21 @@ export default function ProductDetailPage() {
           <Link href="/shop?cat=preorder" className="mt-1.5 inline-block text-[12.5px] font-bold text-primary-soft underline">ดูพรีออเดอร์ที่เปิดอยู่ →</Link>
         </div>
       )}
+      {batchGone && (
+        <div className="mb-2.5 rounded-xl border border-[#b91c1c]/45 bg-[#b91c1c]/[0.1] px-3.5 py-3 text-[12.5px] text-[#f87171]">
+          รอบพิเศษที่กดเข้ามาปิดไปแล้ว — ราคาที่เห็นตอนนี้เป็นราคาปกติของสินค้า ไม่ใช่ราคารอบนั้น
+        </div>
+      )}
+      {closedForOrder && (
+        <div className="mb-2.5 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-3 text-[12.5px] text-[#fbbf24]">
+          ปิดรับจองรอบนี้แล้ว — ของกำลังเดินทาง/ผลิตอยู่ รอรอบถัดไปนะครับ 🙏
+        </div>
+      )}
       <div className="flex gap-2.5">
-        <button className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink"><Icon name="chat" size={20} /></button>
-        <Button onClick={addToCart} icon="cart" disabled={soldOut || specialLocked}>{soldOut ? 'สินค้าหมด' : specialLocked ? '🔒 เฉพาะลูกค้าที่มีใบพรี' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}</Button>
+        <button disabled title="เร็วๆ นี้" className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink-faint opacity-45"><Icon name="chat" size={20} /></button>
+        <Button onClick={addToCart} icon="cart" disabled={soldOut || specialLocked || closedForOrder || batchGone}>
+          {batchGone ? 'รอบพิเศษปิดแล้ว' : closedForOrder ? 'ปิดรับจองแล้ว' : soldOut ? 'สินค้าหมด' : specialLocked ? '🔒 เฉพาะลูกค้าที่มีใบพรี' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}
+        </Button>
       </div>
 
       {/* others in the same series (arc) — collect the set */}

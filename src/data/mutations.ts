@@ -143,7 +143,14 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     // mintRewards:false — this runs in the CUSTOMER session, which RLS forbids from minting event
     // coupons/awards; minting here would abort the whole flush and lose the tickets. Their rewards
     // are credited by the admin sweep (/admin/events) or the next admin-approved order.
-    return autoApprove ? approveOrder(orderId, { mintRewards: false, startNos })(withOrder) : withOrder;
+    // ⚠ ห้ามเชื่อ autoApprove จากหน้าจอเพียงอย่างเดียว — ต้อง "คิดใหม่ตรงนี้" ว่ายอดสุทธิเป็น 0 จริง
+    //   เคสจริง: หน้าจอคิดว่าคูปองคลุมเต็มจำนวน (payNow 0) แต่ระหว่างรอ RPC คูปองถูกใช้/หมดอายุ
+    //   → mutation คิดส่วนลดใหม่ได้ 0 → ยอดกลับเป็น 500 แต่ยัง approve ให้ = ออกตั๋วฟรี ไม่ได้เก็บเงิน
+    //   และออเดอร์ที่ไม่มีรายการเลย (ของถูกลบหมด) ก็เข้าเงื่อนไข 0 บาทเหมือนกัน (audit ลูกค้า #2/#3)
+    if (items.length === 0) return db;
+    return autoApprove && order.total_deposit <= 0
+      ? approveOrder(orderId, { mintRewards: false, startNos })(withOrder)
+      : withOrder;
   };
 }
 

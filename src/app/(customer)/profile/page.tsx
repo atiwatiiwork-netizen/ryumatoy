@@ -87,7 +87,8 @@ export default function ProfilePage() {
             <div className="mt-1.5 text-[11.5px] text-ink-faint">อีก {next.need} ชิ้น จะได้เลื่อนเป็น {RANK[next.next].label}</div>
           </>
         ) : (
-          <div className="text-[12.5px] text-ink-muted2">🥇 คุณคือสมาชิก Gold — ขอบคุณที่อุดหนุน!</div>
+          // ขั้นสูงสุดมีหลายขั้น (gold/diamond/legend) — เดิมฮาร์ดโค้ดว่า Gold ทำให้ Diamond เห็นผิด
+          <div className="text-[12.5px] text-ink-muted2">{r.emoji} คุณคือสมาชิก {r.label} — ขอบคุณที่อุดหนุน!</div>
         )}
       </div>
 

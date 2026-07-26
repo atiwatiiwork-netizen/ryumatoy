@@ -92,7 +92,10 @@ export default function CheckoutPage() {
     if (p.is_stock) return l.qty > availableFor(db, p);
     return p.status !== 'open';                                             // พรีปกติปิดรับจองแล้ว
   });
-  const clientSoldOut = deadLines.length > 0;
+  // ตะกร้ามีของ แต่สินค้าถูกลบออกจากร้านหมดแล้ว → ต้องบล็อกเหมือนของหมด
+  // (เดิมหลุดทุกด่าน: validLines ว่าง → ยอด 0 → เข้าโหมด "ไม่ต้องโอน" → กดยืนยันได้ตั๋วเปล่า) audit ลูกค้า #3
+  const allGone = cart.lines.length > 0 && validLines.length === 0;
+  const clientSoldOut = deadLines.length > 0 || allGone;
   const [resIds, setResIds] = useState<string[]>([]);
   const [resUntil, setResUntil] = useState<number | null>(null);
   const [soldOut, setSoldOut] = useState(false);
@@ -213,7 +216,7 @@ export default function CheckoutPage() {
           if (!product) return null; // product removed since added → skip (never crash)
           const variant = db.variants.find((v) => v.id === l.variantId);
           return (
-            <div key={l.productId + (l.variantId ?? '')} className="flex justify-between gap-2.5 py-1 text-[13px]">
+            <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')} className="flex justify-between gap-2.5 py-1 text-[13px]">
               <span className="text-ink-muted2">{productLabel(db, l.productId, l.variantId)} ×{l.qty}</span>
               <span className="font-semibold">{baht(unitDeposit(l) * l.qty)}</span>
             </div>
@@ -249,11 +252,18 @@ export default function CheckoutPage() {
         <div className="mb-4 rounded-card border border-accent bg-[#b91c1c]/[0.12] p-5 text-center">
           <Icon name="warning" size={26} className="mx-auto mb-2 text-primary-soft" />
           <div className="text-[15px] font-extrabold text-primary-soft">
-            {!clientSoldOut && !soldOut && expired ? 'หมดเวลาชำระ · การจองถูกคืนแล้ว' : 'สินค้าถูกจองครบแล้ว · สั่งไม่ได้ในรอบนี้'}
+            {allGone ? 'สินค้าในตะกร้าถูกนำออกจากร้านแล้ว'
+              : !clientSoldOut && !soldOut && expired ? 'หมดเวลาชำระ · การจองถูกคืนแล้ว'
+              : 'สินค้าถูกจองครบแล้ว · สั่งไม่ได้ในรอบนี้'}
           </div>
           <div className="mt-1.5 text-[12.5px] text-ink-muted2">
-            {!clientSoldOut && !soldOut && expired ? 'กรุณากลับไปเริ่มสั่งใหม่อีกครั้ง' : 'ระบบปิดช่องทางโอนเงินไว้ — จะได้ไม่โอนแล้วไม่ได้ของ 🙏'}
+            {allGone ? 'ล้างตะกร้าแล้วเลือกใหม่ได้เลย — หรือทักแอดมินถ้ายังอยากได้ตัวนี้'
+              : !clientSoldOut && !soldOut && expired ? 'กรุณากลับไปเริ่มสั่งใหม่อีกครั้ง'
+              : 'ระบบปิดช่องทางโอนเงินไว้ — จะได้ไม่โอนแล้วไม่ได้ของ 🙏'}
           </div>
+          {allGone && (
+            <button onClick={() => { cart.clear(); flash('ล้างตะกร้าแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">ล้างตะกร้า</button>
+          )}
           {deadLines.length > 0 && (
             <>
               <div className="mt-3 flex flex-col items-center gap-1 text-[12.5px] text-ink-muted2">

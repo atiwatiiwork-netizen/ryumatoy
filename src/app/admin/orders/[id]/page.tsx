@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
@@ -22,6 +23,7 @@ export default function SlipApprovalPage() {
   const adminId = useCurrentUserId();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const [busy, setBusy] = useState(false); // กันกดรัว: อนุมัติซ้ำ = ยิง push ซ้ำ + ตัดสต๊อกซ้ำ
 
   const order = db.orders.find((o) => o.id === id);
 
@@ -46,8 +48,21 @@ export default function SlipApprovalPage() {
   const holdLost = !approved && stockItems.length > 0 && holdsOk.length < stockItems.length;
 
   const approve = async () => {
-    const grantsBefore = db.couponGrants.filter((g) => g.user_id === order.user_id).length;
-    const ticketsBefore = db.tickets.filter((t) => t.owner_id === order.user_id).length;
+    if (busy) return;
+    setBusy(true);
+    // ⚠ ดึงข้อมูลสดก่อนเสมอ — ตัวรีเฟรชอัตโนมัติเว้น 40 วิ ถ้าแอดมินอีกเครื่อง (หรือแท็บอื่น)
+    //   เพิ่งอนุมัติใบเดียวกันไป เครื่องนี้จะยังเห็นเป็น "รอตรวจ" แล้วอนุมัติซ้ำ = ออกตั๋ว 2 ชุด
+    //   ตัดสต๊อกสองรอบ เก็บส่วนต่างซ้ำ (audit concurrency #1)
+    await store.reload();
+    let stillPending = false;
+    dispatch((d) => { stillPending = d.orders.find((o) => o.id === order.id)?.status === 'pending_approval'; return d; });
+    if (!stillPending) { setBusy(false); return flash('ออเดอร์นี้ถูกดำเนินการไปแล้ว (อาจมีอีกเครื่องกดก่อน) — รีเฟรชแล้วดูอีกที'); }
+    let grantsBefore = 0, ticketsBefore = 0;
+    dispatch((d) => {
+      grantsBefore = d.couponGrants.filter((g) => g.user_id === order.user_id).length;
+      ticketsBefore = d.tickets.filter((t) => t.owner_id === order.user_id).length;
+      return d;
+    });
     // reserve server ticket numbers so the counter stays authoritative across sessions (migration v47)
     const startNos = await reserveTicketNos(ticketPrefixCounts(db, order.items.map((it) => it.product_id)));
     dispatch(approveOrder(order.id, { startNos }));
@@ -63,9 +78,9 @@ export default function SlipApprovalPage() {
     // ⚠ ต้องเซฟให้จบก่อน แล้วค่อยยิง push / confirm hold / เด้งหน้า — สามอย่างนี้ย้อนกลับไม่ได้
     //   เดิมไม่มี flush เลย: เน็ตสะดุด → ลูกค้าได้ push "อนุมัติแล้ว" แต่กระเป๋าว่าง,
     //   สต๊อกถูกตัดถาวร, ออเดอร์ยังค้าง pending หลังรีโหลด และแอดมินไม่รู้เลย (audit persist #2)
-    if (issued <= ticketsBefore) { flash('อนุมัติไม่สำเร็จ — ออเดอร์อาจถูกอนุมัติ/ปฏิเสธไปแล้ว ลองรีเฟรช'); return; }
+    if (issued <= ticketsBefore) { setBusy(false); return flash('อนุมัติไม่สำเร็จ — ออเดอร์อาจถูกอนุมัติ/ปฏิเสธไปแล้ว ลองรีเฟรช'); }
     const failed = await store.flush();
-    if (failed) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่ตัดสต๊อก ลองอนุมัติใหม่อีกครั้ง');
+    if (failed) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่ตัดสต๊อก ลองอนุมัติใหม่อีกครั้ง'); }
     const mySubs = subsForUsers(db, [order.user_id]);
     // in-stock (ของพร้อมส่ง) จ่ายครบตั้งแต่ซื้อ → ชวนไปเลือกวิธีรับของทันที (เคส Taweesin: ลูกค้าไม่รู้ว่าต้องเลือก)
     const hasInStock = order.items.some((it) => db.products.find((p) => p.id === it.product_id)?.is_stock);
@@ -81,12 +96,15 @@ export default function SlipApprovalPage() {
   };
 
   const reject = async () => {
+    if (busy) return;
     if (!confirm('ปฏิเสธสลิปนี้? สต๊อกที่จองไว้จะถูกคืน')) return;
+    setBusy(true);
+    await store.reload();   // กันอีกเครื่องอนุมัติไปแล้ว แล้วเครื่องนี้กดปฏิเสธทับ (คูปองคืน+ตั๋วยังอยู่)
     dispatch(rejectOrder(order.id));
     let ok = false;
     dispatch((d) => { ok = d.orders.find((o) => o.id === order.id)?.status === 'rejected'; return d; });
-    if (!ok) return flash('ปฏิเสธไม่สำเร็จ — ออเดอร์นี้อาจถูกอนุมัติไปแล้ว ลองรีเฟรช');
-    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่คืนสต๊อก ลองใหม่อีกครั้ง');
+    if (!ok) { setBusy(false); return flash('ปฏิเสธไม่สำเร็จ — ออเดอร์นี้อาจถูกอนุมัติไปแล้ว ลองรีเฟรช'); }
+    if (await store.flush()) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่คืนสต๊อก ลองใหม่อีกครั้ง'); }
     if (pushEnabled(db, 'order_rejected'))
       sendPush(subsForUsers(db, [order.user_id]), { title: '❌ สลิปไม่ผ่านการตรวจ', body: 'ยอด/สลิปไม่ถูกต้อง — ติดต่อแอดมิน หรือสั่งใหม่อีกครั้ง', url: '/' }, dispatch).catch(() => {});
     await Promise.all((order.reservation_ids ?? []).map((rid) => releaseReservation(rid)));
@@ -177,12 +195,12 @@ export default function SlipApprovalPage() {
               <div className="mb-2.5 rounded-btn border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] p-3 text-[12.5px] leading-relaxed text-primary-soft">
                 ⚠️ ออเดอร์นี้ไม่มีรายการสินค้า (ข้อมูลขาดจากการเซฟไม่สมบูรณ์) — อนุมัติไม่ได้เพราะจะไม่มีตั๋วออก ให้ปฏิเสธแล้วแจ้งลูกค้าสั่งใหม่
               </div>
-              <button onClick={reject} className="w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
+              <button onClick={reject} disabled={busy} className="w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
             </>
           ) : (
             <>
-              <Button variant="success" icon="check" onClick={approve}>Approve · ออก Ticket</Button>
-              <button onClick={reject} className="mt-2.5 w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
+              <Button variant="success" icon="check" onClick={approve} disabled={busy}>{busy ? 'กำลังอนุมัติ…' : 'Approve · ออก Ticket'}</Button>
+              <button onClick={reject} disabled={busy} className="mt-2.5 w-full rounded-btn border-[1.5px] border-[#f87171]/40 py-3 text-sm font-bold text-[#f87171]">ปฏิเสธสลิป · คืนสต๊อก</button>
             </>
           )}
         </div>

@@ -7,7 +7,8 @@ import { Icon, type IconName } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
-import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, batchRemaining, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
+import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
+import { batchAvailable } from '@/domain/services/reservations';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -69,7 +70,7 @@ function ShopInner() {
   const openBatches = !showBatches ? [] : db.batches.filter((b) => {
     if (b.status !== 'open' || b.published === false) return false; // ร่างไม่ขึ้นหน้าร้าน (v53)
     // sold-out rounds are hidden from the mixed "all" view but STAY (greyed "หมด") in the dedicated category
-    if (category !== 'special' && batchRemaining(db, b.id, b.stock_qty) <= 0) return false;
+    if (category !== 'special' && batchAvailable(db, b) <= 0) return false;
     const p = db.products.find((x) => x.id === b.product_id);
     if (!p) return false;
     if (categoryId && categoryOf(db, p)?.id !== categoryId) return false;
@@ -83,7 +84,7 @@ function ShopInner() {
   // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
   const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
   const stockCount = db.products.filter((p) => p.is_stock).length;
-  const specialCount = db.batches.filter((b) => b.status === 'open' && b.published !== false && batchRemaining(db, b.id, b.stock_qty) > 0).length;
+  const specialCount = db.batches.filter((b) => b.status === 'open' && b.published !== false && batchAvailable(db, b) > 0).length;
   // ประเภท offered on the storefront = active categories only
   const activeCategories = db.categories.filter((c) => c.active);
   // ค่าย list narrows to makers under the selected ประเภท

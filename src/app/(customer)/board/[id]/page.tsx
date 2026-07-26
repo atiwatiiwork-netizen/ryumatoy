@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
+import { useSmartBack } from '@/lib/nav';
 import { Icon } from '@/components/Icon';
 import { ProductCard } from '@/components/ProductCard';
 import { cx } from '@/components/ui';
@@ -15,6 +16,7 @@ export default function BoardPage() {
   const { id } = useParams<{ id: string }>();
   const db = useDatabase();
   const cart = useCart();
+  const goBack = useSmartBack('/');   // DNA: ห้ามฮาร์ดโค้ดเส้นทางกลับ (ลูปกับปุ่ม back ของเครื่อง)
   const board = db.boards.find((b) => b.id === id);
 
   if (!board) return <div className="py-24 text-center text-ink-faint">ไม่พบกระดานนี้ <Link href="/" className="text-primary-soft">← กลับหน้าแรก</Link></div>;
@@ -30,7 +32,7 @@ export default function BoardPage() {
 
   return (
     <div>
-      <Link href="/" className="mb-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-muted2"><Icon name="arrowLeft" size={16} /> หน้าแรก</Link>
+      <button onClick={goBack} className="mb-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-muted2"><Icon name="arrowLeft" size={16} /> ย้อนกลับ</button>
 
       {board.poster_url && (
         <div className="mb-4 overflow-hidden rounded-2xl border border-subtle">

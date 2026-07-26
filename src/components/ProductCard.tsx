@@ -73,8 +73,12 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   };
 
   const soldOut = stockLeft != null && stockLeft <= 0;
+  // ของหมด = กดเข้าไปไม่ได้ (กติกาเดียวกับ BatchCard) — เดิมยังคลิกเข้าหน้าสินค้าได้
+  const Wrap = soldOut
+    ? ({ className, children }: { className?: string; children: React.ReactNode }) => <div className={className}>{children}</div>
+    : ({ className, children }: { className?: string; children: React.ReactNode }) => <Link href={`/shop/${product.id}`} className={className}>{children}</Link>;
   return (
-    <Link href={`/shop/${product.id}`} className={cx('block overflow-hidden rounded-card border border-subtle bg-surface-2', soldOut && 'opacity-60')}>
+    <Wrap className={cx('block overflow-hidden rounded-card border border-subtle bg-surface-2', soldOut && 'opacity-60')}>
       <div className="relative">
         <ProductThumb isStock={product.is_stock} radius="rounded-none" src={mainSrc} srcB={splitSrc} />
         {inClosingBoard && <span className="absolute left-2 top-2 rounded-md bg-[#16a34a] px-1.5 py-0.5 text-[9px] font-extrabold text-white">ใกล้ปิดพรี</span>}
@@ -120,7 +124,8 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           : stockLeft === 1
             ? <div className="animate-blink text-[10.5px] font-extrabold text-[#f87171]">🔥 ชิ้นสุดท้าย!</div>
             : stockLeft <= 3
-              ? <div className="text-[10.5px] font-bold text-[#fbbf24]">พร้อมส่ง · เหลือน้อย</div>
+              // กฎร้าน: ทุกสถานะ "เหลือน้อย" ต้องกระพริบ (เดิมการ์ดนิ่ง แต่หน้าสินค้ากระพริบ = ไม่ตรงกัน)
+              ? <div className="animate-blink text-[10.5px] font-extrabold text-[#fbbf24]">⚡ เหลือน้อย · รีบเลย</div>
               : <div className="text-[10.5px] font-bold text-[#4ade80]">พร้อมส่ง</div>)}
         {saved && <div className="text-[10px] font-bold text-[#f1d27a]">ราคาสมาชิก ✦</div>}
         {quickAdd && (
@@ -131,6 +136,6 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
               : <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-muted2">เลือกแบบในหน้าสินค้า →</div>
         )}
       </div>
-    </Link>
+    </Wrap>
   );
 }
