@@ -14,6 +14,7 @@ import { usableGrantsFor, couponExpired } from '@/domain/services/coupons';
 import { setSuspended } from '@/data/mutations';
 import { CouponTierPill } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
+import { ticketsBySource } from '@/domain/services/ticketSource';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://www.facebook.com/search/top?q=${encodeURIComponent(s.trim())}`);
@@ -32,6 +33,7 @@ export default function CustomerPage() {
   if (!u) return <div className="py-10 text-center text-ink-faint">ไม่พบสมาชิกนี้</div>;
 
   const tickets = db.tickets.filter((t) => t.owner_id === u.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const sourceGroups = ticketsBySource(db, u.id);
   const orders = db.orders.filter((o) => o.user_id === u.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const grants = db.couponGrants.filter((g) => g.user_id === u.id).sort((a, b) => (b.granted_at ?? '').localeCompare(a.granted_at ?? ''));
   const rps = db.remainingPayments.filter((r) => r.user_id === u.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -81,6 +83,54 @@ export default function CustomerPage() {
           <Kpi label="ค้างชำระรวม" value={baht(totalDue)} tone={totalDue > 0 ? 'red' : 'green'} />
           <Kpi label="จ่ายแล้วรวม" value={baht(totalPaid)} />
           <Kpi label="คูปองใช้ได้" value={`${usableCoupons} ใบ`} />
+        </div>
+      </div>
+
+      {/* ── History Log: ตั๋วแยกตาม "แหล่งที่มา" (เจ้าของ 2026-07-26) ──
+          ตรวจย้อนหลังได้ว่าใบไหนมาจากวิธีอะไร วันไหน ยอดเต็มเท่าไหร่ มัดจำเท่าไหร่ ค้างเท่าไหร่
+          — สำคัญเวลามีอะไรผิด เพราะแต่ละแหล่งมี "เส้นเงิน" คนละแบบ (มีออเดอร์คู่ / เก็บเงินนอกระบบ) */}
+      <div className="mb-4 rounded-2xl border border-subtle bg-surface-2 p-4">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <span className="text-[15px] font-bold">📋 History Log ตั๋ว · แยกตามแหล่งที่มา</span>
+          <span className="text-[11.5px] text-ink-faint">วันที่ · รายการ · ยอดเต็ม · มัดจำ · ค้าง</span>
+        </div>
+        {sourceGroups.length === 0 ? <Empty text="ยังไม่มีตั๋ว" /> : (
+          <div className="mt-2 flex flex-col gap-3">
+            {sourceGroups.map((g) => (
+              <div key={g.source} className="rounded-xl border border-subtle bg-surface-3/30 p-3">
+                <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                  <span className={cx('rounded-md px-2 py-0.5 text-[11.5px] font-extrabold', g.cls)}>{g.emoji} {g.label}</span>
+                  <span className="text-[11.5px] text-ink-faint">{g.rows.length} ใบ</span>
+                  <span className="ml-auto text-[11.5px] text-ink-muted2">
+                    ยอดเต็ม <b className="text-ink">{baht(g.price)}</b> · จ่ายแล้ว <b className="text-[#4ade80]">{baht(g.paid)}</b>
+                    {g.due > 0 && <> · ค้าง <b className="text-primary-soft">{baht(g.due)}</b></>}
+                  </span>
+                </div>
+                <div className="flex flex-col divide-y divide-hair">
+                  {g.rows.map(({ ticket: t, origin: o }) => (
+                    <div key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-[12px]">
+                      <span className="w-[84px] shrink-0 text-[11px] text-ink-faint">{fmtDate(o.at)}</span>
+                      <span className="w-[128px] shrink-0 font-mono text-[10.5px] text-ink-faint">{t.ticket_no}</span>
+                      <span className="min-w-[130px] flex-1 truncate font-semibold">
+                        {db.products.find((p) => p.id === t.product_id)?.series_name ?? '(สินค้าถูกลบ)'}{t.qty > 1 ? ` ×${t.qty}` : ''}
+                        {o.batchLabel && <span className="ml-1 text-[10.5px] font-normal text-ink-faint">· {o.batchLabel}</span>}
+                      </span>
+                      <StatusBadge status={ticketBadgeKey(t) as StatusKey} />
+                      <span className="w-[76px] text-right text-ink-muted2">เต็ม {baht(o.price)}</span>
+                      <span className="w-[78px] text-right text-[#4ade80]">มัดจำ {baht(o.deposit)}</span>
+                      <span className={cx('w-[74px] text-right font-bold', o.due > 0 ? 'text-primary-soft' : 'text-ink-faint')}>{o.due > 0 ? `ค้าง ${baht(o.due)}` : 'ครบ ✓'}</span>
+                      {o.orderId
+                        ? <Link href={`/admin/orders/${o.orderId}`} className="w-[70px] text-right text-[11px] font-bold text-primary-soft">#{o.orderId.slice(-4)} →</Link>
+                        : <span className="w-[70px] text-right text-[10.5px] text-ink-faint">ไม่มีออเดอร์</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mt-2 text-[11px] text-ink-faint">
+          💡 “แอดมินมอบตั๋วให้” และ “งานหาของ” ไม่มีออเดอร์คู่ — เงินเก็บนอกระบบ/อยู่ในฝั่งหาของ ถ้ายอดไม่ตรงให้ดูสองกลุ่มนี้ก่อน
         </div>
       </div>
 

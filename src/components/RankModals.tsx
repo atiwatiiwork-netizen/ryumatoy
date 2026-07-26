@@ -13,9 +13,10 @@ import { cx } from './ui';
 /** Human list of a rank's perks (given current settings). */
 export function perksFor(s: ShopSettings, rank: RankName): string[] {
   if (rank === 'gold') {
-    const out = [`มัดจำเหลือ ${s.rank_gold_deposit_pct}% (เช่น ฿${s.deposit_wcf}→฿${s.deposit_wcf * s.rank_gold_deposit_pct / 100})`];
-    if (s.instock_disc_gold_value > 0) out.push(`ลดสินค้า In-Stock ${s.instock_disc_gold_type === 'percent' ? s.instock_disc_gold_value + '%' : '฿' + s.instock_disc_gold_value}`);
-    return out;
+    // ⚠ ส่วนลด In-Stock ของ Gold **ยังไม่เปิดใช้** (เจ้าของสั่ง 2026-07-26) — ตั้งค่าไว้ได้ในหน้า Ranks
+    //   แต่ยังไม่มีโค้ดคิดส่วนลดจริงที่ไหนเลย (instockPriceFor ไม่มีใครเรียก) จึงห้ามโฆษณาไว้ตรงนี้
+    //   เพราะลูกค้าจะเห็นราคาเต็มแล้วรู้สึกว่าถูกหลอก. เปิดใช้เมื่อไหร่ค่อยเอาบรรทัดนี้กลับมา
+    return [`มัดจำเหลือ ${s.rank_gold_deposit_pct}% (เช่น ฿${s.deposit_wcf}→฿${s.deposit_wcf * s.rank_gold_deposit_pct / 100})`];
   }
   if (rank === 'diamond' || rank === 'legend') return ['ไม่ต้องมัดจำ (จ่ายเต็มตอนของถึง)', 'สิทธิพิเศษระดับสูง (เร็วๆ นี้)'];
   if (rank === 'silver') return ['สะสมต่อเพื่อปลดล็อก Gold'];

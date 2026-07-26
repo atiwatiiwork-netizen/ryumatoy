@@ -11,6 +11,7 @@ import { useSmartBack } from '@/lib/nav';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketPaid, ticketDue } from '@/domain/services/money';
 import { orderOfTicket } from '@/domain/services/journey';
+import { ticketsBySource } from '@/domain/services/ticketSource';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 
@@ -34,6 +35,7 @@ export default function HistoryPage() {
   const paidTotal = myTickets.reduce((s, t) => s + ticketPaid(t), 0);
   const dueTotal = myTickets.reduce((s, t) => s + ticketDue(t), 0);
   const approvedCount = orders.filter((o) => o.status === 'approved').length;
+  const sourceGroups = ticketsBySource(db, uid);
 
   // จับคู่ "ตั๋วใบไหนเกิดจากออเดอร์ไหน" ครั้งเดียวแล้วใช้ซ้ำ — ถ้าเทียบด้วยสินค้าอย่างเดียว
   // ลูกค้าที่ซื้อ SKU เดิม 2 ครั้ง จะเห็นตั๋วใบเดียวกันโผล่ทั้งสองออเดอร์ (audit v56)
@@ -59,6 +61,38 @@ export default function HistoryPage() {
         <Kpi label="จ่ายไปแล้วรวม" value={baht(paidTotal)} tone="text-[#4ade80]" />
         <Kpi label="ยอดค้างจ่าย" value={baht(dueTotal)} tone={dueTotal > 0 ? 'text-[#fbbf24]' : 'text-ink'} />
       </div>
+
+      {/* ตั๋วของฉัน แยกตามแหล่งที่มา — ลูกค้าเห็นเองว่าใบไหนมาจากทางไหน วันไหน จ่ายไปเท่าไหร่
+          (เจ้าของ 2026-07-26: ไว้ตรวจย้อนหลังตอนยอดไม่ตรง) */}
+      {sourceGroups.length > 0 && (
+        <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4">
+          <div className="mb-2 text-[13px] font-bold">🎫 ตั๋วของฉัน · แยกตามที่มา</div>
+          <div className="flex flex-col gap-2.5">
+            {sourceGroups.map((g) => (
+              <details key={g.source} className="rounded-xl border border-subtle bg-surface-3/30 p-2.5">
+                <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-[12.5px]">
+                  <span className={cx('rounded-md px-2 py-0.5 text-[11.5px] font-extrabold', g.cls)}>{g.emoji} {g.label}</span>
+                  <span className="text-ink-faint">{g.rows.length} ใบ</span>
+                  <span className="ml-auto text-[11.5px] text-ink-muted2">จ่ายแล้ว <b className="text-[#4ade80]">{baht(g.paid)}</b>{g.due > 0 && <> · ค้าง <b className="text-primary-soft">{baht(g.due)}</b></>}</span>
+                </summary>
+                <div className="mt-1.5 flex flex-col divide-y divide-hair">
+                  {g.rows.map(({ ticket: t, origin: o }) => (
+                    <div key={t.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 py-1.5 text-[11.5px]">
+                      <span className="w-[70px] shrink-0 text-ink-faint">{fmtDate(o.at)}</span>
+                      <Link href={`/wallet/${encodeURIComponent(t.ticket_no)}`} className="min-w-[120px] flex-1 truncate font-semibold text-ink underline-offset-2 hover:underline">
+                        {productLabel(db, t.product_id, t.variant_id)}{t.qty > 1 ? ` ×${t.qty}` : ''}
+                      </Link>
+                      <span className="text-ink-muted2">เต็ม {baht(o.price)}</span>
+                      <span className="text-[#4ade80]">มัดจำ {baht(o.deposit)}</span>
+                      <span className={o.due > 0 ? 'font-bold text-primary-soft' : 'text-ink-faint'}>{o.due > 0 ? `ค้าง ${baht(o.due)}` : 'ครบ ✓'}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* นัดชำระมีหน้าของตัวเองแล้ว (/plans v57) — ที่นี่แค่ชี้ทางไป ไม่ทำ UI ซ้ำสองที่ */}
       {plans.length > 0 && (
