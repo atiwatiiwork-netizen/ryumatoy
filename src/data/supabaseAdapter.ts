@@ -47,6 +47,18 @@ async function syncTable(sb: SupabaseClient, table: string, nextRows: Row[], bas
   if (firstError) throw firstError;
 }
 
+/** ตารางแบบ "เขียนเพิ่มอย่างเดียว" (ประวัติการกระทำ): upsert เฉพาะแถวใหม่ ไม่แก้ ไม่ลบ.
+ *  ⚠ ห้ามใช้ syncTable ปกติกับ activity_logs: ในหน่วยความจำเก็บแค่ 400 แถวล่าสุด (logActivity slice)
+ *  และ adapter โหลดมาแค่ 300 → แถวที่ถูกตัดออกจะถูกมองว่า "ถูกลบ" แล้วสั่ง DELETE ประวัติทิ้ง
+ *  (RLS ไม่มี policy ลบ → error ทุก flush; ถ้ามี policy ก็จะกลายเป็นลบประวัติจริง). */
+async function syncAppendOnly(sb: SupabaseClient, table: string, nextRows: Row[], baseRows: Row[], key = 'id') {
+  const known = new Set(baseRows.map((r) => String(r[key])));
+  const fresh = nextRows.filter((r) => !known.has(String(r[key])));
+  if (fresh.length === 0) return;
+  const { error } = await sb.from(table).insert(fresh);
+  if (error) throw error;
+}
+
 const stripItems = (order: Row): Row => {
   const copy = { ...order };
   delete copy.items;
@@ -207,7 +219,7 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('mission_submissions', () => syncTable(sb, 'mission_submissions', next.missionSubmissions as unknown as Row[], base.missionSubmissions as unknown as Row[]));
     await step('app_config', () => syncTable(sb, 'app_config', next.appConfig as unknown as Row[], base.appConfig as unknown as Row[], 'key'));
     await step('payment_accounts', () => syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]));
-    await step('activity_logs', () => syncTable(sb, 'activity_logs', next.activityLogs as unknown as Row[], base.activityLogs as unknown as Row[]));
+    await step('activity_logs', () => syncAppendOnly(sb, 'activity_logs', next.activityLogs as unknown as Row[], base.activityLogs as unknown as Row[]));
     await step('payment_plans', () => syncTable(sb, 'payment_plans', next.paymentPlans as unknown as Row[], base.paymentPlans as unknown as Row[]));
 
     await step('orders', () => syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never)));

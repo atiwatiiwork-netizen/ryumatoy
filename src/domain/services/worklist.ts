@@ -24,7 +24,12 @@ export interface WorkItem {
   money?: number;    // ยอดเงินที่เกี่ยวข้อง (ถ้ามี)
 }
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+/** วันที่ "ตามเวลาไทย" (ปฏิทินที่ร้านใช้จริง) — ห้ามใช้ toISOString ที่เป็น UTC:
+ *  ก่อน 7 โมงเช้าบ้านเรา UTC ยังเป็นเมื่อวาน → นัดที่ครบกำหนดวันนี้จะไม่ขึ้นคิวจนถึง 7 โมง (audit v56) */
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 /** นัดชำระที่ถึงกำหนดวันนี้/เลยกำหนด (ยังไม่ปิด). */
 export function plansDue(db: Database, at = todayStr()): PaymentPlan[] {
