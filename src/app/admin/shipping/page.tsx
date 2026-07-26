@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -9,7 +10,7 @@ import { cx } from '@/components/ui';
 import { uploadImage } from '@/lib/upload';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
-import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel } from '@/data/mutations';
+import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel, logActivity } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { LabelSheet } from '../orders/LabelSheet';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
@@ -31,6 +32,7 @@ export default function ShippingPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
 
   const dReq = deliveryRequests(db).sort((a, b) => ((a.delivery?.requested_at ?? '') < (b.delivery?.requested_at ?? '') ? 1 : -1));
   const dChoice = awaitingChoice(db);
@@ -68,6 +70,7 @@ export default function ShippingPage() {
     if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 รับของเรียบร้อย', body: 'ขอบคุณที่อุดหนุนริวมะครับ 🙏', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+    dispatch(logActivity(adminId, 'close_delivery', `ปิดงานรับของ (${DELIVERY_METHOD_LABEL[t.delivery!.method]})`, { targetId: t.id, targetLabel: t.ticket_no }));
     flash(`ปิดงานแล้ว · ${t.ticket_no} ✓`);
   };
 
@@ -91,6 +94,7 @@ export default function ShippingPage() {
     if (!confirm(`ปิดงาน ${t.ticket_no} — ตั๋วนี้ส่ง/รับของกันนอกระบบไปแล้วใช่ไหม? (ไม่ push หาลูกค้า)`)) return;
     dispatch(markShippedOffline(t.id));
     if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
+    dispatch(logActivity(adminId, 'close_offline', 'ปิดงานนอกระบบ (ส่งของกันเองไปแล้ว)', { targetId: t.id, targetLabel: t.ticket_no }));
     flash(`ปิดงานนอกระบบ · ${t.ticket_no} ✓`);
   };
 
@@ -230,6 +234,7 @@ function TrackRow({ ticket }: { ticket: PreorderTicket }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
   const to = resolveShipTo(db, ticket);
   const [carrier, setCarrier] = useState<Carrier | null>(null);
   const [no, setNo] = useState('');
@@ -259,6 +264,7 @@ function TrackRow({ ticket }: { ticket: PreorderTicket }) {
     // push "ส่งแล้ว" ให้ลูกค้าทันทีหลังกรอกเลข (เจ้าของ 2026-07-23 ข้อ 3)
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
+    dispatch(logActivity(adminId, 'set_parcel', `ส่งพัสดุ ${cLabel} ${no.trim()}`, { targetId: ticket.id, targetLabel: ticket.ticket_no }));
     flash(`จัดส่งแล้ว · ${ticket.ticket_no} ✓ แจ้งลูกค้าแล้ว`);
   };
 

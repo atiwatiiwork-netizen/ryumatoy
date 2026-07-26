@@ -2,11 +2,12 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, RankBadge } from '@/components/ui';
-import { approveOrder, rejectOrder } from '@/data/mutations';
+import { approveOrder, rejectOrder, logActivity } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { confirmReservation, releaseReservation } from '@/lib/reserve';
 import { franchiseOf, productLabel } from '@/domain/services/catalog';
@@ -17,6 +18,7 @@ export default function SlipApprovalPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const db = useDatabase();
+  const adminId = useCurrentUserId();
   const dispatch = useDispatch();
   const { flash } = useToast();
 
@@ -60,6 +62,7 @@ export default function SlipApprovalPage() {
       sendPush(mySubs, { title: '🎁 ได้รับคูปองจากกิจกรรม!', body: `คุณได้รับคูปอง ${grantsAfter - grantsBefore} ใบ — ดูใน "คูปองของฉัน"`, url: '/coupons' }, dispatch).catch(() => {});
     // confirm any stock holds → real sale
     await Promise.all((order.reservation_ids ?? []).map((rid) => confirmReservation(rid)));
+    dispatch(logActivity(adminId, 'approve_order', `อนุมัติสลิปมัดจำ · ออกตั๋ว ${order.items.length} ใบ (${user?.display_name ?? ''})`, { targetId: order.id, targetLabel: nextTk, amount: order.total_deposit }));
     flash(`อนุมัติแล้ว · ออก Ticket ${order.items.length} ใบ`);
     router.push('/admin');
   };
@@ -70,6 +73,7 @@ export default function SlipApprovalPage() {
     if (pushEnabled(db, 'order_rejected'))
       sendPush(subsForUsers(db, [order.user_id]), { title: '❌ สลิปไม่ผ่านการตรวจ', body: 'ยอด/สลิปไม่ถูกต้อง — ติดต่อแอดมิน หรือสั่งใหม่อีกครั้ง', url: '/' }, dispatch).catch(() => {});
     await Promise.all((order.reservation_ids ?? []).map((rid) => releaseReservation(rid)));
+    dispatch(logActivity(adminId, 'reject_order', `ปฏิเสธสลิป (${user?.display_name ?? ''})`, { targetId: order.id, amount: order.total_deposit }));
     flash('ปฏิเสธออเดอร์แล้ว · คืนสต๊อก');
     router.push('/admin');
   };

@@ -56,7 +56,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -89,6 +89,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('app_config').select('*'),
         sb.from('rank_tiers').select('*'),
         sb.from('payment_accounts').select('*'),
+        sb.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(300),
+        sb.from('payment_plans').select('*'),
         sb.from('shop_settings').select('*'),
       ]);
 
@@ -142,6 +144,9 @@ export const supabaseAdapter: PersistenceAdapter = {
       appConfig: (appConfig.data ?? []) as Database['appConfig'],
       rankTiers: (rankTiers.data ?? []) as Database['rankTiers'],
       paymentAccounts: (paymentAccounts.data ?? []) as Database['paymentAccounts'],
+      // ตารางใหม่ v56 — degrade เป็น [] ถ้ายังไม่ได้รัน migration (ไม่ทำให้แอปโหลดพัง)
+      activityLogs: (activityLogs.data ?? []) as Database['activityLogs'],
+      paymentPlans: (paymentPlans.data ?? []) as Database['paymentPlans'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -202,6 +207,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('mission_submissions', () => syncTable(sb, 'mission_submissions', next.missionSubmissions as unknown as Row[], base.missionSubmissions as unknown as Row[]));
     await step('app_config', () => syncTable(sb, 'app_config', next.appConfig as unknown as Row[], base.appConfig as unknown as Row[], 'key'));
     await step('payment_accounts', () => syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]));
+    await step('activity_logs', () => syncTable(sb, 'activity_logs', next.activityLogs as unknown as Row[], base.activityLogs as unknown as Row[]));
+    await step('payment_plans', () => syncTable(sb, 'payment_plans', next.paymentPlans as unknown as Row[], base.paymentPlans as unknown as Row[]));
 
     await step('orders', () => syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never)));
     await step('order_items', () => syncTable(

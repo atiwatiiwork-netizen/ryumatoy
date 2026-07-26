@@ -8,6 +8,7 @@ import { useAuth, canLogin } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
+import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -34,12 +35,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
   // งานจัดส่งทั้งหมด (รอลูกค้าเลือกวิธีรับ + คำขอรอรับเรื่อง + รอใส่เลขพัสดุ + รถเข้ารับ/มารับเอง) — badge แท็บ "จัดส่ง"
   const shippingJobs = awaitingChoice(db).length + deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
+  // badge "งานค้างวันนี้" = งานด่วน (ทำก่อน) + นัดชำระที่ถึงกำหนด + ปัญหาข้อมูลที่ต้องแก้
+  const todayJobs = worklist(db).filter((w) => w.urgency === 'now').reduce((s, w) => s + w.count, 0) + plansDue(db).length + dataIssues(db).length;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
   const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });
   const groups: { title?: string; items: NavItem[] }[] = [
     { items: [
       it('/admin', 'dashboard', 'Dashboard'),
+      // ศูนย์รวมงานค้างข้ามทุกโมดูล + ซ่อมข้อมูล + นัดชำระ + ประวัติ (เจ้าของ 2026-07-25)
+      it('/admin/today', 'bolt', 'งานค้างวันนี้', todayJobs),
       it('/admin/analytics', 'sliders', 'วิเคราะห์รายเดือน'),
       // ศูนย์จัดส่ง (เจ้าของ 2026-07-23): คำขอรับของ → ใบปะหน้า → ใส่เลขพัสดุ → ปิดงาน ครบที่เดียว
       it('/admin/shipping', 'truck', 'จัดส่ง', shippingJobs),

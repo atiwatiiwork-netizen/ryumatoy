@@ -3,11 +3,12 @@
 import { type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { approveRemainingPayment, rejectRemainingPayment } from '@/data/mutations';
+import { approveRemainingPayment, rejectRemainingPayment, logActivity } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
@@ -20,6 +21,7 @@ export default function OrdersHubPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
 
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const ticketOf = (tid: string) => db.tickets.find((t) => t.id === tid);
@@ -89,6 +91,7 @@ export default function OrdersHubPage() {
                     dispatch((d) => { const x = d.tickets.find((t2) => t2.id === r.ticket_id); full = !!x && x.remaining_paid >= x.remaining_amount; return d; });
                     if (pushEnabled(db, 'rp_approved'))
                       sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                    dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
                     flash('อนุมัติส่วนต่างแล้ว');
                   }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
                   {/* ปฏิเสธสลิปส่วนต่าง (audit 2026-07-25): เดิมไม่มีทางนี้ → สลิปปลอมค้างคิวถาวร
@@ -98,6 +101,7 @@ export default function OrdersHubPage() {
                     dispatch(rejectRemainingPayment(r.id));
                     if (pushEnabled(db, 'order_rejected'))
                       sendPush(subsForUsers(db, [r.user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${tk?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                    dispatch(logActivity(adminId, 'reject_rp', `ปฏิเสธสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
                     flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
                   }} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>
                 </div>

@@ -1,8 +1,12 @@
 'use client';
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useToast } from '@/state/ToastProvider';
 import { useCart } from '@/state/CartProvider';
+import { createPaymentPlan } from '@/data/mutations';
+import { notifyAdminLine } from '@/lib/notify';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { productLabel } from '@/domain/services/catalog';
@@ -90,6 +94,76 @@ export default function CartPage() {
       </div>
 
       <Button icon="arrowRight" onClick={() => router.push('/checkout')}>สรุปออเดอร์</Button>
+
+      {/* นัดจ่ายทีหลัง (เจ้าของ 2026-07-25): ลูกค้าที่ยังไม่พร้อมโอนวันนี้ ตั้งวันที่จะจ่ายไว้
+          ระบบเตือนเมื่อถึงกำหนด + แอดมินเห็นในหน้า "งานค้างวันนี้" (ไม่ตัดสต๊อกให้อัตโนมัติ) */}
+      <PlanLater />
+    </div>
+  );
+}
+
+function PlanLater() {
+  const db = useDatabase();
+  const cart = useCart();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const uid = useCurrentUserId();
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState('');
+  const [note, setNote] = useState('');
+  const myRank = db.users.find((u) => u.id === uid)?.rank ?? 'bronze';
+  const eachOf = (l: (typeof cart.lines)[number]) => {
+    const p = db.products.find((x) => x.id === l.productId);
+    const { price, deposit } = livePrice(db, l);
+    return lineDepositForRank(db.settings, { deposit, price, isStock: p?.is_stock ?? false }, myRank);
+  };
+  const total = cart.lines.reduce((s, l) => s + eachOf(l) * l.qty, 0);
+  const minDate = new Date().toISOString().slice(0, 10);
+
+  const save = () => {
+    if (!uid) return flash('เข้าสู่ระบบก่อนนะครับ');
+    if (!date) return flash('เลือกวันที่จะจ่ายก่อน');
+    const items = cart.lines.map((l) => ({
+      product_id: l.productId, variant_id: l.variantId, batch_id: l.batchId, qty: l.qty,
+      label: productLabel(db, l.productId, l.variantId), each: eachOf(l),
+    }));
+    dispatch(createPaymentPlan(uid, date, items, note));
+    let ok = false;
+    dispatch((d) => { ok = d.paymentPlans.some((p) => p.user_id === uid && p.due_date === date && p.status === 'open'); return d; });
+    if (!ok) return flash('ตั้งนัดไม่สำเร็จ (มีนัดค้างเกิน 5 รายการแล้ว)');
+    notifyAdminLine(`📅 นัดชำระใหม่: ${db.users.find((u) => u.id === uid)?.display_name ?? ''} · ${total.toLocaleString()} บาท · ครบกำหนด ${date}`);
+    flash('ตั้งนัดชำระแล้ว — ระบบจะเตือนเมื่อถึงวัน 📅');
+    setOpen(false); setDate(''); setNote('');
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="mt-2.5 w-full rounded-btn border border-[#a855f7]/45 bg-[#a855f7]/[0.08] py-3 text-[13px] font-bold text-[#c084fc]">
+        📅 ยังไม่พร้อมโอน — นัดจ่ายทีหลัง
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2.5 rounded-card border border-[#a855f7]/45 bg-[#a855f7]/[0.07] p-4">
+      <div className="text-[13px] font-bold text-[#c084fc]">📅 นัดจ่ายทีหลัง</div>
+      <div className="mt-0.5 text-[11.5px] text-ink-muted2">
+        บอกวันที่จะโอน ระบบจะเตือนเมื่อถึงกำหนด และแอดมินจะเห็นรายการนี้ไว้ล่วงหน้า ·
+        <b className="text-[#fbbf24]"> ยังไม่ได้กันของให้</b> ถ้าเป็นของจำนวนจำกัดควรทักแอดมินยืนยันอีกที
+      </div>
+      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+        <label className="text-[12px] text-ink-muted">วันที่จะจ่าย
+          <input type="date" min={minDate} value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none" />
+        </label>
+        <label className="text-[12px] text-ink-muted">โน้ตถึงแอดมิน (ไม่บังคับ)
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น รอเงินเดือนออก" className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-faint" />
+        </label>
+      </div>
+      <div className="mt-2.5 flex items-center gap-2">
+        <span className="text-[12.5px] text-ink-muted">ยอดที่นัดไว้</span>
+        <span className="text-[16px] font-extrabold text-primary-soft">{baht(total)}</span>
+        <button onClick={save} className="ml-auto rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">ตั้งนัด</button>
+        <button onClick={() => setOpen(false)} className="text-[12.5px] text-ink-faint">ยกเลิก</button>
+      </div>
     </div>
   );
 }

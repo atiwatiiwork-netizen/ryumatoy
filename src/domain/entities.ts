@@ -620,5 +620,37 @@ export interface Database {
   appConfig: AppConfigRow[];
   rankTiers: RankTier[];
   paymentAccounts: PaymentAccount[];
+  activityLogs: ActivityLog[];
+  paymentPlans: PaymentPlan[];
   settings: ShopSettings;
+}
+
+/** ประวัติการกระทำ (migration v56) — ใครทำอะไรกับอะไร เมื่อไหร่. เขียนอย่างเดียว ไม่แก้ย้อนหลัง.
+ *  จำเป็นเมื่อมีผู้ช่วยหลายคน: ตามรอยได้ว่าใครกดอนุมัติ/แก้ยอด/ลบตั๋ว. */
+export interface ActivityLog {
+  id: string;
+  actor_id: string;      // ผู้ใช้ที่ทำ (แอดมิน/ลูกค้า)
+  actor_name: string;    // snapshot ชื่อ ณ ตอนนั้น (ชื่ออาจเปลี่ยนภายหลัง)
+  action: string;        // เช่น 'approve_order' | 'set_parcel' | 'edit_deposit'
+  summary: string;       // ข้อความไทยพร้อมอ่าน
+  target_id?: string;    // id ของสิ่งที่ถูกกระทำ (ตั๋ว/ออเดอร์/สินค้า)
+  target_label?: string; // เลขตั๋ว/ชื่อสินค้า ณ ตอนนั้น
+  amount?: number;       // ยอดเงินที่เกี่ยวข้อง (ถ้ามี)
+  created_at: string;
+}
+
+export type PaymentPlanStatus = 'open' | 'done' | 'cancelled';
+/** นัดชำระ (migration v56) — "หยิบของไว้ก่อน แล้วจ่ายสิ้นเดือน": ลูกค้าเลือกของ + ระบุวันที่จะจ่าย
+ *  ระบบเตือนเมื่อถึงกำหนด. ไม่ตัดสต๊อกเอง (แอดมินกดกันของให้ได้ถ้าตกลงกันแล้ว). */
+export interface PaymentPlan {
+  id: string;
+  user_id: string;
+  due_date: string;      // YYYY-MM-DD วันที่ลูกค้าจะจ่าย
+  note?: string;
+  amount: number;        // ยอดรวมที่ตั้งใจจ่าย (snapshot ตอนสร้าง)
+  items: { product_id: string; variant_id?: string; batch_id?: string; qty: number; label: string; each: number }[];
+  status: PaymentPlanStatus;
+  reminded_at?: string;  // แอดมิน/ระบบเตือนครั้งล่าสุดเมื่อไหร่ (กันเตือนซ้ำรัว)
+  created_at: string;
+  closed_at?: string;
 }

@@ -1,5 +1,6 @@
 import type { Database, PushSubscription as PushRow } from '@/domain/entities';
 import { addPushSubscription, removePushSubscriptionByEndpoint } from '@/data/mutations';
+import { supabase } from '@/data/supabaseClient';
 
 /**
  * Web Push helpers. VAPID public key is safe to embed (it only identifies the sender);
@@ -98,9 +99,11 @@ export function subsForNewProduct(db: Database, product: { manufacturer_id: stri
  *  Fire-and-forget from admin flows — a push must never block or fail the actual save. */
 export async function sendPush(subs: PushRow[], payload: PushPayload, dispatch?: Dispatch): Promise<{ sent: number; gone: string[] }> {
   if (subs.length === 0) return { sent: 0, gone: [] };
+  // แนบ access token ของผู้ใช้ที่ล็อกอิน — /api/push-send ปฏิเสธคำขอที่ไม่มี token (ปิดช่องยิง spam 2026-07-25)
+  const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
   const res = await fetch('/api/push-send', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ subs: subs.map((s) => ({ endpoint: s.endpoint, p256dh: s.p256dh, auth: s.auth })), payload }),
   });
   if (!res.ok) throw new Error(`push-send ${res.status}`);

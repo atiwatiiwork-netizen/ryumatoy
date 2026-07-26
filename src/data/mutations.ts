@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, DeliveryMethod } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines } from '../domain/services/tickets';
@@ -1587,5 +1587,72 @@ export const closeBoardWithProduction = (boardId: string, entries: { productId: 
       { id: id('bl'), board_id: boardId, board_title: board.title, maker_id: board.maker_id, closed_at: now, lines },
       ...db.boardLogs,
     ],
+  };
+};
+
+// ── ประวัติการกระทำ (v56) — ใครทำอะไร เมื่อไหร่ ───────────────────────────
+/** บันทึก 1 บรรทัดลงประวัติ. เรียกจากปุ่มแอดมินที่ "เปลี่ยนเงิน/สถานะ/ลบของ" เท่านั้น
+ *  (ไม่ log ทุกคลิก — เอาเฉพาะที่ต้องตามรอยได้เวลามีผู้ช่วยหลายคน). */
+export const logActivity = (actorId: string, action: string, summary: string, extra?: { targetId?: string; targetLabel?: string; amount?: number }) => (db: Database): Database => ({
+  ...db,
+  activityLogs: [
+    {
+      id: id('log'), actor_id: actorId,
+      actor_name: db.users.find((u) => u.id === actorId)?.display_name ?? 'ไม่ทราบชื่อ',
+      action, summary,
+      target_id: extra?.targetId, target_label: extra?.targetLabel, amount: extra?.amount,
+      created_at: new Date().toISOString(),
+    },
+    ...db.activityLogs,
+  ].slice(0, 400), // เก็บในหน่วยความจำแค่ 400 แถวล่าสุด (DB เก็บครบ)
+});
+
+// ── นัดชำระ (v56) — "หยิบของไว้ก่อน จ่ายสิ้นเดือน" ────────────────────────
+/** ลูกค้าสร้างนัดชำระจากตะกร้า: บันทึกรายการ+ยอด+วันที่จะจ่าย (ไม่ตัดสต๊อก). */
+export const createPaymentPlan = (userId: string, dueDate: string, items: PaymentPlan['items'], note?: string) => (db: Database): Database => {
+  if (!db.users.some((u) => u.id === userId) || items.length === 0 || !dueDate) return db;
+  // กันสร้างรัว: 1 คนมีนัดที่ยังเปิดอยู่ได้ไม่เกิน 5 รายการ
+  if (db.paymentPlans.filter((p) => p.user_id === userId && p.status === 'open').length >= 5) return db;
+  const amount = items.reduce((s, i) => s + i.each * i.qty, 0);
+  return {
+    ...db,
+    paymentPlans: [
+      { id: id('pp'), user_id: userId, due_date: dueDate, note: note?.trim() || undefined, amount, items, status: 'open', created_at: new Date().toISOString() },
+      ...db.paymentPlans,
+    ],
+  };
+};
+
+/** ปิดนัดชำระ (จ่ายแล้ว / ยกเลิก) — ลูกค้าหรือแอดมินก็กดได้. */
+export const closePaymentPlan = (planId: string, status: 'done' | 'cancelled') => (db: Database): Database => ({
+  ...db,
+  paymentPlans: db.paymentPlans.map((p) => (p.id === planId && p.status === 'open'
+    ? { ...p, status, closed_at: new Date().toISOString() }
+    : p)),
+});
+
+/** ประทับเวลาว่าเตือนลูกค้าไปแล้ว (กันเตือนซ้ำวันเดียวกัน). */
+export const markPlanReminded = (planId: string) => (db: Database): Database => ({
+  ...db,
+  paymentPlans: db.paymentPlans.map((p) => (p.id === planId ? { ...p, reminded_at: new Date().toISOString() } : p)),
+});
+
+// ── เครื่องมือซ่อมข้อมูล (v56) ────────────────────────────────────────────
+/** ปล่อย hold สต๊อกที่ค้างแบบไม่มีออเดอร์คู่ (ขวางของขายไม่ได้) — ใช้ในหน้าซ่อมข้อมูล.
+ *  หมายเหตุ: แถวจริงใน DB จัดการโดย RPC (releaseReservation) — ตัวนี้อัปเดต state ให้ตรงกัน. */
+export const releaseStuckHold = (reservationId: string) => (db: Database): Database => ({
+  ...db,
+  stockReservations: db.stockReservations.map((r) => (r.id === reservationId ? { ...r, status: 'released' as const } : r)),
+});
+
+/** คืนคูปองที่ถูกเผาโดยการเซฟไม่สมบูรณ์ (ย้ายมาเป็นงานฝั่งแอดมิน — RLS ห้ามลูกค้าทำเอง). */
+export const reclaimCouponGrantsFor = (userId: string) => (db: Database): Database => {
+  const orphans = new Set(orphanUsedGrants(db, userId).map((x) => x.grant.id));
+  if (orphans.size === 0) return db;
+  return {
+    ...db,
+    couponGrants: db.couponGrants.map((g) => (orphans.has(g.id)
+      ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, ticket_id: undefined, discount_amount: undefined }
+      : g)),
   };
 };
