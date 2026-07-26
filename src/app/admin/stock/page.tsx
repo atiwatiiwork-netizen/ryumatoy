@@ -443,12 +443,13 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
   const { flash } = useToast();
   const [openPanel, setOpenPanel] = useState(false);
   const [userSel, setUserSel] = useState('');
-  const [rows, setRows] = useState<Record<string, { on: boolean; qty: string; dep: string }>>({});
+  const [rows, setRows] = useState<Record<string, { on: boolean; qty: string; dep: string; price: string }>>({});
   const [busy, setBusy] = useState(false);
   const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
   const eligible = batches.filter((b) => batchRemaining(db, b.id, b.stock_qty) > 0);
-  const row = (b: ProductBatch) => rows[b.id] ?? { on: false, qty: '1', dep: String(b.deposit_amount) };
-  const setRow = (b: ProductBatch, patch: Partial<{ on: boolean; qty: string; dep: string }>) => setRows((r) => ({ ...r, [b.id]: { ...row(b), ...patch } }));
+  // ราคา/มัดจำเริ่มต้น = ของรอบ แต่แอดมินพิมพ์ทับได้รายรายการ (snapshot ลงตั๋วใบนั้นใบเดียว)
+  const row = (b: ProductBatch) => rows[b.id] ?? { on: false, qty: '1', dep: String(b.deposit_amount), price: String(b.price_total) };
+  const setRow = (b: ProductBatch, patch: Partial<{ on: boolean; qty: string; dep: string; price: string }>) => setRows((r) => ({ ...r, [b.id]: { ...row(b), ...patch } }));
   const chosen = eligible.filter((b) => row(b).on);
 
   const doGrant = async () => {
@@ -460,9 +461,15 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
       const rem = batchRemaining(db, b.id, b.stock_qty);
       const p = db.products.find((x) => x.id === b.product_id);
       if (q < 1 || q > rem) return flash(`${p?.series_name}: จำนวนต้อง 1–${rem}`);
-      if ((Number(row(b).dep) || 0) > b.price_total) return flash(`${p?.series_name}: มัดจำเกินราคาขาย`);
+      const pr = Number(row(b).price) || 0;
+      if (pr <= 0) return flash(`${p?.series_name}: ใส่ราคาขายก่อน`);
+      if ((Number(row(b).dep) || 0) > pr) return flash(`${p?.series_name}: มัดจำเกินราคาที่ตั้งไว้ (${baht(pr)})`);
     }
-    const summary = chosen.map((b) => `• ${db.products.find((x) => x.id === b.product_id)?.series_name} ×${row(b).qty} (มัดจำ ${baht(Number(row(b).dep) || 0)}/ชิ้น)`).join('\n');
+    const summary = chosen.map((b) => {
+      const pr = Number(row(b).price) || 0, dp = Number(row(b).dep) || 0;
+      const diff = pr !== b.price_total ? ` ⚠ ราคาเฉพาะใบนี้ (รอบ ${baht(b.price_total)})` : '';
+      return `• ${db.products.find((x) => x.id === b.product_id)?.series_name} ×${row(b).qty} · ราคา ${baht(pr)} มัดจำ ${baht(dp)}/ชิ้น · ค้าง ${baht(Math.max(0, pr - dp))}/ชิ้น${diff}`;
+    }).join('\n');
     if (!confirm(`มอบตั๋ว ${chosen.length} รายการ ให้ "${u.display_name}"\n${summary}`)) return;
     setBusy(true);
     try {
@@ -473,7 +480,7 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
       // ระหว่างรอ แล้วทำให้ read-back คิดว่าออกตั๋วสำเร็จทั้งที่ไม่มีอะไรเกิดเลย) audit regression #6
       let before = 0;
       dispatch((d) => { before = d.tickets.length; return d; });
-      dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0) })), startNos));
+      dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0), priceEach: Number(row(b).price) || 0 })), startNos));
       // ⚠ grantSpecialTickets ข้ามรายการที่ของไม่พอแบบเงียบๆ (continue) และหน้าจอเช็คแค่ "ตั๋วที่ออกแล้ว"
       //   ไม่ได้หัก hold ที่ลูกค้าคนอื่นค้างอยู่ → เคยขึ้น "มอบตั๋วแล้ว ✓" + ยิง push ทั้งที่ไม่มีตั๋วเกิดเลย
       //   (เงินที่เก็บนอกระบบหายไปเฉยๆ) audit money #7
@@ -523,7 +530,10 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
                     </div>
                     {r.on && (<>
                       <label className="text-[10.5px] text-ink-faint">จำนวน<input className={cx(inputCls, 'mt-0.5 w-14 py-1.5 text-center text-[12px]')} inputMode="numeric" value={r.qty} onChange={(e) => setRow(b, { qty: e.target.value.replace(/[^\d]/g, '') })} /></label>
+                      {/* ราคา/มัดจำ ตั้งเองได้รายรายการ — ขอบเหลือง = ไม่เท่าราคารอบ (เตือนว่าเป็นดีลเฉพาะใบนี้) */}
+                      <label className="text-[10.5px] text-ink-faint">ราคา/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-20 py-1.5 text-center text-[12px]', (Number(r.price) || 0) !== b.price_total && 'border-[#fbbf24]')} inputMode="numeric" value={r.price} onChange={(e) => setRow(b, { price: e.target.value.replace(/[^\d]/g, '') })} /></label>
                       <label className="text-[10.5px] text-ink-faint">มัดจำ/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-20 py-1.5 text-center text-[12px]')} inputMode="numeric" value={r.dep} onChange={(e) => setRow(b, { dep: e.target.value.replace(/[^\d]/g, '') })} /></label>
+                      <span className="text-[10.5px] text-ink-faint">ค้าง/ชิ้น<b className="mt-0.5 block text-center text-[12px] text-primary-soft">{baht(Math.max(0, (Number(r.price) || 0) - (Number(r.dep) || 0)))}</b></span>
                     </>)}
                   </div>
                 );
@@ -766,16 +776,20 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [gUser, setGUser] = useState('');
   const [gQty, setGQty] = useState('1');
   const [gDep, setGDep] = useState(String(b.deposit_amount));
+  const [gPrice, setGPrice] = useState(String(b.price_total)); // ราคาเฉพาะตั๋วใบนี้ (ไม่แตะราคารอบ)
   const [gBusy, setGBusy] = useState(false);
   const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
   const doGrant = async () => {
     const u = db.users.find((x) => x.id === gUser);
     const q = Number(gQty) || 0;
     const depEach = Math.max(0, Number(gDep) || 0);
+    const priceEach = Number(gPrice) || 0;
     if (!u) return flash('เลือกลูกค้าก่อน');
     if (q < 1 || q > remaining) return flash(`จำนวนต้อง 1–${remaining} (สต๊อกรอบนี้)`);
-    if (depEach > b.price_total) return flash('มัดจำต่อชิ้นเกินราคาขาย');
-    if (!confirm(`มอบตั๋ว ${p?.series_name} ×${q} ให้ "${u.display_name}"\nมัดจำรับแล้ว ${baht(depEach)}/ชิ้น · ค้าง ${baht(Math.max(0, b.price_total - depEach) * q)}\nสต๊อกรอบจะเหลือ ${remaining - q}`)) return;
+    if (priceEach <= 0) return flash('ใส่ราคาขายก่อน');
+    if (depEach > priceEach) return flash(`มัดจำต่อชิ้นเกินราคาที่ตั้งไว้ (${baht(priceEach)})`);
+    const diffNote = priceEach !== b.price_total ? `\n⚠ ราคานี้ใช้เฉพาะตั๋วใบนี้ (ราคารอบคือ ${baht(b.price_total)} — ไม่ถูกแก้)` : '';
+    if (!confirm(`มอบตั๋ว ${p?.series_name} ×${q} ให้ "${u.display_name}"\nราคา ${baht(priceEach)}/ชิ้น · มัดจำรับแล้ว ${baht(depEach)}/ชิ้น · ค้าง ${baht(Math.max(0, priceEach - depEach) * q)}\nสต๊อกรอบจะเหลือ ${remaining - q}${diffNote}`)) return;
     setGBusy(true);
     try {
       // เลขตั๋วต้องจองจาก server ก่อนเสมอ (migration v47 — กันเลขชน)
@@ -785,7 +799,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       //   ซึ่งใบเก่าก็เข้าเงื่อนไข → ขึ้น ✓ + ยิง push ทั้งที่ไม่มีตั๋วใหม่เกิด (audit regression #3)
       let before = 0;
       dispatch((d) => { before = d.tickets.length; return d; });
-      dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos));
+      dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos, priceEach));
       let no = '';
       let made = 0;
       dispatch((d) => {
@@ -798,7 +812,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       if (pushEnabled(db, 'order_approved'))
         sendPush(subsForUsers(db, [u.id]), { title: '🎫 ได้รับใบพรีแล้ว!', body: `${p?.series_name ?? ''} ×${q} — แตะดูตั๋วของคุณ`, url: no ? `/wallet/${encodeURIComponent(no)}` : '/wallet' }, dispatch).catch(() => {});
       flash(`มอบตั๋ว ${no || ''} ให้ ${u.display_name} แล้ว ✓ (สต๊อกรอบเหลือ ${remaining - q})`);
-      setGranting(false); setGUser(''); setGQty('1'); setGDep(String(b.deposit_amount));
+      setGranting(false); setGUser(''); setGQty('1'); setGDep(String(b.deposit_amount)); setGPrice(String(b.price_total));
     } finally { setGBusy(false); }
   };
 
@@ -882,13 +896,18 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
             <label className="text-[11px] text-ink-faint">จำนวน
               <input className={cx(inputCls, 'mt-0.5 w-16 py-2 text-center')} inputMode="numeric" value={gQty} onChange={(e) => setGQty(e.target.value.replace(/[^\d]/g, ''))} />
             </label>
+            {/* ราคา/ชิ้น ตั้งเองได้ — ขอบเหลือง = ไม่เท่าราคารอบ (ดีลเฉพาะใบนี้) */}
+            <label className="text-[11px] text-ink-faint">ราคา/ชิ้น
+              <input className={cx(inputCls, 'mt-0.5 w-24 py-2 text-center', (Number(gPrice) || 0) !== b.price_total && 'border-[#fbbf24]')} inputMode="numeric" value={gPrice} onChange={(e) => setGPrice(e.target.value.replace(/[^\d]/g, ''))} />
+            </label>
             <label className="text-[11px] text-ink-faint">มัดจำรับแล้ว/ชิ้น
               <input className={cx(inputCls, 'mt-0.5 w-24 py-2 text-center')} inputMode="numeric" value={gDep} onChange={(e) => setGDep(e.target.value.replace(/[^\d]/g, ''))} />
             </label>
+            <span className="text-[11px] text-ink-faint">ค้าง/ชิ้น<b className="mt-0.5 block text-center text-[13px] text-primary-soft">{baht(Math.max(0, (Number(gPrice) || 0) - (Number(gDep) || 0)))}</b></span>
             <button onClick={doGrant} disabled={gBusy} className="rounded-lg bg-[#8b5cf6] px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">{gBusy ? 'กำลังออกตั๋ว…' : '✓ มอบตั๋ว'}</button>
             <button onClick={() => setGranting(false)} className="py-2 text-[12px] text-ink-faint">ยกเลิก</button>
           </div>
-          <div className="mt-1.5 text-[10.5px] text-ink-faint">มัดจำเต็มราคา = ตั๋วจ่ายครบทันที · ต่ำกว่า = ลูกค้าไปจ่ายส่วนต่างต่อในแอป · ตัดสต๊อกรอบทันทีที่มอบ</div>
+          <div className="mt-1.5 text-[10.5px] text-ink-faint">ราคา/มัดจำที่ใส่ = snapshot ลงตั๋วใบนี้ใบเดียว (ราคารอบและลูกค้าคนอื่นไม่กระทบ) · มัดจำเต็มราคา = จ่ายครบทันที · ตัดสต๊อกทันทีที่มอบ</div>
         </div>
       )}
 

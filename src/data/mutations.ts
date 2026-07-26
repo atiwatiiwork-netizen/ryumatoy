@@ -412,7 +412,11 @@ export const publishBatch = (batchId: string) => (db: Database): Database => {
  * ผ่าน allocator ตัวเดียวร่วมกันทั้งชุด — สองรายการเรื่องเดียวกันได้เลขต่อเนื่อง ไม่ชนกัน. รายการที่ไม่ผ่าน
  * guard (รอบปิด/สต๊อกไม่พอ/qty แหว่ง) ถูกข้าม — รายการที่เหลือยังออกตั๋วได้.
  */
-export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number }[], startNos?: TicketNoStart) => (db: Database): Database => {
+/** มอบตั๋วให้ลูกค้า — แอดมินกำหนด **ราคา** และ **มัดจำ** ต่อรายการเองได้ (เจ้าของ 2026-07-26)
+ *  เช่นตกลงราคาพิเศษกับลูกค้าเก่าทางแชท หรือไล่เก็บใบพรีเก่าที่ราคาไม่เท่ารอบปัจจุบัน.
+ *  ⚠ ราคา/มัดจำที่ใส่จะถูก **snapshot ลงตั๋วใบนั้นใบเดียว** — ห้ามแตะราคาของรอบหรือของ SKU
+ *    (ลูกค้าคนอื่นในรอบเดียวกันต้องไม่ได้รับผลกระทบ และหน้าร้านต้องยังโชว์ราคาเดิม) */
+export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number; priceEach?: number }[], startNos?: TicketNoStart) => (db: Database): Database => {
   const user = db.users.find((u) => u.id === userId);
   if (!user || items.length === 0) return db;
   const when = new Date();
@@ -430,8 +434,10 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
     const held = pendingHeld(db, b.product_id, b.id);
     if (b.stock_qty - sold - held < q) continue; // ห้ามมอบเกินสต๊อกที่เหลือจริงของรอบ
     grantedPerBatch[b.id] = (grantedPerBatch[b.id] ?? 0) + q;
-    const dep = Math.max(0, Math.min(b.price_total, it.depEach != null ? it.depEach : b.deposit_amount));
-    const remainingEach = Math.max(0, b.price_total - dep);
+    // ราคาต่อชิ้นของ "ตั๋วใบนี้": ใช้ที่แอดมินใส่มา ถ้าไม่ใส่/ใส่ 0 → ใช้ราคารอบ
+    const priceEach = it.priceEach != null && it.priceEach > 0 ? Math.round(it.priceEach) : b.price_total;
+    const dep = Math.max(0, Math.min(priceEach, it.depEach != null ? it.depEach : b.deposit_amount));
+    const remainingEach = Math.max(0, priceEach - dep);
     issued.push({
       id: id('t'), ticket_no: alloc(franchiseOf(db, p)?.abbr ?? 'xx', issued),
       product_id: p.id, batch_id: b.id, owner_id: userId, original_buyer_id: userId, qty: q,
@@ -444,8 +450,8 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
 };
 
 /** มอบตั๋วรายการเดียว — wrapper ของ grantSpecialTickets (โค้ดออกเลข/ตัดสต๊อกชุดเดียวกัน). */
-export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart) =>
-  grantSpecialTickets(userId, [{ batchId, qty, depEach }], startNos);
+export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart, priceEach?: number) =>
+  grantSpecialTickets(userId, [{ batchId, qty, depEach, priceEach }], startNos);
 
 /** Create a brand-new legacy SKU (stock we already hold) + open its first special round in one step.
  *  full-pay → status 'arrived' (in hand); deposit → 'shipping' (in transit, so the remaining is payable). */
