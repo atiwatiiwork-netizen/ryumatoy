@@ -464,7 +464,10 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
       // จองเลขตั๋วจาก server ทีเดียวทั้งชุด (นับต่อ prefix) — allocator ใน mutation แชร์ตัวนับ ไม่ชนกัน
       const startNos = await reserveTicketNos(ticketPrefixCounts(db, chosen.map((b) => b.product_id)));
       const want = chosen.reduce((s, b) => s + (Number(row(b).qty) || 1), 0);
-      const before = db.tickets.length;
+      // อ่าน "จำนวนตอนนี้จริงๆ" หลังรอ RPC — ห้ามใช้ db ที่ผูกไว้ตอน render (poll อาจดึงตั๋วคนอื่นเข้ามา
+      // ระหว่างรอ แล้วทำให้ read-back คิดว่าออกตั๋วสำเร็จทั้งที่ไม่มีอะไรเกิดเลย) audit regression #6
+      let before = 0;
+      dispatch((d) => { before = d.tickets.length; return d; });
       dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0) })), startNos));
       // ⚠ grantSpecialTickets ข้ามรายการที่ของไม่พอแบบเงียบๆ (continue) และหน้าจอเช็คแค่ "ตั๋วที่ออกแล้ว"
       //   ไม่ได้หัก hold ที่ลูกค้าคนอื่นค้างอยู่ → เคยขึ้น "มอบตั๋วแล้ว ✓" + ยิง push ทั้งที่ไม่มีตั๋วเกิดเลย
@@ -772,10 +775,21 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     try {
       // เลขตั๋วต้องจองจาก server ก่อนเสมอ (migration v47 — กันเลขชน)
       const startNos = await reserveTicketNos(ticketPrefixCounts(db, [b.product_id]));
+      // ⚠ ต้องอ่านจำนวนตั๋ว "ตอนนี้" ก่อน dispatch แล้วเทียบหลัง — grantSpecialTickets ข้ามเงียบ
+      //   เมื่อของไม่พอ (มี hold ค้างของลูกค้าคนอื่น) เดิมอ่านแค่ "ตั๋วใบล่าสุดของคน+รอบนี้"
+      //   ซึ่งใบเก่าก็เข้าเงื่อนไข → ขึ้น ✓ + ยิง push ทั้งที่ไม่มีตั๋วใหม่เกิด (audit regression #3)
+      let before = 0;
+      dispatch((d) => { before = d.tickets.length; return d; });
       dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos));
-      try { await store.flush(); } catch { /* onPersistError โชว์เอง */ }
       let no = '';
-      dispatch((d) => { no = d.tickets.filter((t) => t.batch_id === b.id && t.owner_id === u.id).sort((a, x) => (a.created_at < x.created_at ? 1 : -1))[0]?.ticket_no ?? ''; return d; });
+      let made = 0;
+      dispatch((d) => {
+        made = d.tickets.length - before;
+        no = d.tickets.filter((t) => t.batch_id === b.id && t.owner_id === u.id).sort((a, x) => (a.created_at < x.created_at ? 1 : -1))[0]?.ticket_no ?? '';
+        return d;
+      });
+      if (made <= 0) { setGBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
+      if (await store.flush()) { setGBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
       if (pushEnabled(db, 'order_approved'))
         sendPush(subsForUsers(db, [u.id]), { title: '🎫 ได้รับใบพรีแล้ว!', body: `${p?.series_name ?? ''} ×${q} — แตะดูตั๋วของคุณ`, url: no ? `/wallet/${encodeURIComponent(no)}` : '/wallet' }, dispatch).catch(() => {});
       flash(`มอบตั๋ว ${no || ''} ให้ ${u.display_name} แล้ว ✓ (สต๊อกรอบเหลือ ${remaining - q})`);

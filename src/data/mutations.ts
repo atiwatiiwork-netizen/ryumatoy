@@ -295,8 +295,11 @@ export const rejectOrder = (orderId: string) => (db: Database): Database => {
       : db.couponGrants,
     // สลิปไม่ผ่าน → "นัดชำระ" ที่ปิดไปตอนส่งสลิปต้องกลับมาเปิด ไม่งั้นยอดนั้นหายจากคิวทวงถาวร
     // และลูกค้าเห็นว่า "จ่ายแล้ว ✓" ทั้งที่ยังไม่ได้จ่าย (audit v57 #1)
+    // ⚠ ต้องเป็น null ไม่ใช่ undefined — adapter ส่งด้วย upsert(JSON) ซึ่ง "ตัดคีย์ที่เป็น undefined ทิ้ง"
+    //   คอลัมน์เดิมใน DB จึงไม่ถูกล้าง (นัดยังพก order_id ของสลิปที่ไม่ผ่านไว้) audit regression #12
+    //   ล้าง reminded_at ด้วย ไม่งั้นตัวเตือนอัตโนมัติจะข้ามนัดใบนี้ไปตลอดกาล
     paymentPlans: db.paymentPlans.map((p) => (p.order_id === orderId && p.status === 'done'
-      ? { ...p, status: 'open' as const, order_id: undefined, closed_at: undefined }
+      ? { ...p, status: 'open' as const, order_id: null as unknown as undefined, closed_at: null as unknown as undefined, reminded_at: null as unknown as undefined }
       : p)),
   };
 };

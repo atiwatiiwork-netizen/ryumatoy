@@ -297,9 +297,10 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
     // ห้าม flash สำเร็จ + ping LINE ทั้งที่ไม่มีอะไรเปลี่ยน (audit 2026-07-23 false-success class)
     let applied = false;
     dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.delivery?.method === method && !x.delivery.accepted_at; return d; });
-    try { await store.flush(); } catch { /* persist error surface via onPersistError */ }
+    const failed = await store.flush();
     setBusy(false);
     if (!applied) { flash('ส่งคำขอไม่สำเร็จ — รีเฟรชหน้าแล้วลองใหม่ หรือทักแอดมิน'); return; }
+    if (failed) { flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่อีกครั้ง'); return; }
     notifyAdminLine(`📦 คำขอรับของใหม่: ${ticket.ticket_no} · ${DELIVERY_METHOD_LABEL[method]}`);
     flash('ส่งคำขอแล้ว · รอแอดมินยืนยัน');
     setChoosing(false);

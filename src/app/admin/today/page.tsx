@@ -254,8 +254,9 @@ function NewPlanForm() {
     dispatch(createPaymentPlan(me, uid, date, items, note));
     dispatch((d) => { after = d.paymentPlans.length; return d; });
     if (after === before) { setBusy(false); return flash('ออกนัดไม่สำเร็จ — ลูกค้ามีนัดค้างครบ 5 รายการแล้ว (ปิดของเก่าก่อน)'); }
-    await store.flush();   // ต้องเซฟจริงก่อน ค่อยแจ้งลูกค้า
+    const failed = await store.flush();   // ต้องเซฟจริงก่อน ค่อยแจ้งลูกค้า
     setBusy(false);
+    if (failed) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ฟอร์มยังอยู่ครบ ลองกดส่งใหม่');
     if (pushEnabled(db, 'plan_new'))
       sendPush(subsForUsers(db, [uid]), { title: '📅 แอดมินส่งนัดชำระให้คุณ', body: `${lines.length} รายการ · ${baht(total)} — กำหนดจ่าย ${date}`, url: '/plans' }, dispatch).catch(() => {});
     dispatch(logActivity(me, 'create_plan', `ออกนัดชำระให้ ${customer?.display_name ?? ''} (${lines.length} รายการ)`, { targetLabel: date, amount: total }));

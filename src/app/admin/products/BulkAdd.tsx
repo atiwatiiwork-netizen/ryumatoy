@@ -151,7 +151,9 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
     // (AdminShell) toasts and the store keeps retrying; we keep the draft so nothing is silently lost.
     const n = items.length;
     flash(`กำลังบันทึก ${n} สินค้า…`);
-    await store.flush();
+    // เช็คผลเซฟก่อนเสมอ — ไม่งั้นลบร่างทิ้ง (รูปที่อัปโหลด+ราคาที่กรอกทั้งชุดหายถาวร)
+    // แล้วยิง push โฆษณาสินค้าที่ไม่มีอยู่จริงให้ลูกค้าทุกคน (audit regression #10)
+    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ร่างยังอยู่ครบ เช็คเน็ตแล้วกดสร้างใหม่อีกครั้ง');
     try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* */ }
     flash(`สร้าง ${n} สินค้าแล้ว 🎉`);
     // one summary push for the whole batch (not N separate pings) — best-effort; honors

@@ -86,7 +86,11 @@ export function grantedTicketIds(db: Database): Set<string> {
       if (t) covered.add(t.id);
     }
   }
-  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id)).map((t) => t.id));
+  // ⚠ ตัดตั๋วที่เกิดจาก "หาของ" ออก — มัดจำก้อนนั้นถูกนับไปแล้วในช่อง sourcing
+  //   (approveSourcingStart สร้างสินค้า+ตั๋วโดยไม่มีออเดอร์ ถ้าไม่ตัดจะกลายเป็นนับสองรอบ
+  //   ยอด "รับเข้าทั้งหมด" ของเดือนจะบวมเท่ากับยอดหาของทั้งเดือน) audit 2026-07-26 #1
+  const fromSourcing = new Set(db.sourcingRequests.map((s) => s.product_id).filter(Boolean) as string[]);
+  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !fromSourcing.has(t.product_id)).map((t) => t.id));
   grantedCache.set(db, granted);
   return granted;
 }

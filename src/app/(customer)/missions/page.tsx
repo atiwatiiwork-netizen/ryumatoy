@@ -48,9 +48,15 @@ export default function MissionsPage() {
     if (!uid || !state || !state.canSubmit(!!proofUrl)) return;
     setBusy(true);
     // guard against a stale mobile session: re-verify against the freshest in-memory state right now
+    let before = 0;
+    dispatch((d) => { before = d.missionSubmissions.length; return d; });
     dispatch(submitMission(uid, state.installed ? undefined : proofUrl));
-    await store.flush(); // ส่งจริงถึง DB ก่อนบอกว่า "ส่งแล้ว" — กัน split flush ทำใบสมัครหาย (DNA rule 7)
+    let sent = false;
+    dispatch((d) => { sent = d.missionSubmissions.length > before; return d; });
+    const failed = await store.flush(); // ส่งจริงถึง DB ก่อนบอกว่า "ส่งแล้ว" — กัน split flush ทำใบสมัครหาย (DNA rule 7)
     setBusy(false);
+    if (!sent) return flash('ส่งไม่สำเร็จ — อาจส่งไปแล้ว หรือกิจกรรมปิดไปแล้ว');
+    if (failed) return flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่ (รูปยังอยู่)');
     flash('ส่งภารกิจแล้ว 🎉 รอแอดมินตรวจสอบ');
   };
 

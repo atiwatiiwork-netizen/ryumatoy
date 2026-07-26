@@ -39,7 +39,8 @@ export class Store {
   private saving: Promise<void> = Promise.resolve();
   private pendingSaves = 0; // >0 while a persist is in flight (block idle-reload from clobbering un-synced rows)
   private reloadSeq = 0;
-  private lastFailure: string | null = null; // ข้อความ error ของการเซฟรอบล่าสุดที่ล้ม (ให้ flush() คืน)
+  /** คิวที่กำลังอัปโหลดอยู่ + ผลของมัน (ผูกกับ db ชุดนั้นโดยเฉพาะ ไม่ปนกับ flush อื่น) */
+  private inflight: { target: Database; done: Promise<string | null> } | null = null;
   /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
    *  silently losing data. Called with the backend error message. */
   onPersistError?: (message: string) => void;
@@ -87,28 +88,34 @@ export class Store {
   flush = async (): Promise<string | null> => {
     clearTimeout(this.timer);
     if (!this.ready) return null; // never persist the in-memory seed before the real load finishes (would clobber DB)
-    const base = this.lastSynced;
     const target = this.db;
-    // ⚠ ไม่มีอะไรใหม่ให้ส่ง "ไม่ได้แปลว่าเซฟเสร็จแล้ว" — ตัวจับเวลา 350ms อาจเพิ่งคว้า target ก้อนเดียวกัน
-    //   ไปอัปโหลดอยู่ (ระหว่างนั้น checkout ยัง await RPC จองของอยู่นานกว่า 350ms เสมอ)
-    //   เดิม return ทันที → เคลียร์ตะกร้า/บอกสำเร็จ/เด้งหน้าทั้งที่ตั๋วยังไม่ขึ้นเซิร์ฟเวอร์ (audit persist #1)
-    //   ต้องรอคิวที่ค้างอยู่ให้จบก่อนเสมอ
-    if (base === target) { await this.saving; return this.lastFailure; }
+    // ⚠ ผลลัพธ์ต้องผูกกับ "ข้อมูลชุดนี้" เท่านั้น ห้ามใช้ตัวแปรกลาง (audit regression #7):
+    //   ถ้าใช้ตัวแปรกลาง flush ของ A ที่ล้ม จะถูกรายงานเป็นผลของ flush ของ B ที่สำเร็จ
+    //   → checkout บอก "บันทึกไม่สำเร็จ" ทั้งที่ออเดอร์ขึ้นแล้ว → ลูกค้ากดส่งซ้ำ = ออเดอร์ซ้ำหลังโอนครั้งเดียว
+    // ถ้าตัวจับเวลา 350ms เพิ่งคว้าชุดเดียวกันไปส่งอยู่ → รอ "ผลของคิวนั้น" ไม่ใช่ตอบ null ทันที
+    if (this.inflight?.target === target) return this.inflight.done;
+    if (this.lastSynced === target) return null; // ไม่มีอะไรใหม่ และไม่มีคิวของชุดนี้ค้างอยู่
+    const base = this.lastSynced;
     this.lastSynced = target;
-    this.lastFailure = null;
     this.pendingSaves++;
-    this.saving = this.saving
+    const done = this.saving
       .then(() => withTimeout(this.adapter.persist(target, base), PERSIST_TIMEOUT, 'persist'))
-      .catch((err) => {
+      .then((): string | null => null)
+      .catch((err): string | null => {
         console.error('[store] persist failed', err);
         // rewind so the next change re-attempts these rows instead of treating them as synced
         this.lastSynced = base;
-        this.lastFailure = err instanceof Error ? err.message : String(err);
-        this.onPersistError?.(this.lastFailure);
+        const msg = err instanceof Error ? err.message : String(err);
+        this.onPersistError?.(msg);
+        return msg;
       })
-      .finally(() => { this.pendingSaves--; });
-    await this.saving;
-    return this.lastFailure;
+      .finally(() => {
+        this.pendingSaves--;
+        if (this.inflight?.target === target) this.inflight = null;
+      });
+    this.inflight = { target, done };
+    this.saving = done.then(() => undefined);
+    return done;
   };
 
   reset = async (): Promise<void> => {

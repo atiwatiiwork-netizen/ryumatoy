@@ -48,7 +48,13 @@ export function AdminShell({ children }: { children: ReactNode }) {
       // เซฟก่อนยิง: ถ้าเซฟไม่ผ่านห้ามยิง (ไม่งั้นลูกค้าได้แจ้งเตือนของสิ่งที่ไม่ได้บันทึก)
       // ⚠ ยังกันเตือนซ้ำข้ามเครื่องไม่ได้ 100% — สองเครื่องเปิดพร้อมกันอาจยิงคนละครั้ง
       //   (ต้องมี RPC ฝั่ง server ถึงจะกันได้จริง) แต่ผลเสียแค่ลูกค้าได้ 2 เด้ง
-      if (await store.flush()) return;
+      if (await store.flush()) {
+        // เซฟไม่ผ่าน → ต้องถอนตราประทับคืนด้วย ไม่งั้นนัดจะถูกมองว่า "เตือนแล้ว" ทั้งที่ลูกค้าไม่เคยได้รับ
+        // แล้วรอบเตือนอัตโนมัติจะข้ามใบนี้ตลอดกาล (audit regression #8)
+        for (const p of targets) store.update((d) => ({ ...d, paymentPlans: d.paymentPlans.map((x) => (x.id === p.id ? { ...x, reminded_at: p.reminded_at } : x)) }));
+        firedRef.current = false;   // ให้ลองใหม่ได้ในเซสชันนี้
+        return;
+      }
       for (const p of targets)
         sendPush(subsForUsers(db, [p.user_id]), { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${p.amount.toLocaleString()} บาท — กดจ่ายได้เลยที่เมนู "นัดชำระ"`, url: '/plans' }, (m) => store.update(m)).catch(() => {});
       flash(`เตือนนัดชำระอัตโนมัติ ${targets.length} รายการแล้ว 🔔`);

@@ -11,14 +11,17 @@ const RPC_TIMEOUT = 12_000;
 
 async function call(fn: string, args: Record<string, unknown>): Promise<Res> {
   if (!supabase) return { error: 'no_server' };
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const { data, error } = await Promise.race([
       supabase.rpc(fn, args),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${fn} timed out`)), RPC_TIMEOUT)),
+      new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`${fn} timed out`)), RPC_TIMEOUT); }),
     ]);
     return (data ?? { error: error?.message ?? 'error' }) as Res;
   } catch (e) {
     return { error: (e as Error)?.message ?? 'timeout' };
+  } finally {
+    clearTimeout(timer); // ห้ามปล่อยตัวจับเวลาค้างหลังสำเร็จ (audit regression #9)
   }
 }
 

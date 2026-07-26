@@ -121,7 +121,10 @@ export function dataIssues(db: Database): DataIssue[] {
   //   พร้อมปุ่ม "ปล่อยของ" → กดแล้วของหลุดขายซ้ำ ลูกค้าที่โอนมาแล้วไม่ได้ของ (audit money #1)
   // + ต้องค้างเกิน 6 ชม.ก่อน ถึงจะเรียกว่าค้างจริง (ออเดอร์ที่เพิ่งเข้ายังรอเราตรวจอยู่ ปกติดี)
   const HOLD_STALE_MS = 6 * 60 * 60 * 1000;
-  const linked = new Set(db.orders.flatMap((o) => o.reservation_ids ?? []));
+  // นับเฉพาะออเดอร์ที่ "ยังไม่จบ" — ออเดอร์ที่อนุมัติ/ปฏิเสธไปแล้วควรปล่อย hold คืนตั้งแต่ตอนนั้น
+  // ถ้า RPC ปล่อยของ time out ไป hold จะค้างถาวรและกันของขายไม่ได้ ต้องมองเห็นในหน้าสุขภาพข้อมูล
+  // (ถ้านับออเดอร์ทุกสถานะ hold ที่ค้างจริงจะถูกซ่อนตลอดกาล — audit regression #5)
+  const linked = new Set(db.orders.filter((o) => o.status === 'pending_approval').flatMap((o) => o.reservation_ids ?? []));
   const stuckHolds = db.stockReservations.filter((r) => r.status === 'paid'
     && !linked.has(r.id)
     && (!r.created_at || Date.now() - new Date(r.created_at).getTime() > HOLD_STALE_MS));

@@ -117,8 +117,11 @@ export default function CheckoutPage() {
     // ⚠ deps ต้องเป็น "ค่าคงที่" ไม่ใช่ stockLines ที่สร้างใหม่ทุก render — ไม่งั้น effect วิ่งทุกเฟรม
     //   แล้วมีแค่ started.current กันไว้ชั้นเดียว ถ้าใครแก้โค้ดจน ref นั้นเลื่อน = ยิง reserveStock รัว
     //   จนสต๊อกถูกกันจนหมด (audit persist #15)
+    // ⚠ clientSoldOut ต้องอยู่ใน deps ด้วย (audit regression #2): ตอนเปิดหน้าของอาจหมดเพราะคนอื่น
+    //   ถือ hold อยู่ → effect ออกก่อนโดยไม่ตั้ง started → พอ hold หมดอายุ หน้าจอปลดบล็อกเอง
+    //   แต่ถ้าไม่มี dep นี้ effect จะไม่กลับมาจองให้ = จ่ายเงินได้โดย "ไม่มีการกันของเลย" (ขายเกิน)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mustLogin, needsApproval, needsReserve, stockKey, currentUserId]);
+  }, [mustLogin, needsApproval, needsReserve, stockKey, currentUserId, clientSoldOut]);
 
   useEffect(() => {
     if (!resUntil) return;
@@ -150,11 +153,16 @@ export default function CheckoutPage() {
     // session, where RLS hides other customers' tickets → client numbering would collide. Reserve the
     // numbers from the server first (migration v47); seed/preview returns {} → mutation falls back.
     const startNos = noPayment ? await reserveTicketNos(ticketPrefixCounts(db, validLines.map((l) => l.productId))) : undefined;
+    // อ่านจำนวนออเดอร์ "ตอนนี้จริงๆ" หลังรอ RPC เสร็จ แล้วค่อย dispatch — เพื่อให้ read-back เชื่อถือได้
+    let ordersBefore = 0;
+    dispatch((d) => { ordersBefore = d.orders.length; return d; });
     dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos));
     // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
+    // ⚠ ต้องเทียบกับ "จำนวนก่อนหน้าที่อ่านจาก store จริง" ไม่ใช่ db ที่ผูกไว้ตอน render:
+    //   ระหว่างรอ reserveTicketNos ตัว poll อาจดึงออเดอร์ของคนอื่นเข้ามา แล้วนับว่าสำเร็จมั่ว (regression #6)
     let submitted = false;
     let newOrderId = '';
-    dispatch((d) => { submitted = d.orders.length > db.orders.length; newOrderId = d.orders[0]?.id ?? ''; return d; });
+    dispatch((d) => { submitted = d.orders.length > ordersBefore; newOrderId = d.orders[0]?.id ?? ''; return d; });
     // ⚠ ลำดับสำคัญ (เคส Madara/Pl Tree 2026-07-25): payReservation ต้องเรียก "หลัง" รู้ว่าออเดอร์เกิดจริง
     // เท่านั้น — เดิมเรียกก่อน แล้วออเดอร์โดนปัดตก → hold ค้าง 'paid' ถาวร ขวางสต๊อกโดยไม่มีออเดอร์คู่.
     // ถ้าไม่ผ่าน: hold ยังเป็น active มีนาฬิกา 15 นาที → คืนของเองอัตโนมัติ
