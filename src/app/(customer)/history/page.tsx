@@ -11,6 +11,7 @@ import { BackBar, cx } from '@/components/ui';
 import { useSmartBack } from '@/lib/nav';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketPaid, ticketDue } from '@/domain/services/money';
+import { orderOfTicket } from '@/domain/services/journey';
 import { closePaymentPlan } from '@/data/mutations';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -30,11 +31,23 @@ export default function HistoryPage() {
   const orders = db.orders.filter((o) => o.user_id === uid).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const myTickets = db.tickets.filter((t) => t.owner_id === uid);
   const rps = db.remainingPayments.filter((r) => r.user_id === uid);
-  const plans = db.paymentPlans.filter((p) => p.user_id === uid && p.status === 'open').sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
+  const myPlans = db.paymentPlans.filter((p) => p.user_id === uid);
+  const plans = myPlans.filter((p) => p.status === 'open').sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
+  const closedPlans = myPlans.filter((p) => p.status !== 'open').sort((a, b) => (a.due_date < b.due_date ? 1 : -1)).slice(0, 5);
 
   // ยอดสะสมที่จ่ายไปแล้วจริง (มัดจำ + ส่วนต่างที่อนุมัติแล้ว) + ยอดค้างทั้งหมด
   const paidTotal = myTickets.reduce((s, t) => s + ticketPaid(t), 0);
   const dueTotal = myTickets.reduce((s, t) => s + ticketDue(t), 0);
+  const approvedCount = orders.filter((o) => o.status === 'approved').length;
+
+  // จับคู่ "ตั๋วใบไหนเกิดจากออเดอร์ไหน" ครั้งเดียวแล้วใช้ซ้ำ — ถ้าเทียบด้วยสินค้าอย่างเดียว
+  // ลูกค้าที่ซื้อ SKU เดิม 2 ครั้ง จะเห็นตั๋วใบเดียวกันโผล่ทั้งสองออเดอร์ (audit v56)
+  const ticketsOfOrder = new Map<string, typeof myTickets>();
+  for (const t of myTickets) {
+    const o = orderOfTicket(db, t);
+    if (!o) continue;
+    ticketsOfOrder.set(o.id, [...(ticketsOfOrder.get(o.id) ?? []), t]);
+  }
 
   const ST: Record<string, { label: string; cls: string }> = {
     approved: { label: 'อนุมัติแล้ว ✓', cls: 'bg-[#16a34a]/[0.16] text-[#4ade80]' },
@@ -47,7 +60,7 @@ export default function HistoryPage() {
       <BackBar title="ประวัติการซื้อ" onBack={goBack} />
 
       <div className="mb-4 grid grid-cols-3 gap-2.5">
-        <Kpi label="ออเดอร์ทั้งหมด" value={String(orders.length)} />
+        <Kpi label="ออเดอร์สำเร็จ" value={String(approvedCount)} />
         <Kpi label="จ่ายไปแล้วรวม" value={baht(paidTotal)} tone="text-[#4ade80]" />
         <Kpi label="ยอดค้างจ่าย" value={baht(dueTotal)} tone={dueTotal > 0 ? 'text-[#fbbf24]' : 'text-ink'} />
       </div>
@@ -71,6 +84,21 @@ export default function HistoryPage() {
         </div>
       )}
 
+      {closedPlans.length > 0 && (
+        <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-3.5">
+          <div className="mb-1.5 text-[12px] font-bold text-ink-muted">นัดชำระที่ปิดแล้ว</div>
+          <div className="flex flex-col gap-1">
+            {closedPlans.map((p) => (
+              <div key={p.id} className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink-faint">
+                <span>{p.due_date}</span>
+                <span className={p.status === 'done' ? 'text-[#4ade80]' : ''}>{p.status === 'done' ? 'จ่ายแล้ว ✓' : 'ยกเลิก'}</span>
+                <span className="ml-auto font-semibold text-ink-muted2">{baht(p.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {orders.length === 0 ? (
         <div className="rounded-card border border-subtle bg-surface-2 py-14 text-center text-[13px] text-ink-faint">
           ยังไม่มีประวัติการซื้อ<br />
@@ -80,8 +108,10 @@ export default function HistoryPage() {
         <div className="flex flex-col gap-2.5">
           {orders.map((o) => {
             const st = ST[o.status] ?? ST.pending_approval;
-            // ส่วนต่างที่จ่ายไปกับตั๋วของออเดอร์นี้ (จับคู่ด้วยสินค้า/รอบ)
-            const orderRps = rps.filter((r) => myTickets.some((t) => t.id === r.ticket_id && o.items.some((i) => i.product_id === t.product_id && (i.batch_id ?? null) === (t.batch_id ?? null))));
+            const mine = ticketsOfOrder.get(o.id) ?? [];
+            const used = new Set<string>();   // ตั๋ว 1 ใบผูกกับ 1 บรรทัดเท่านั้น
+            // ส่วนต่างที่จ่ายไปกับตั๋วของออเดอร์นี้ (เฉพาะตั๋วที่เป็นของออเดอร์นี้จริง)
+            const orderRps = rps.filter((r) => mine.some((t) => t.id === r.ticket_id));
             return (
               <div key={o.id} className="rounded-card border border-subtle bg-surface-2 p-4">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -93,7 +123,8 @@ export default function HistoryPage() {
                 <div className="flex flex-col gap-1.5">
                   {o.items.map((i) => {
                     const img = lineImage(db, i.product_id, i.variant_id);
-                    const tk = myTickets.find((t) => t.product_id === i.product_id && (t.batch_id ?? null) === (i.batch_id ?? null) && (t.variant_id ?? null) === (i.variant_id ?? null));
+                    const tk = mine.find((t) => !used.has(t.id) && t.product_id === i.product_id && (t.batch_id ?? null) === (i.batch_id ?? null) && (t.variant_id ?? null) === (i.variant_id ?? null));
+                    if (tk) used.add(tk.id);
                     return (
                       <div key={i.id} className="flex items-center gap-2.5">
                         <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">
@@ -110,11 +141,18 @@ export default function HistoryPage() {
                   {o.slip_url && /^https?:|^data:/.test(o.slip_url) && (
                     <button onClick={() => setBig(o.slip_url)} className="rounded-lg border border-subtle px-2.5 py-1 text-[11.5px] text-ink-muted2">🧾 ดูสลิปมัดจำ</button>
                   )}
-                  {orderRps.map((r) => (
-                    <button key={r.id} onClick={() => r.slip_url && setBig(r.slip_url)} className="rounded-lg border border-subtle px-2.5 py-1 text-[11.5px] text-ink-muted2">
-                      💸 สลิปส่วนต่าง {baht(r.amount)} {r.status === 'pending' ? '(รอตรวจ)' : '✓'}
-                    </button>
-                  ))}
+                  {orderRps.map((r) => {
+                    const viewable = r.slip_url && /^https?:|^data:/.test(r.slip_url);
+                    const tag = r.status === 'pending' ? '(รอตรวจ)' : '✓';   // สลิปที่ไม่ผ่านถูกลบทิ้ง ไม่ค้างเป็นสถานะ
+                    // ไม่มีรูปให้ดู = ไม่ทำเป็นปุ่ม (กันกดแล้วไม่มีอะไรเกิดขึ้น)
+                    return viewable ? (
+                      <button key={r.id} onClick={() => setBig(r.slip_url!)} className="rounded-lg border border-subtle px-2.5 py-1 text-[11.5px] text-ink-muted2">
+                        💸 สลิปส่วนต่าง {baht(r.amount)} {tag}
+                      </button>
+                    ) : (
+                      <span key={r.id} className="rounded-lg border border-subtle px-2.5 py-1 text-[11.5px] text-ink-faint">💸 ส่วนต่าง {baht(r.amount)} {tag}</span>
+                    );
+                  })}
                 </div>
               </div>
             );

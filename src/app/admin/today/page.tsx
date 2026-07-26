@@ -91,18 +91,27 @@ function PlansTab() {
   const me = useCurrentUserId();
   const due = plansDue(db);
   const upcoming = plansUpcoming(db);
-  const today = new Date().toISOString().slice(0, 10);
+  // ปฏิทินไทย ไม่ใช่ UTC — ก่อน 7 โมงเช้า toISOString ยังเป็นเมื่อวาน ป้าย "เลยกำหนด" จะเพี้ยน
+  const d0 = new Date();
+  const today = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
 
   const remind = (planId: string, userId: string, amount: number) => {
-    if (pushEnabled(db, 'parcel'))
+    if (pushEnabled(db, 'plan_due'))
       sendPush(subsForUsers(db, [userId]), { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${baht(amount)} — โอนแล้วแจ้งแอดมินได้เลย`, url: '/wallet' }, dispatch).catch(() => {});
     dispatch(markPlanReminded(planId));
+    // อ่านกลับก่อนค่อยบันทึกประวัติ+ฟ้อง: ถ้านัดถูกปิดไปแล้วจากอีกเครื่อง markPlanReminded จะเป็น no-op
+    let stamped = false;
+    dispatch((d) => { stamped = !!d.paymentPlans.find((p) => p.id === planId)?.reminded_at; return d; });
+    if (!stamped) return flash('นัดนี้ถูกปิดไปแล้ว — ไม่ได้บันทึกการเตือน');
     dispatch(logActivity(me, 'remind_plan', `เตือนนัดชำระ ${baht(amount)}`, { targetId: planId, amount }));
     flash('ส่งเตือนลูกค้าแล้ว 🔔');
   };
   const close = (planId: string, status: 'done' | 'cancelled', amount: number) => {
     if (!confirm(status === 'done' ? 'ยืนยันว่าลูกค้าจ่ายแล้ว?' : 'ยกเลิกนัดชำระนี้?')) return;
     dispatch(closePaymentPlan(planId, status));
+    let now = '';
+    dispatch((d) => { now = d.paymentPlans.find((p) => p.id === planId)?.status ?? ''; return d; });
+    if (now !== status) return flash(`ปิดไม่สำเร็จ — สถานะตอนนี้คือ "${now || 'ไม่พบนัด'}"`);
     dispatch(logActivity(me, 'close_plan', `${status === 'done' ? 'ปิดนัดชำระ (จ่ายแล้ว)' : 'ยกเลิกนัดชำระ'} ${baht(amount)}`, { targetId: planId, amount }));
     flash(status === 'done' ? 'ปิดนัดชำระแล้ว ✓' : 'ยกเลิกแล้ว');
   };

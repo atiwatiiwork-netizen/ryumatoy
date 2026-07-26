@@ -100,7 +100,14 @@ export function subsForNewProduct(db: Database, product: { manufacturer_id: stri
 export async function sendPush(subs: PushRow[], payload: PushPayload, dispatch?: Dispatch): Promise<{ sent: number; gone: string[] }> {
   if (subs.length === 0) return { sent: 0, gone: [] };
   // แนบ access token ของผู้ใช้ที่ล็อกอิน — /api/push-send ปฏิเสธคำขอที่ไม่มี token (ปิดช่องยิง spam 2026-07-25)
-  const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+  // DNA: ทุก await ที่วิ่งเน็ตต้องมี timeout — getSession() เคยค้างตอนกลับมาจากพักหน้าจอ
+  // ถ้าค้างตรงนี้จะลาก flow แอดมิน (กดของถึงไทย) ค้างไปด้วย ทั้งที่ push แค่ best-effort
+  const token = supabase
+    ? await Promise.race([
+        supabase.auth.getSession().then((r) => r.data.session?.access_token),
+        new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+      ])
+    : undefined;
   const res = await fetch('/api/push-send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },

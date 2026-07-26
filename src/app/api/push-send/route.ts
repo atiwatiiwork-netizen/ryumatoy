@@ -16,16 +16,22 @@ export const runtime = 'nodejs';
  * + rate limit ต่อผู้ใช้แบบ best-effort กันยิงรัว
  */
 
+// นับเป็น "จำนวนเครื่องที่ยิง" ไม่ใช่ "จำนวนครั้งที่เรียก":
+// งานจริงของแอดมิน (กดของถึงไทย 1 รอบ) ยิงทีละคนเพื่อแนบลิงก์ตั๋วรายบุคคล → รอบใหญ่ = 40-100 คำขอรวด
+// เพดานเดิม 30 ครั้ง/นาที ทำให้ลูกค้าท้ายแถวไม่ได้รับแจ้งเตือนแบบเงียบๆ (audit v56)
 const WINDOW_MS = 60_000;
-const MAX_CALLS = 30; // ต่อผู้ใช้ ต่อนาที
-const hits = new Map<string, { n: number; until: number }>();
+const MAX_CALLS = 300;     // ต่อผู้ใช้ ต่อนาที
+const MAX_DEVICES = 3000;  // เพดานจริงที่กันสแปม (1 คำขอพา endpoint ได้ถึง 500 อยู่แล้ว)
+const hits = new Map<string, { n: number; devices: number; until: number }>();
 
-function rateLimited(uid: string): boolean {
+function rateLimited(uid: string, deviceCount: number): boolean {
   const now = Date.now();
   const cur = hits.get(uid);
-  if (!cur || now > cur.until) { hits.set(uid, { n: 1, until: now + WINDOW_MS }); return false; }
+  if (!cur || now > cur.until) { hits.set(uid, { n: 1, devices: deviceCount, until: now + WINDOW_MS }); return false; }
   cur.n += 1;
-  return cur.n > MAX_CALLS;
+  cur.devices += deviceCount;
+  if (hits.size > 5000) for (const [k, v] of hits) if (now > v.until) hits.delete(k); // กันแมพโตไม่หยุด
+  return cur.n > MAX_CALLS || cur.devices > MAX_DEVICES;
 }
 
 async function callerUid(req: Request): Promise<string | null> {
@@ -48,13 +54,13 @@ export async function POST(req: Request) {
 
   const uid = await callerUid(req);
   if (!uid) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  if (rateLimited(uid)) return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
 
   let body: { subs?: { endpoint: string; p256dh: string; auth: string }[]; payload?: { title?: string; body?: string; url?: string } };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'bad json' }, { status: 400 }); }
   const subs = (body.subs ?? []).filter((s) => s?.endpoint && s?.p256dh && s?.auth).slice(0, 500);
   const payload = body.payload ?? {};
   if (subs.length === 0 || !payload.title) return NextResponse.json({ error: 'subs + payload.title required' }, { status: 400 });
+  if (rateLimited(uid, subs.length)) return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
 
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@ryumatoy.app', PUSH_PUBLIC_KEY, priv);
   const json = JSON.stringify({ title: payload.title, body: payload.body ?? '', url: payload.url ?? '/' });

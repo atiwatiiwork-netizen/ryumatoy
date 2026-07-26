@@ -44,8 +44,10 @@ alter table payment_plans enable row level security;
 drop policy if exists plans_own on payment_plans;
 drop policy if exists plans_admin on payment_plans;
 -- ลูกค้าจัดการนัดชำระของตัวเองได้ (สร้าง/แก้/ยกเลิก)
+-- ใช้ app_user_id() (SECURITY DEFINER จาก v20) เหมือนตารางส่วนตัวอื่นทุกตาราง —
+-- ห้ามใช้ subquery บน users ตรงๆ เพราะมันวิ่งผ่าน RLS ของ users อีกชั้น (เปราะเมื่อ policy users เปลี่ยน)
 create policy plans_own   on payment_plans for all
-  using (user_id = (select id from users where auth_id = auth.uid()))
-  with check (user_id = (select id from users where auth_id = auth.uid()));
+  using (user_id = app_user_id())
+  with check (user_id = app_user_id());
 -- แอดมินเห็น/จัดการได้ทั้งหมด
 create policy plans_admin on payment_plans for all using (is_app_admin()) with check (is_app_admin());

@@ -35,7 +35,9 @@ export type CouponApply = { grantId: string; discount: number };
  */
 
 let counter = 0;
-const id = (p: string) => `${p}-${Date.now()}-${counter++}`;
+// เติมสุ่มท้าย id: counter รีเซ็ตทุกครั้งที่รีโหลดหน้า ถ้าสองเครื่องกดพร้อมกันในมิลลิวินาทีเดียวกัน
+// id จะซ้ำได้จริง (ชน primary key ตอนเซฟ) — สุ่ม 4 หลักทำให้โอกาสชนแทบเป็นศูนย์
+const id = (p: string) => `${p}-${Date.now()}-${counter++}-${Math.random().toString(36).slice(2, 6)}`;
 
 /** Generate a fresh id for a new catalog row (used by the admin forms). */
 export const genId = (prefix: string) => id(prefix);
@@ -1611,6 +1613,15 @@ export const logActivity = (actorId: string, action: string, summary: string, ex
 /** ลูกค้าสร้างนัดชำระจากตะกร้า: บันทึกรายการ+ยอด+วันที่จะจ่าย (ไม่ตัดสต๊อก). */
 export const createPaymentPlan = (userId: string, dueDate: string, items: PaymentPlan['items'], note?: string) => (db: Database): Database => {
   if (!db.users.some((u) => u.id === userId) || items.length === 0 || !dueDate) return db;
+  // วันต้องสมเหตุผล: ไม่ย้อนหลัง และไม่ไกลเกิน 180 วัน (กันนัดปี 9999 ที่กินโควตา 5 ช่องถาวร)
+  const dnow = new Date();
+  const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dmax = new Date(dnow); dmax.setDate(dmax.getDate() + 180);
+  if (dueDate < ymd(dnow) || dueDate > ymd(dmax)) return db;
+  // สินค้าที่ถูกลบไปแล้วไม่ควรติดมาในนัด (ยอดจะค้างโดยไม่มีของให้จ่าย)
+  const live = items.filter((i) => db.products.some((p) => p.id === i.product_id));
+  if (live.length === 0) return db;
+  items = live;
   // กันสร้างรัว: 1 คนมีนัดที่ยังเปิดอยู่ได้ไม่เกิน 5 รายการ
   if (db.paymentPlans.filter((p) => p.user_id === userId && p.status === 'open').length >= 5) return db;
   const amount = items.reduce((s, i) => s + i.each * i.qty, 0);
@@ -1634,7 +1645,8 @@ export const closePaymentPlan = (planId: string, status: 'done' | 'cancelled') =
 /** ประทับเวลาว่าเตือนลูกค้าไปแล้ว (กันเตือนซ้ำวันเดียวกัน). */
 export const markPlanReminded = (planId: string) => (db: Database): Database => ({
   ...db,
-  paymentPlans: db.paymentPlans.map((p) => (p.id === planId ? { ...p, reminded_at: new Date().toISOString() } : p)),
+  // เฉพาะนัดที่ยังเปิด — ปิดไปแล้วไม่ควรมีเวลาเตือนใหม่โผล่ (ประวัติเพี้ยน)
+  paymentPlans: db.paymentPlans.map((p) => (p.id === planId && p.status === 'open' ? { ...p, reminded_at: new Date().toISOString() } : p)),
 });
 
 // ── เครื่องมือซ่อมข้อมูล (v56) ────────────────────────────────────────────

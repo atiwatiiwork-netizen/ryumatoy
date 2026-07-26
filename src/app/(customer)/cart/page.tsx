@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useStore } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCart } from '@/state/CartProvider';
 import { createPaymentPlan } from '@/data/mutations';
@@ -106,33 +106,51 @@ function PlanLater() {
   const db = useDatabase();
   const cart = useCart();
   const dispatch = useDispatch();
+  const store = useStore();
   const { flash } = useToast();
   const uid = useCurrentUserId();
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState('');
   const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
   const myRank = db.users.find((u) => u.id === uid)?.rank ?? 'bronze';
+  // นับเฉพาะรายการที่สินค้ายังอยู่จริง — ของที่ถูกลบไปแล้วจะทำให้ยอดนัดเพี้ยนและจ่ายไม่ได้
+  const liveLines = cart.lines.filter((l) => db.products.some((p) => p.id === l.productId));
   const eachOf = (l: (typeof cart.lines)[number]) => {
     const p = db.products.find((x) => x.id === l.productId);
     const { price, deposit } = livePrice(db, l);
-    return lineDepositForRank(db.settings, { deposit, price, isStock: p?.is_stock ?? false }, myRank);
+    return lineDepositForRank(db.settings, { deposit, price, isStock: p?.is_stock ?? true }, myRank);
   };
-  const total = cart.lines.reduce((s, l) => s + eachOf(l) * l.qty, 0);
-  const minDate = new Date().toISOString().slice(0, 10);
+  const total = liveLines.reduce((s, l) => s + eachOf(l) * l.qty, 0);
+  const d0 = new Date();
+  const minDate = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+  const dmax = new Date(d0); dmax.setDate(dmax.getDate() + 180);
+  const maxDate = `${dmax.getFullYear()}-${String(dmax.getMonth() + 1).padStart(2, '0')}-${String(dmax.getDate()).padStart(2, '0')}`;
 
-  const save = () => {
+  const save = async () => {
+    if (busy) return;
     if (!uid) return flash('เข้าสู่ระบบก่อนนะครับ');
     if (!date) return flash('เลือกวันที่จะจ่ายก่อน');
-    const items = cart.lines.map((l) => ({
+    if (date < minDate) return flash('เลือกวันที่ตั้งแต่วันนี้เป็นต้นไป');
+    if (date > maxDate) return flash('นัดล่วงหน้าได้ไม่เกิน 180 วัน');
+    if (liveLines.length === 0) return flash('ไม่มีสินค้าที่ตั้งนัดได้ (สินค้าถูกนำออกจากร้านแล้ว)');
+    const items = liveLines.map((l) => ({
       product_id: l.productId, variant_id: l.variantId, batch_id: l.batchId, qty: l.qty,
       label: productLabel(db, l.productId, l.variantId), each: eachOf(l),
     }));
+    setBusy(true);
+    // นับก่อน-หลัง แทนการหาด้วยวันที่: ถ้าลูกค้ามีนัดวันเดียวกันอยู่แล้ว การหาด้วยวันที่จะเจอใบเก่า
+    // แล้วรายงานว่า "สำเร็จ" ทั้งที่ถูกเพดาน 5 ใบปัดตก (audit v56)
+    let before = 0, after = 0;
+    dispatch((d) => { before = d.paymentPlans.length; return d; });
     dispatch(createPaymentPlan(uid, date, items, note));
-    let ok = false;
-    dispatch((d) => { ok = d.paymentPlans.some((p) => p.user_id === uid && p.due_date === date && p.status === 'open'); return d; });
-    if (!ok) return flash('ตั้งนัดไม่สำเร็จ (มีนัดค้างเกิน 5 รายการแล้ว)');
+    dispatch((d) => { after = d.paymentPlans.length; return d; });
+    if (after === before) { setBusy(false); return flash('ตั้งนัดไม่สำเร็จ — มีนัดค้างครบ 5 รายการแล้ว (ปิดของเก่าก่อน)'); }
+    // ต้องเซฟลงเซิร์ฟเวอร์ให้จบก่อน ค่อยแจ้งแอดมิน — ไม่งั้นเจ้าของได้ LINE ของนัดที่ไม่มีอยู่จริง
+    await store.flush();
+    setBusy(false);
     notifyAdminLine(`📅 นัดชำระใหม่: ${db.users.find((u) => u.id === uid)?.display_name ?? ''} · ${total.toLocaleString()} บาท · ครบกำหนด ${date}`);
-    flash('ตั้งนัดชำระแล้ว — ระบบจะเตือนเมื่อถึงวัน 📅');
+    flash('ตั้งนัดชำระแล้ว 📅 แอดมินจะทักเตือนเมื่อถึงวัน');
     setOpen(false); setDate(''); setNote('');
   };
 
@@ -147,12 +165,13 @@ function PlanLater() {
     <div className="mt-2.5 rounded-card border border-[#a855f7]/45 bg-[#a855f7]/[0.07] p-4">
       <div className="text-[13px] font-bold text-[#c084fc]">📅 นัดจ่ายทีหลัง</div>
       <div className="mt-0.5 text-[11.5px] text-ink-muted2">
-        บอกวันที่จะโอน ระบบจะเตือนเมื่อถึงกำหนด และแอดมินจะเห็นรายการนี้ไว้ล่วงหน้า ·
+        บอกวันที่จะโอน แอดมินจะเห็นรายการนี้ล่วงหน้าและทักเตือนเมื่อถึงกำหนด ·
         <b className="text-[#fbbf24]"> ยังไม่ได้กันของให้</b> ถ้าเป็นของจำนวนจำกัดควรทักแอดมินยืนยันอีกที
+        · จ่ายก่อนกำหนดได้เลย แล้วแอดมินจะปิดนัดให้
       </div>
       <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
         <label className="text-[12px] text-ink-muted">วันที่จะจ่าย
-          <input type="date" min={minDate} value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none" />
+          <input type="date" min={minDate} max={maxDate} value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none" />
         </label>
         <label className="text-[12px] text-ink-muted">โน้ตถึงแอดมิน (ไม่บังคับ)
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น รอเงินเดือนออก" className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-faint" />
@@ -161,7 +180,7 @@ function PlanLater() {
       <div className="mt-2.5 flex items-center gap-2">
         <span className="text-[12.5px] text-ink-muted">ยอดที่นัดไว้</span>
         <span className="text-[16px] font-extrabold text-primary-soft">{baht(total)}</span>
-        <button onClick={save} className="ml-auto rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white">ตั้งนัด</button>
+        <button onClick={save} disabled={busy} className="ml-auto rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white disabled:opacity-60">{busy ? 'กำลังบันทึก…' : 'ตั้งนัด'}</button>
         <button onClick={() => setOpen(false)} className="text-[12.5px] text-ink-faint">ยกเลิก</button>
       </div>
     </div>

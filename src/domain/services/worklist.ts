@@ -42,9 +42,13 @@ export function plansUpcoming(db: Database, at = todayStr()): PaymentPlan[] {
   return db.paymentPlans.filter((p) => p.status === 'open' && p.due_date > at).sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
 }
 
-/** ตั๋วที่ "ของถึงไทยแล้ว แต่ลูกค้ายังไม่จ่ายส่วนต่าง" — เงินที่ทวงได้เลย. */
+/** ตั๋วที่ "ของถึงไทยแล้ว แต่ลูกค้ายังไม่จ่ายส่วนต่าง" — เงินที่ทวงได้เลย.
+ *  ตัดตั๋วที่ลูกค้าส่งสลิปมาแล้วรอเราตรวจออก: นั่นเป็นงานของการ์ด "สลิปส่วนต่างรอตรวจ"
+ *  ถ้านับซ้ำ ยอดบนหน้าจะเบิ้ล และแอดมินจะไปทวงคนที่จ่ายมาแล้ว (audit v56) */
 export function collectableTickets(db: Database): PreorderTicket[] {
-  return db.tickets.filter((t) => ticketDue(t) > 0 && ['arrived', 'delivered'].includes(t.product_status) && t.status !== 'shipped');
+  const awaitingReview = new Set(db.remainingPayments.filter((r) => r.status === 'pending').map((r) => r.ticket_id));
+  return db.tickets.filter((t) => ticketDue(t) > 0 && ['arrived', 'delivered'].includes(t.product_status)
+    && t.status !== 'shipped' && !awaitingReview.has(t.id));
 }
 
 export function worklist(db: Database): WorkItem[] {
@@ -74,8 +78,11 @@ export function worklist(db: Database): WorkItem[] {
   const wh = warehouseQueue(db);
   add({ key: 'warehouse', urgency: 'today', icon: '🏭', title: 'ยืนยันเข้าโกดังจีน', detail: 'จับคู่ SF แล้วเริ่มนับ ETA', count: wh.reduce((s, g) => s + g.tickets.length, 0), href: '/admin/stock' });
 
+  // count = จำนวน "งาน" (กี่ SKU ที่ต้องกดตั้งราคา) ไม่ใช่จำนวนชิ้น — ไม่งั้นเหลือ 40 ชิ้นของ SKU เดียว
+  // จะโชว์ "40 งาน" แล้วเด้งขึ้นหัวตารางแซงงานด่วนจริง (audit v56)
   const convertible = db.products.filter((p) => canConvertToInStock(db, p));
-  add({ key: 'convert', urgency: 'soon', icon: '🛒', title: 'พรีจบแล้ว มีของเหลือ', detail: 'ตั้งราคาขายเป็นสินค้าพร้อมส่ง', count: convertible.reduce((s, p) => s + stockRemaining(db, p), 0), href: '/admin/instock' });
+  const pieces = convertible.reduce((s, p) => s + stockRemaining(db, p), 0);
+  add({ key: 'convert', urgency: 'soon', icon: '🛒', title: 'พรีจบแล้ว มีของเหลือ', detail: `ตั้งราคาขายเป็นสินค้าพร้อมส่ง (รวม ${pieces} ชิ้น)`, count: convertible.length, href: '/admin/instock' });
 
   const drafts = db.batches.filter((b) => b.status === 'open' && b.published === false);
   add({ key: 'draft', urgency: 'soon', icon: '📝', title: 'รอบพิเศษยังเป็นร่าง', detail: 'ยังไม่ขึ้นหน้าร้าน — กดเปิดขายเมื่อพร้อม', count: drafts.length, href: '/admin/stock' });

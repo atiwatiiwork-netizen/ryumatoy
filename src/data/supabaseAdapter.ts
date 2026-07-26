@@ -55,7 +55,10 @@ async function syncAppendOnly(sb: SupabaseClient, table: string, nextRows: Row[]
   const known = new Set(baseRows.map((r) => String(r[key])));
   const fresh = nextRows.filter((r) => !known.has(String(r[key])));
   if (fresh.length === 0) return;
-  const { error } = await sb.from(table).insert(fresh);
+  // ignoreDuplicates = ON CONFLICT DO NOTHING → ไม่ต้องมี UPDATE policy และส่งซ้ำได้ปลอดภัย.
+  // (สำคัญ: flush ที่ล้มเหลวจะ rewind แล้วส่งชุดเดิมซ้ำ — ถ้าใช้ insert ธรรมดาจะชน primary key
+  // แล้ววนพังถาวร; ถ้าใช้ upsert ธรรมดาจะไปเข้า UPDATE ที่ RLS ห้าม — audit v56)
+  const { error } = await sb.from(table).upsert(fresh, { ignoreDuplicates: true });
   if (error) throw error;
 }
 
@@ -101,8 +104,9 @@ export const supabaseAdapter: PersistenceAdapter = {
         sb.from('app_config').select('*'),
         sb.from('rank_tiers').select('*'),
         sb.from('payment_accounts').select('*'),
-        sb.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(300),
-        sb.from('payment_plans').select('*'),
+        // limit ต้อง ≥ cap ในหน่วยความจำ (400 ใน logActivity) ไม่งั้นแถวที่ถูกตัดจะดูเหมือน "ถูกลบ"
+        sb.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(400),
+        sb.from('payment_plans').select('*').order('due_date', { ascending: true }).limit(500),
         sb.from('shop_settings').select('*'),
       ]);
 
