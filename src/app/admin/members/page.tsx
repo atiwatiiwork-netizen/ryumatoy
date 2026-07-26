@@ -27,17 +27,28 @@ export default function AdminMembersPage() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null); // กันกดอนุมัติซ้ำระหว่างรอ RPC
   const [manageId, setManageId] = useState<string | null>(null);
 
   const pending = db.users.filter((u) => u.approved === false && !u.is_admin);
   const members = db.users.filter((u) => u.id !== 'u-admin' && u.approved !== false);
 
   const approve = async (u: User) => {
+    if (busyId) return;
     if (supabase) {
-      const { data } = await supabase.rpc('ryuma_approve', { p_user_id: u.id });
-      const code = (data as { member_code?: string })?.member_code;
-      dispatch(updateUser(u.id, { approved: true, ...(code ? { member_code: code } : {}) }));
-      flash(`อนุมัติ ${u.display_name} · ${code ?? ''}`);
+      setBusyId(u.id);
+      // DNA: ทุก RPC ต้องมีเพดานเวลา (บน resume ที่ socket ตาย request ไม่ settle → ปุ่มค้างตลอดกาล
+      // แล้วแอดมินกดซ้ำจนคิว RPC ซ้อน) + ห้ามทิ้ง error ของ RPC (เดิม destructure ทิ้ง แล้ว dispatch
+      // approved:true ทั้งที่ฝั่งเซิร์ฟเวอร์ไม่ผ่าน — แถวจริงไม่ถูกอนุมัติ) audit #11
+      const { data, error } = await Promise.race([
+        supabase.rpc('ryuma_approve', { p_user_id: u.id }),
+        new Promise<{ data: null; error: { message: string } }>((r) => setTimeout(() => r({ data: null, error: { message: 'หมดเวลา' } }), 12_000)),
+      ]);
+      setBusyId(null);
+      const res = (data ?? {}) as { ok?: boolean; error?: string; member_code?: string };
+      if (error || res.error) return flash(`อนุมัติไม่สำเร็จ: ${res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : (error?.message ?? res.error)}`);
+      dispatch(updateUser(u.id, { approved: true, ...(res.member_code ? { member_code: res.member_code } : {}) }));
+      flash(`อนุมัติ ${u.display_name} · ${res.member_code ?? ''}`);
     } else {
       dispatch(updateUser(u.id, { approved: true }));
       flash(`อนุมัติ ${u.display_name} แล้ว`);

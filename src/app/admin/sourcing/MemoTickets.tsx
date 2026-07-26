@@ -75,7 +75,9 @@ async function drawTicket(canvas: HTMLCanvasElement, memo: SourcingMemo, custome
   let name = memo.product_name;
   while (ctx.measureText(name).width > W - 90 && name.length > 4) name = name.slice(0, -2);
   if (name !== memo.product_name) name += '…';
-  ctx.fillText(name + (memo.qty > 1 ? `  ×${memo.qty}` : ''), W / 2, imgY + imgH + 52);
+  // ⚠ ห้ามพิมพ์ memo.qty ลงตั๋วรายคน — qty คือ "จำนวนทั้งดีล" (เช่น 5 ชิ้น แบ่งกัน 3 คน)
+  //   แต่ price/deposit เป็นยอด "ต่อคน" → ใบเสร็จจะบอกว่าเขาจ่าย 1,000 แล้วได้ 5 ชิ้น (audit memo #8)
+  ctx.fillText(name, W / 2, imgY + imgH + 52);
 
   // ชื่อลูกค้า (กล่องทอง)
   const custY = imgY + imgH + 80;

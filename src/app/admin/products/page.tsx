@@ -663,6 +663,10 @@ function Products() {
 
   const del = (p: Product) => {
     if (db.tickets.some((t) => t.product_id === p.id) || db.orders.some((o) => o.items.some((i) => i.product_id === p.id))) return flash('ลบไม่ได้ — มีใบพรี/ออเดอร์อ้างอิง');
+    // ปุ่ม ✕ อยู่ติดปุ่ม "แก้" ในลิสต์แน่นๆ — บนมือถือกดพลาดง่ายมาก และลบแล้วกู้ไม่ได้
+    // (ลบแบบต่างๆ ที่เหลือในระบบถามยืนยันหมดแล้ว ตรงนี้เป็นที่เดียวที่ลืม) audit #13
+    const nv = variantsOf(db, p.id).length;
+    if (!confirm(`ลบ "${p.series_name}" ออกถาวร?${nv ? `\nจะลบแบบย่อย ${nv} รายการไปด้วย` : ''}\nกู้คืนไม่ได้`)) return;
     dispatch(removeProduct(p.id)); flash('ลบสินค้าแล้ว'); if (draft.id === p.id) reset();
   };
 

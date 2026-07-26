@@ -116,9 +116,11 @@ function WarehouseCard({ product, tickets, sf }: { product: Product; tickets: Pr
   // manual override (used if SF not found in the table)
   const match = matchWarehouseRow(rows, sfInput);
   const [date, setDate] = useState('');
-  const [transport, setTransport] = useState<'truck' | 'ship'>('truck');
-  const effDate = match?.date || date;
-  const effTransport = match?.transport ?? transport;
+  const [transport, setTransport] = useState<'truck' | 'ship' | ''>('');
+  // ค่าที่แอดมินพิมพ์เองต้องชนะค่าที่ OCR อ่านมาเสมอ (ตัวอ่านหยิบวันแรกในแถว ซึ่งอาจเป็นวันออกไม่ใช่วันเข้า)
+  // ว่าง = ใช้ค่าที่อ่านได้ (audit #14)
+  const effDate = date || match?.date || '';
+  const effTransport = transport || match?.transport || 'truck';
 
   const saveSf = () => {
     if (!sfInput.trim()) return flash('ใส่เลข SF ก่อน');
@@ -195,8 +197,11 @@ function WarehouseCard({ product, tickets, sf }: { product: Product; tickets: Pr
 
       {/* 4) วัน/ขนส่ง (เติมเองถ้าไม่พบ) + ยืนยัน */}
       <div className="mt-2 flex flex-wrap items-end gap-2">
-        <label className="text-[11px] text-ink-faint">วันเข้าโกดัง <input type="date" className={cx(inputCls, 'mt-0.5 w-[150px] py-2')} value={effDate} onChange={(e) => setDate(e.target.value)} disabled={!!match?.date} /></label>
-        <label className="text-[11px] text-ink-faint">ขนส่ง <select className={cx(inputCls, 'mt-0.5 w-auto py-2')} value={effTransport} onChange={(e) => setTransport(e.target.value as 'truck' | 'ship')} disabled={!!match?.transport}><option value="truck">🚚 รถ</option><option value="ship">🚢 เรือ</option></select></label>
+        {/* ⚠ ต้องแก้ทับค่าที่ OCR อ่านได้เสมอ — ตัวอ่านหยิบ "วันแรกที่เจอในแถว" ซึ่งบางตารางเป็นวันออกโกดัง
+            ไม่ใช่วันเข้า ถ้าล็อกช่องไว้ แอดมินจะยืนยันวันผิดทั้งรอบ แล้ว ETA ที่ลูกค้าเห็นก็เพี้ยนตาม (audit #14) */}
+        <label className="text-[11px] text-ink-faint">วันเข้าโกดัง <input type="date" className={cx(inputCls, 'mt-0.5 w-[150px] py-2')} value={effDate} onChange={(e) => setDate(e.target.value)} /></label>
+        <label className="text-[11px] text-ink-faint">ขนส่ง <select className={cx(inputCls, 'mt-0.5 w-auto py-2')} value={effTransport} onChange={(e) => setTransport(e.target.value as 'truck' | 'ship')}><option value="truck">🚚 รถ</option><option value="ship">🚢 เรือ</option></select></label>
+        {match?.date && <span className="text-[10.5px] text-ink-faint">อ่านจากตาราง — แก้ทับได้ถ้าคอลัมน์ไม่ตรง</span>}
         <button onClick={confirmAll} disabled={!effDate} className="rounded-lg bg-cta px-4 py-2.5 text-[12.5px] font-bold text-white disabled:opacity-50">✅ ยืนยันทั้งหมด {tickets.length} ตั๋ว</button>
       </div>
 

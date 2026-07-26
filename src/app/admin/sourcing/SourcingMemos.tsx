@@ -148,7 +148,9 @@ export function SourcingMemos() {
           {active.map((m) => {
             const phase = memoPhase(db, m);
             const eta = memoEtaLabel(db, m);
-            const owe = (m.price ?? 0) - (m.deposit ?? 0);
+            // price/deposit เป็นยอด "ต่อคน" → ค้างจริงต้องคูณจำนวนคนที่จอง (audit memo #9)
+            const heads = memoCustomersOf(m).length;
+            const owe = ((m.price ?? 0) - (m.deposit ?? 0)) * heads;
             return (
               <div key={m.id} className={cx('rounded-xl border p-3', phase === 'due' ? 'animate-pulseRed border-accent bg-[#b91c1c]/[0.07]' : phase === 'overdue' ? 'border-[#f87171] bg-[#b91c1c]/[0.12]' : 'border-subtle bg-surface-3/40')}>
                 <div className="flex gap-3">
@@ -163,9 +165,9 @@ export function SourcingMemos() {
                         : <span key={i} className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[11px] font-semibold text-ink-muted2">👤 {c.name}</span>)}
                     </div>
                     <div className="mt-0.5 text-[11.5px] text-ink-faint">
-                      {m.price != null && <>ราคา <b className="text-ink">{baht(m.price)}</b></>}
-                      {m.deposit != null && <> · มัดจำ <b className="text-[#4ade80]">{baht(m.deposit)}</b></>}
-                      {m.price != null && owe > 0 && <> · ค้าง <b className="text-primary-soft">{baht(owe)}</b></>}
+                      {m.price != null && <>ราคา <b className="text-ink">{baht(m.price)}</b>{heads > 1 && <span className="text-ink-faint">/คน</span>}</>}
+                      {m.deposit != null && <> · มัดจำ <b className="text-[#4ade80]">{baht(m.deposit)}</b>{heads > 1 && <span className="text-ink-faint">/คน</span>}</>}
+                      {m.price != null && owe > 0 && <> · ค้างรวม <b className="text-primary-soft">{baht(owe)}</b>{heads > 1 && <span className="text-ink-faint"> ({heads} คน)</span>}</>}
                     </div>
                   </div>
                 </div>

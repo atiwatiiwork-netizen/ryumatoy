@@ -12,6 +12,8 @@ import { BackBar, cx } from '@/components/ui';
 import { AuthScreen } from '@/components/AuthScreen';
 import { submitSourcingRequest, resendSourcingRequest, paySourcing } from '@/data/mutations';
 import { sendPush, subsForAdmins, pushEnabled } from '@/lib/push';
+import { notifyAdminLine } from '@/lib/notify';
+import { store } from '@/data/store';
 import { sourcingStatusOf, sourcingDaysLeft, sourcingEtaLabel, sourcingEtaConfig, transportLabel, openSourcingCount, MAX_OPEN_REQUESTS } from '@/domain/services/sourcing';
 import { useSmartBack } from '@/lib/nav';
 import type { SourcingRequest } from '@/domain/entities';
@@ -182,9 +184,21 @@ function WatchCard({ r, uid }: { r: SourcingRequest; uid: string }) {
     catch { flash('อัปโหลดไม่สำเร็จ'); }
     finally { setBusy(false); }
   };
-  const confirmPay = () => {
-    if (!slip) return flash('แนบสลิปก่อน');
+  const confirmPay = async () => {
+    if (!slip || busy) return flash('แนบสลิปก่อน');
+    setBusy(true);
+    // paySourcing เป็น no-op เงียบถ้าใบเสนอราคาหมดอายุหรือสถานะเปลี่ยนไปแล้ว —
+    // เดิมบอก "ส่งสลิปแล้ว 🎉" ทุกกรณี → ลูกค้าโอนเงินแล้วเชื่อว่าส่งแล้ว แต่ระบบไม่มีอะไรเลย (audit #3)
     dispatch(paySourcing(r.id, slip));
+    let paid = false;
+    dispatch((d) => { paid = d.sourcingRequests.find((x) => x.id === r.id)?.status === 'paid'; return d; });
+    if (!paid) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — ใบเสนอราคาอาจหมดอายุแล้ว ทักแอดมินได้เลยครับ'); }
+    const failed = await store.flush();
+    setBusy(false);
+    if (failed) return flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดยืนยันใหม่ (สลิปยังอยู่)');
+    // ⚠ push หาแอดมินจากเครื่องลูกค้าส่งไม่ถึงจริง (RLS ทำให้ subsForAdmins ว่างเสมอ — audit #4)
+    //   จึงต้องมี LINE เป็นทางหลัก ไม่ใช่ทางสำรอง
+    notifyAdminLine(`💸 มัดจำหาของเข้าแล้ว: ${r.character_name} · ${baht((r.deposit ?? 0) * r.qty)} — รอกดเริ่มงาน`);
     if (pushEnabled(db, 'sourcing_paid'))
       sendPush(subsForAdmins(db), { title: '💸 มัดจำหาของเข้าแล้ว', body: `${r.character_name} · ${baht((r.deposit ?? 0) * r.qty)} — รอกดเริ่มงาน`, url: '/admin/sourcing' }, dispatch).catch(() => {});
     flash('ส่งสลิปแล้ว — รอร้านยืนยันเริ่มงาน 🎉');
@@ -232,6 +246,7 @@ function HistoryCard({ r, open }: { r: SourcingRequest; open: number }) {
   const resend = () => {
     if (open >= MAX_OPEN_REQUESTS) return flash(`เรื่องค้างเต็ม ${MAX_OPEN_REQUESTS} — รอเรื่องเก่าจบก่อน`);
     dispatch(resendSourcingRequest(r.id));
+    notifyAdminLine(`🔁 ขอเช็คของอีกครั้ง: ${r.character_name} · ${r.maker_name}`);
     if (pushEnabled(db, 'sourcing_new'))
       sendPush(subsForAdmins(db), { title: '🔁 ขอเช็คของอีกครั้ง', body: `${r.character_name} · ${r.maker_name}`, url: '/admin/sourcing' }, dispatch).catch(() => {});
     flash('ส่งเรื่องเช็คใหม่แล้ว ✓');
@@ -292,6 +307,7 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
       character_name: cname.trim(), qty: Number(qty) || 1, images, note: note.trim() || undefined,
       source_product_id: srcId || undefined,
     }));
+    notifyAdminLine(`🔎 มีเรื่องหาของใหม่: ${cname.trim()} · ${mName} · ${fName}`);
     if (pushEnabled(db, 'sourcing_new'))
       sendPush(subsForAdmins(db), { title: '🔎 มีเรื่องหาของใหม่!', body: `${cname.trim()} · ${mName} · ${fName}`, url: '/admin/sourcing' }, dispatch).catch(() => {});
     flash('ส่งเรื่องแล้ว — ร้านจะรีบเช็คให้ 🔎');

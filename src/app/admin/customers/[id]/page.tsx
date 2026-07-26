@@ -13,6 +13,7 @@ import { ticketBadgeKey } from '@/domain/services/delivery';
 import { usableGrantsFor, couponExpired } from '@/domain/services/coupons';
 import { setSuspended } from '@/data/mutations';
 import { CouponTierPill } from '@/components/CouponTicket';
+import { useSmartBack } from '@/lib/nav';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://www.facebook.com/search/top?q=${encodeURIComponent(s.trim())}`);
@@ -22,6 +23,7 @@ const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https
 export default function CustomerPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const goBack = useSmartBack('/admin/members');
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
@@ -42,7 +44,8 @@ export default function CustomerPage() {
   return (
     <div>
       <div className="mb-4 flex items-center gap-3">
-        <button onClick={() => router.back()} className="grid h-[38px] w-[38px] place-items-center rounded-[11px] border border-subtle bg-surface-2 text-ink"><Icon name="arrowLeft" size={19} /></button>
+        {/* DNA: ปุ่มย้อนกลับต้องใช้ useSmartBack — router.back() ตายสนิทเมื่อเปิดจากลิงก์ตรง/แท็บใหม่ */}
+        <button onClick={goBack} className="grid h-[38px] w-[38px] place-items-center rounded-[11px] border border-subtle bg-surface-2 text-ink"><Icon name="arrowLeft" size={19} /></button>
         <div className="text-xl font-extrabold">โปรไฟล์ลูกค้า 360°</div>
       </div>
 

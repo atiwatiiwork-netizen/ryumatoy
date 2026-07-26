@@ -10,6 +10,7 @@ import { MissionQuestCard } from '@/components/MissionQuest';
 import { missionConfig, missionInWindow, missionStateFor, type MissionConfig } from '@/domain/services/missions';
 import { setMissionConfig, approveMission, rejectMission, createCoupon } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
+import { store } from '@/data/store';
 import { uploadImage } from '@/lib/upload';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -69,11 +70,30 @@ export function MissionAdmin() {
     flash(active ? '🟢 เปิด Event ภารกิจแล้ว — ลูกค้าเห็นในโปรไฟล์' : 'บันทึกแล้ว (ยังปิดอยู่ — ตรวจพรีวิวก่อนเปิด)');
   };
 
-  const approve = (subId: string, userId: string) => {
+  const approve = async (subId: string, userId: string) => {
+    // ⚠ ต้องอิง "คูปองที่ระบบมอบจริง" ไม่ใช่ค่าในร่างที่แอดมินยังไม่กดบันทึก (audit #7):
+    //   approveMission ใช้ config ที่บันทึกแล้ว ถ้าอ่านจาก draft จะบอกลูกค้าผิดมูลค่า
+    //   และถ้าเขามีคูปองใบนี้อยู่แล้ว grantCoupon จะข้าม = ไม่มีคูปองใหม่เกิดเลย ห้ามบอกว่าได้แล้ว
+    let before = 0;
+    dispatch((d) => { before = d.couponGrants.filter((g) => g.user_id === userId).length; return d; });
     dispatch(approveMission(subId));
-    if (pushEnabled(db, 'event_reward'))
-      sendPush(subsForUsers(db, [userId]), { title: '🏆 ภารกิจสำเร็จ!', body: `รับคูปอง ${baht(reward?.value ?? 100)} แล้ว — อยู่ใน "คูปองของฉัน"`, url: '/missions' }, dispatch).catch(() => {});
-    flash(`อนุมัติ + ส่งคูปองให้ ${nameOf(userId)} ✓`);
+    let after = before; let approved = false;
+    dispatch((d) => {
+      after = d.couponGrants.filter((g) => g.user_id === userId).length;
+      approved = d.missionSubmissions.find((s) => s.id === subId)?.status === 'approved';
+      return d;
+    });
+    if (!approved) return flash('อนุมัติไม่สำเร็จ — ใบนี้อาจถูกอนุมัติไปแล้ว ลองรีเฟรช');
+    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองอนุมัติใหม่');
+    const givenId = missionConfig(db)?.reward_coupon_id;
+    const given = db.coupons.find((c) => c.id === givenId);
+    if (after > before) {
+      if (pushEnabled(db, 'event_reward'))
+        sendPush(subsForUsers(db, [userId]), { title: '🏆 ภารกิจสำเร็จ!', body: `รับคูปอง ${baht(given?.value ?? 100)} แล้ว — อยู่ใน "คูปองของฉัน"`, url: '/missions' }, dispatch).catch(() => {});
+      flash(`อนุมัติ + ส่งคูปอง ${baht(given?.value ?? 100)} ให้ ${nameOf(userId)} ✓`);
+    } else {
+      flash(`อนุมัติแล้ว ✓ — แต่ ${nameOf(userId)} มีคูปองใบนี้อยู่แล้ว จึงไม่ได้เพิ่มใบใหม่`);
+    }
   };
 
   return (
