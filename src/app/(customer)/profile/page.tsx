@@ -6,7 +6,7 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth, useCurrentUserId, canLogin } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
-import { Button, ProgressBar, RankBadge } from '@/components/ui';
+import { Button, ProgressBar, RankBadge, cx } from '@/components/ui';
 import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { missionLive, missionSubmissionFor } from '@/domain/services/missions';
@@ -34,14 +34,19 @@ export default function ProfilePage() {
   // Only ใบพรีของฉัน + คูปอง are live this phase; การแจ้งเตือน is a live toggle rendered
   // specially below; the rest are coming soon.
   const mySourcing = db.sourcingRequests.filter((r) => r.user_id === CURRENT_USER_ID && !['expired'].includes(r.status)).length;
-  const myPlans = db.paymentPlans.filter((p) => p.user_id === CURRENT_USER_ID && p.status === 'open').length;
+  const myOpenPlans = db.paymentPlans.filter((p) => p.user_id === CURRENT_USER_ID && p.status === 'open');
+  const myPlans = myOpenPlans.length;
+  const planToday = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+  const myPlansDue = myOpenPlans.filter((p) => p.due_date <= planToday).length;
   const menu: { icon: IconName; label: string; href?: string; right?: React.ReactNode; push?: boolean }[] = [
     { icon: 'ticket', label: 'ใบพรีของฉัน', href: '/wallet', right: <Pill>{myTickets}</Pill> },
     { icon: 'tag', label: 'คูปองของฉัน', href: '/coupons', right: myCoupons ? <Pill>{myCoupons}</Pill> : undefined },
     { icon: 'heart', label: 'Event ภารกิจ', href: '/missions', right: missionLive(db) && missionSubmissionFor(db, CURRENT_USER_ID)?.status !== 'approved' ? <span className="animate-pulse rounded-full bg-[#d4af37]/[0.2] px-2 py-0.5 text-[10.5px] font-bold text-[#f1d27a]">🎁 มีกิจกรรม!</span> : undefined },
+    // นัดชำระที่แอดมินออกให้ — กดจ่ายได้จากหน้านี้ (v57 เจ้าของ 2026-07-26)
+    { icon: 'payments', label: 'นัดชำระ', href: '/plans', right: myPlans ? <span className={cx('rounded-full px-2 py-0.5 text-[10.5px] font-bold', myPlansDue ? 'animate-blink bg-[#b91c1c]/25 text-[#f87171]' : 'bg-[#a855f7]/20 text-[#c084fc]')}>{myPlansDue ? `ถึงกำหนด ${myPlansDue}` : `${myPlans} รายการ`}</span> : undefined },
     { icon: 'search', label: 'หาของ', href: '/sourcing', right: mySourcing ? <Pill>{mySourcing}</Pill> : undefined },
-    // ประวัติการซื้อ + สลิป + นัดชำระ (เจ้าของ 2026-07-25)
-    { icon: 'copy', label: 'ประวัติการซื้อ', href: '/history', right: myPlans ? <span className="rounded-full bg-[#a855f7]/20 px-2 py-0.5 text-[10.5px] font-bold text-[#c084fc]">นัดจ่าย {myPlans}</span> : undefined },
+    // ประวัติการซื้อ + สลิป (เจ้าของ 2026-07-25)
+    { icon: 'copy', label: 'ประวัติการซื้อ', href: '/history' },
     { icon: 'bell', label: 'การแจ้งเตือน', push: true },
     { icon: 'swap', label: 'รายการขาย P2P' },
     { icon: 'settings', label: 'ธีม' },

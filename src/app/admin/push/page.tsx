@@ -29,7 +29,8 @@ const TRIGGERS: { key: string; emoji: string; name: string; target: string; note
   { key: 'sourcing_started', emoji: '🔧', name: 'หาของ: เริ่มงานแล้ว', target: 'เจ้าของเรื่อง' },
   { key: 'restock', emoji: '🔥', name: 'ของมาเพิ่ม / เปิดรอบใหม่', target: 'ทุกเครื่อง (ตามตัวกรองค่าย/เรื่องของลูกค้า)' },
   { key: 'warehouse', emoji: '🚢', name: 'ถึงโกดังจีน → กำลังส่งมาไทย', target: 'เจ้าของตั๋วที่ยืนยันโกดัง' },
-  { key: 'plan_due', emoji: '📅', name: 'เตือนนัดชำระถึงกำหนด', target: 'เจ้าของนัด', note: 'แอดมินกดเองที่หน้า "งานค้างวันนี้"' },
+  { key: 'plan_new', emoji: '🧾', name: 'แอดมินออกนัดชำระให้', target: 'เจ้าของนัด', note: 'ยิงทันทีตอนกด "ส่งนัดชำระ"' },
+  { key: 'plan_due', emoji: '📅', name: 'เตือนนัดชำระถึงกำหนด', target: 'เจ้าของนัด', note: 'ยิงอัตโนมัติครั้งเดียวตอนแอดมินเปิดแอปในวันครบกำหนด + กดเตือนซ้ำเองได้' },
 ];
 
 const deviceKind = (ep: string) =>

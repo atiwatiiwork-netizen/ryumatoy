@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -12,7 +12,7 @@ import { reserveStock, payReservation, confirmReservation } from '@/lib/reserve'
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { CouponTicket } from '@/components/CouponTicket';
-import { submitOrder } from '@/data/mutations';
+import { submitOrder, markPlanPaid } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel } from '@/domain/services/catalog';
@@ -28,6 +28,8 @@ import { copyText, digitsOnly } from '@/lib/clipboard';
 export default function CheckoutPage() {
   const router = useRouter();
   const goBack = useSmartBack('/cart');
+  // มาจากหน้า "นัดชำระ" (v57): จ่ายจบแล้วต้องปิดนัดใบนั้นให้ ไม่งั้นแอดมินยังเห็นค้างในคิวทวง
+  const planId = useSearchParams().get('plan') ?? '';
   const db = useDatabase();
   const dispatch = useDispatch();
   const cart = useCart();
@@ -139,7 +141,8 @@ export default function CheckoutPage() {
     dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos));
     // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
     let submitted = false;
-    dispatch((d) => { submitted = d.orders.length > db.orders.length; return d; });
+    let newOrderId = '';
+    dispatch((d) => { submitted = d.orders.length > db.orders.length; newOrderId = d.orders[0]?.id ?? ''; return d; });
     // ⚠ ลำดับสำคัญ (เคส Madara/Pl Tree 2026-07-25): payReservation ต้องเรียก "หลัง" รู้ว่าออเดอร์เกิดจริง
     // เท่านั้น — เดิมเรียกก่อน แล้วออเดอร์โดนปัดตก → hold ค้าง 'paid' ถาวร ขวางสต๊อกโดยไม่มีออเดอร์คู่.
     // ถ้าไม่ผ่าน: hold ยังเป็น active มีนาฬิกา 15 นาที → คืนของเองอัตโนมัติ
@@ -150,6 +153,9 @@ export default function CheckoutPage() {
     // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
     // stay 'paid' and the stock would be held forever.
     if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
+    // ปิดนัดชำระ "ตอนส่งสลิป" (ไม่ใช่ตอนแอดมินอนุมัติ) — นัดจบหน้าที่แล้ว เตือนต่อไม่มีประโยชน์
+    // ต้องสั่งก่อน flush() เพื่อให้ไปกับรอบเซฟเดียวกับออเดอร์
+    if (planId) dispatch(markPlanPaid(planId, newOrderId));
     cart.clear();
     // make sure the order + (Diamond) tickets are actually saved before we navigate away —
     // otherwise a fast route change / mobile backgrounding can drop the debounced write.

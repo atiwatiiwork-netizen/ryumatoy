@@ -2,16 +2,20 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useStore } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { worklist, dataIssues, plansDue, plansUpcoming, type WorkItem, type DataIssue } from '@/domain/services/worklist';
-import { closePaymentPlan, markPlanReminded, releaseStuckHold, reclaimCouponGrantsFor, repairTickets, logActivity } from '@/data/mutations';
+import { closePaymentPlan, markPlanReminded, releaseStuckHold, reclaimCouponGrantsFor, repairTickets, logActivity, createPaymentPlan } from '@/data/mutations';
 import { releaseReservation } from '@/lib/reserve';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
+import { lineDepositForRank } from '@/domain/services/ranks';
+import { productLabel, lineImage } from '@/domain/services/catalog';
+import { availableFor, batchAvailable } from '@/domain/services/reservations';
+import { hasPreorderTicket, specialGateEnabled } from '@/domain/services/tickets';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
@@ -83,7 +87,9 @@ function WorkCard({ w, onGo }: { w: WorkItem; onGo: () => void }) {
   );
 }
 
-/* ── นัดชำระ ── */
+/* ── นัดชำระ ──
+   v57 (เจ้าของ 2026-07-26): แอดมินเป็นคนออกนัดให้ลูกค้า (ลูกค้าตั้งเองไม่ได้แล้ว)
+   เลือกลูกค้า → เลือกสินค้าหลายชิ้น → เลือกวันนัด → ส่ง → ลูกค้าเห็นในเมนู "นัดชำระ" แล้วกดจ่ายได้เลย */
 function PlansTab() {
   const db = useDatabase();
   const dispatch = useDispatch();
@@ -142,12 +148,178 @@ function PlansTab() {
 
   return (
     <div className="flex flex-col gap-4">
+      <NewPlanForm />
       <Section title={`ถึงกำหนด / เลยกำหนด (${due.length})`} sub="ลูกค้านัดว่าจะจ่ายวันนี้หรือก่อนหน้า">
         {due.length === 0 ? <Empty text="ไม่มีนัดที่ถึงกำหนด" /> : <div className="flex flex-col gap-2.5">{due.map((p) => <Row key={p.id} p={p} />)}</div>}
       </Section>
       <Section title={`นัดล่วงหน้า (${upcoming.length})`} sub="ยังไม่ถึงกำหนด — ไว้ดูแผนเงินเข้า">
         {upcoming.length === 0 ? <Empty text="ยังไม่มีนัดล่วงหน้า" /> : <div className="flex flex-col gap-2.5">{upcoming.map((p) => <Row key={p.id} p={p} />)}</div>}
       </Section>
+    </div>
+  );
+}
+
+/* ── ฟอร์มออกนัดชำระ (แอดมินเท่านั้น) ── */
+type PickKey = string; // `${productId}|${variantId ?? ''}|${batchId ?? ''}`
+interface Opt { key: PickKey; productId: string; variantId?: string; batchId?: string; label: string; kind: 'pre' | 'stock' | 'batch'; price: number; deposit: number; avail: number | null; img?: string }
+
+/** ทุกอย่างที่ "ขายได้จริงตอนนี้" — ต้องตรงกับเงื่อนไข `sellable` ใน submitOrder
+ *  ไม่งั้นแอดมินออกนัดของที่ลูกค้าจ่ายไม่ผ่าน (รอบปิด/สินค้าปิดรับจอง/ร่างที่ยังไม่เปิดขาย) */
+function sellableOptions(db: ReturnType<typeof useDatabase>): Opt[] {
+  const out: Opt[] = [];
+  for (const p of db.products) {
+    const vs = db.variants.filter((v) => v.product_id === p.id);
+    if (p.is_stock) {
+      const avail = availableFor(db, p);
+      if (avail <= 0) continue;
+      if (vs.length) vs.forEach((v) => out.push({ key: `${p.id}|${v.id}|`, productId: p.id, variantId: v.id, label: productLabel(db, p.id, v.id), kind: 'stock', price: v.price_total, deposit: v.deposit_amount, avail, img: lineImage(db, p.id, v.id) }));
+      else out.push({ key: `${p.id}||`, productId: p.id, label: productLabel(db, p.id), kind: 'stock', price: p.price_total, deposit: p.deposit_amount, avail, img: lineImage(db, p.id) });
+    } else if (p.status === 'open') {
+      if (vs.length) vs.forEach((v) => out.push({ key: `${p.id}|${v.id}|`, productId: p.id, variantId: v.id, label: productLabel(db, p.id, v.id), kind: 'pre', price: v.price_total, deposit: v.deposit_amount, avail: null, img: lineImage(db, p.id, v.id) }));
+      else out.push({ key: `${p.id}||`, productId: p.id, label: productLabel(db, p.id), kind: 'pre', price: p.price_total, deposit: p.deposit_amount, avail: null, img: lineImage(db, p.id) });
+    }
+  }
+  for (const b of db.batches) {
+    if (b.status !== 'open' || b.published === false) continue;
+    const p = db.products.find((x) => x.id === b.product_id);
+    if (!p) continue;
+    const avail = batchAvailable(db, b);
+    if (avail <= 0) continue;
+    out.push({ key: `${p.id}||${b.id}`, productId: p.id, batchId: b.id, label: `${productLabel(db, p.id)} · รอบพิเศษ`, kind: 'batch', price: b.price_total, deposit: b.deposit_amount, avail, img: lineImage(db, p.id) });
+  }
+  return out;
+}
+
+function NewPlanForm() {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const store = useStore();
+  const { flash } = useToast();
+  const me = useCurrentUserId();
+  const [open, setOpen] = useState(false);
+  const [uid, setUid] = useState('');
+  const [q, setQ] = useState('');
+  const [picked, setPicked] = useState<Record<PickKey, number>>({});
+  const [date, setDate] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const d0 = new Date();
+  const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const minDate = ymd(d0);
+  const dmax = new Date(d0); dmax.setDate(dmax.getDate() + 180);
+  const maxDate = ymd(dmax);
+
+  const customers = db.users.filter((u) => !u.is_admin && u.approved !== false)
+    .sort((a, b) => a.display_name.localeCompare(b.display_name, 'th'));
+  const customer = db.users.find((u) => u.id === uid);
+  const rank = customer?.rank ?? 'bronze';
+  const opts = sellableOptions(db);
+  const shown = q.trim() ? opts.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase())) : opts.slice(0, 12);
+
+  // มัดจำต่อชิ้นคิดตาม "ขั้นของลูกค้าคนนั้น" ไม่ใช่ของแอดมิน (DNA: ทุกมัดจำต้องผ่าน ranks.ts)
+  const eachOf = (o: Opt) => lineDepositForRank(db.settings, { deposit: o.deposit, price: o.price, isStock: o.kind !== 'pre' }, rank);
+  const lines = Object.entries(picked).filter(([, n]) => n > 0)
+    .map(([k, n]) => ({ opt: opts.find((o) => o.key === k), qty: n }))
+    .filter((x): x is { opt: Opt; qty: number } => !!x.opt);
+  const total = lines.reduce((s, x) => s + eachOf(x.opt) * x.qty, 0);
+  const overStock = lines.filter((x) => x.opt.avail !== null && x.qty > x.opt.avail);
+  // รอบพิเศษต้องมีใบพรีถึงจะจ่ายผ่าน (gate) — เตือนตั้งแต่ตอนออกนัด ไม่ใช่ให้ไปตายตอนลูกค้าจ่าย
+  const batchBlocked = !!uid && lines.some((x) => x.opt.kind === 'batch') && !hasPreorderTicket(db, uid) && specialGateEnabled(db);
+
+  const reset = () => { setUid(''); setPicked({}); setDate(''); setNote(''); setQ(''); };
+
+  const send = async () => {
+    if (busy) return;
+    if (!uid) return flash('เลือกลูกค้าก่อน');
+    if (lines.length === 0) return flash('เลือกสินค้าอย่างน้อย 1 ชิ้น');
+    if (!date) return flash('เลือกวันนัดก่อน');
+    if (date < minDate || date > maxDate) return flash('วันนัดต้องอยู่ระหว่างวันนี้ถึง 180 วันข้างหน้า');
+    if (overStock.length) return flash(`ของไม่พอ: ${overStock.map((x) => x.opt.label).join(', ')}`);
+    if (batchBlocked && !confirm('ลูกค้าคนนี้ยังไม่มีใบพรี — รอบพิเศษจะจ่ายไม่ผ่าน (ติด gate) ยืนยันส่งนัดนี้?')) return;
+    const items = lines.map((x) => ({
+      product_id: x.opt.productId, variant_id: x.opt.variantId, batch_id: x.opt.batchId,
+      qty: x.qty, label: x.opt.label, each: eachOf(x.opt),
+    }));
+    setBusy(true);
+    let before = 0, after = 0;
+    dispatch((d) => { before = d.paymentPlans.length; return d; });
+    dispatch(createPaymentPlan(me, uid, date, items, note));
+    dispatch((d) => { after = d.paymentPlans.length; return d; });
+    if (after === before) { setBusy(false); return flash('ออกนัดไม่สำเร็จ — ลูกค้ามีนัดค้างครบ 5 รายการแล้ว (ปิดของเก่าก่อน)'); }
+    await store.flush();   // ต้องเซฟจริงก่อน ค่อยแจ้งลูกค้า
+    setBusy(false);
+    if (pushEnabled(db, 'plan_new'))
+      sendPush(subsForUsers(db, [uid]), { title: '📅 แอดมินส่งนัดชำระให้คุณ', body: `${lines.length} รายการ · ${baht(total)} — กำหนดจ่าย ${date}`, url: '/plans' }, dispatch).catch(() => {});
+    dispatch(logActivity(me, 'create_plan', `ออกนัดชำระให้ ${customer?.display_name ?? ''} (${lines.length} รายการ)`, { targetLabel: date, amount: total }));
+    flash(`ส่งนัดชำระให้ ${customer?.display_name ?? ''} แล้ว ✓`);
+    reset(); setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="rounded-2xl border border-[#a855f7]/45 bg-[#a855f7]/[0.08] py-3.5 text-[13.5px] font-bold text-[#c084fc]">
+        ➕ ออกนัดชำระให้ลูกค้า
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-2xl border border-[#a855f7]/45 bg-[#a855f7]/[0.07] p-4">
+      <div className="flex items-center gap-2">
+        <span className="text-[14px] font-extrabold text-[#c084fc]">➕ ออกนัดชำระให้ลูกค้า</span>
+        <button onClick={() => { reset(); setOpen(false); }} className="ml-auto text-[12.5px] text-ink-faint">ปิด</button>
+      </div>
+      <div className="mt-0.5 text-[11.5px] text-ink-muted2">ลูกค้าจะเห็นในเมนู “นัดชำระ” แล้วกดจ่ายผ่านหน้าสลิปปกติ · <b className="text-[#fbbf24]">ไม่ได้กันของไว้ให้</b> ถ้าของหมดก่อนถึงวันนัด ระบบจะบล็อกการโอน</div>
+
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+        <label className="text-[12px] text-ink-muted">ลูกค้า
+          <select value={uid} onChange={(e) => setUid(e.target.value)} className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none">
+            <option value="">— เลือกลูกค้า —</option>
+            {customers.map((u) => <option key={u.id} value={u.id}>{u.display_name} · {u.rank ?? 'bronze'}</option>)}
+          </select>
+        </label>
+        <label className="text-[12px] text-ink-muted">วันนัดชำระ
+          <input type="date" min={minDate} max={maxDate} value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none" />
+        </label>
+      </div>
+
+      <div className="mt-3">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ค้นหาสินค้า (พิมพ์ชื่อ)" className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] outline-none placeholder:text-ink-faint" />
+        <div className="mt-2 max-h-[280px] overflow-y-auto rounded-xl border border-subtle bg-surface-2">
+          {shown.length === 0 ? <div className="py-6 text-center text-[12px] text-ink-faint">ไม่พบสินค้าที่ขายได้ตอนนี้</div> : shown.map((o) => {
+            const n = picked[o.key] ?? 0;
+            const KIND = { pre: ['พรี', 'text-[#4ade80]'], stock: ['พร้อมส่ง', 'text-[#60a5fa]'], batch: ['รอบพิเศษ', 'text-[#fbbf24]'] }[o.kind];
+            return (
+              <div key={o.key} className={cx('flex items-center gap-2.5 border-b border-hair px-2.5 py-2 last:border-0', n > 0 && 'bg-[#a855f7]/[0.08]')}>
+                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">{o.img && <img src={o.img} alt="" className="h-full w-full object-cover" />}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12.5px] font-semibold">{o.label}</div>
+                  <div className="text-[11px] text-ink-faint">
+                    <span className={KIND[1]}>{KIND[0]}</span> · มัดจำ {baht(eachOf(o))}{o.avail !== null ? ` · เหลือ ${o.avail}` : ''}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button onClick={() => setPicked((s) => ({ ...s, [o.key]: Math.max(0, (s[o.key] ?? 0) - 1) }))} className="grid h-7 w-7 place-items-center rounded-lg border border-subtle text-ink">−</button>
+                  <span className="min-w-[16px] text-center text-[13px] font-bold">{n}</span>
+                  <button onClick={() => setPicked((s) => ({ ...s, [o.key]: (s[o.key] ?? 0) + 1 }))} className="grid h-7 w-7 place-items-center rounded-lg border border-subtle text-primary-bright">+</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {!q.trim() && opts.length > shown.length && <div className="mt-1 text-[11px] text-ink-faint">แสดง {shown.length} จาก {opts.length} รายการ — พิมพ์ค้นหาเพื่อดูที่เหลือ</div>}
+      </div>
+
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="โน้ต (ไม่บังคับ) เช่น ตกลงกันทางแชท" className="mt-2.5 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] outline-none placeholder:text-ink-faint" />
+
+      {batchBlocked && <div className="mt-2.5 rounded-lg border border-[#b91c1c]/45 bg-[#b91c1c]/[0.1] px-3 py-2 text-[11.5px] text-[#f87171]">🔒 ลูกค้าคนนี้ยังไม่มีใบพรี — รายการรอบพิเศษจะจ่ายไม่ผ่าน (ปิด gate ได้ที่หน้าสต๊อกใบพรี)</div>}
+      {overStock.length > 0 && <div className="mt-2.5 rounded-lg border border-[#b91c1c]/45 bg-[#b91c1c]/[0.1] px-3 py-2 text-[11.5px] text-[#f87171]">ของไม่พอ: {overStock.map((x) => `${x.opt.label} (เหลือ ${x.opt.avail})`).join(' · ')}</div>}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-[12.5px] text-ink-muted">ยอดที่ต้องจ่าย{customer ? ` (ขั้น ${rank})` : ''}</span>
+        <span className="text-[17px] font-extrabold text-primary-soft">{baht(total)}</span>
+        <button onClick={send} disabled={busy} className="ml-auto rounded-lg bg-cta px-4 py-2 text-[13px] font-bold text-white disabled:opacity-60">{busy ? 'กำลังส่ง…' : '📤 ส่งนัดชำระ'}</button>
+      </div>
     </div>
   );
 }

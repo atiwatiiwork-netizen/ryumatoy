@@ -15,7 +15,9 @@ export const SEED_DATABASE: Database = {
     { id: ME, display_name: 'Atiwat T.', facebook_id: 'fb-001', rank: 'bronze', total_spent: 32400, preferred_lang: 'th', rank_seen: 'bronze' },
     { id: 'u-2', display_name: 'Ploy K.', facebook_id: 'fb-002', rank: 'silver', total_spent: 8200, preferred_lang: 'th' },
     { id: 'u-3', display_name: 'Nut R.', facebook_id: 'fb-003', rank: 'diamond', total_spent: 64000, preferred_lang: 'th' },
-    { id: 'u-admin', display_name: 'Ryuma Admin', rank: 'diamond', total_spent: 0, preferred_lang: 'th' },
+    // is_admin ต้องมีจริงในเมล็ดพันธุ์ด้วย: mutation ที่เช็คสิทธิ์แอดมิน (createPaymentPlan v57)
+    // จะปัดตกเงียบๆ ถ้าแถวแอดมินไม่มีธงนี้ — โหมด preview/seed ก็ต้องทดสอบได้เหมือนของจริง
+    { id: 'u-admin', display_name: 'Ryuma Admin', rank: 'diamond', total_spent: 0, preferred_lang: 'th', is_admin: true },
   ],
 
   categories: [

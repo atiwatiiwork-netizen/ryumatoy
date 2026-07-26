@@ -24,6 +24,7 @@ import { pendingHeld } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
+import { isAdminUser } from '../domain/services/admins';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -1609,9 +1610,13 @@ export const logActivity = (actorId: string, action: string, summary: string, ex
   ].slice(0, 400), // เก็บในหน่วยความจำแค่ 400 แถวล่าสุด (DB เก็บครบ)
 });
 
-// ── นัดชำระ (v56) — "หยิบของไว้ก่อน จ่ายสิ้นเดือน" ────────────────────────
-/** ลูกค้าสร้างนัดชำระจากตะกร้า: บันทึกรายการ+ยอด+วันที่จะจ่าย (ไม่ตัดสต๊อก). */
-export const createPaymentPlan = (userId: string, dueDate: string, items: PaymentPlan['items'], note?: string) => (db: Database): Database => {
+// ── นัดชำระ (v56 · v57) — "หยิบของไว้ก่อน จ่ายสิ้นเดือน" ──────────────────
+/** **แอดมินออกนัดให้ลูกค้า** (v57 — ลูกค้าสร้างเองไม่ได้แล้ว): เลือกลูกค้า + สินค้า + วันนัด
+ *  บันทึกรายการ+ยอดเป็น snapshot (ไม่ตัดสต๊อก — ของอาจหมดก่อนถึงวันนัด checkout จะบล็อกเอง). */
+export const createPaymentPlan = (actorId: string, userId: string, dueDate: string, items: PaymentPlan['items'], note?: string) => (db: Database): Database => {
+  // แอดมินเท่านั้น — guard ตัวจริงอยู่ตรงนี้ (UI กันชั้นนอกแล้ว, กันยิงตรง/ตะกร้าค้างข้ามเครื่อง)
+  // ใช้ isAdminUser ที่ตรรกะตรงกับ AuthProvider (env ADMIN_IDS หรือ users.is_admin หรือโหมด preview)
+  if (!isAdminUser(db, actorId)) return db;
   if (!db.users.some((u) => u.id === userId) || items.length === 0 || !dueDate) return db;
   // วันต้องสมเหตุผล: ไม่ย้อนหลัง และไม่ไกลเกิน 180 วัน (กันนัดปี 9999 ที่กินโควตา 5 ช่องถาวร)
   const dnow = new Date();
@@ -1628,11 +1633,21 @@ export const createPaymentPlan = (userId: string, dueDate: string, items: Paymen
   return {
     ...db,
     paymentPlans: [
-      { id: id('pp'), user_id: userId, due_date: dueDate, note: note?.trim() || undefined, amount, items, status: 'open', created_at: new Date().toISOString() },
+      { id: id('pp'), user_id: userId, due_date: dueDate, note: note?.trim() || undefined, amount, items, status: 'open', created_at: new Date().toISOString(), created_by: actorId },
       ...db.paymentPlans,
     ],
   };
 };
+
+/** ลูกค้าจ่ายนัดนี้แล้ว (ส่งสลิปเข้าคิวอนุมัติ) → ปิดนัดพร้อมผูกออเดอร์ไว้ตามรอย.
+ *  ปิดตอน "ส่งสลิป" ไม่ใช่ตอน "อนุมัติ" — นัดจบหน้าที่แล้ว (เตือนต่อไม่มีประโยชน์)
+ *  ถ้าสลิปไม่ผ่าน แอดมินออกนัดใหม่ได้ ง่ายกว่าปล่อยให้นัดค้างซ้ำกับออเดอร์ที่รอตรวจ. */
+export const markPlanPaid = (planId: string, orderId: string) => (db: Database): Database => ({
+  ...db,
+  paymentPlans: db.paymentPlans.map((p) => (p.id === planId && p.status === 'open'
+    ? { ...p, status: 'done' as const, order_id: orderId, closed_at: new Date().toISOString() }
+    : p)),
+});
 
 /** ปิดนัดชำระ (จ่ายแล้ว / ยกเลิก) — ลูกค้าหรือแอดมินก็กดได้. */
 export const closePaymentPlan = (planId: string, status: 'done' | 'cancelled') => (db: Database): Database => ({

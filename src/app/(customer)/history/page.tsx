@@ -2,9 +2,8 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { BackBar, cx } from '@/components/ui';
@@ -12,7 +11,6 @@ import { useSmartBack } from '@/lib/nav';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketPaid, ticketDue } from '@/domain/services/money';
 import { orderOfTicket } from '@/domain/services/journey';
-import { closePaymentPlan } from '@/data/mutations';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 
@@ -22,8 +20,6 @@ const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH
  */
 export default function HistoryPage() {
   const db = useDatabase();
-  const dispatch = useDispatch();
-  const { flash } = useToast();
   const uid = useCurrentUserId();
   const goBack = useSmartBack('/profile');
   const [big, setBig] = useState<string | null>(null);
@@ -33,7 +29,6 @@ export default function HistoryPage() {
   const rps = db.remainingPayments.filter((r) => r.user_id === uid);
   const myPlans = db.paymentPlans.filter((p) => p.user_id === uid);
   const plans = myPlans.filter((p) => p.status === 'open').sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
-  const closedPlans = myPlans.filter((p) => p.status !== 'open').sort((a, b) => (a.due_date < b.due_date ? 1 : -1)).slice(0, 5);
 
   // ยอดสะสมที่จ่ายไปแล้วจริง (มัดจำ + ส่วนต่างที่อนุมัติแล้ว) + ยอดค้างทั้งหมด
   const paidTotal = myTickets.reduce((s, t) => s + ticketPaid(t), 0);
@@ -65,38 +60,16 @@ export default function HistoryPage() {
         <Kpi label="ยอดค้างจ่าย" value={baht(dueTotal)} tone={dueTotal > 0 ? 'text-[#fbbf24]' : 'text-ink'} />
       </div>
 
+      {/* นัดชำระมีหน้าของตัวเองแล้ว (/plans v57) — ที่นี่แค่ชี้ทางไป ไม่ทำ UI ซ้ำสองที่ */}
       {plans.length > 0 && (
-        <div className="mb-4 rounded-card border border-[#a855f7]/40 bg-[#a855f7]/[0.07] p-4">
-          <div className="mb-2 text-[13px] font-bold text-[#c084fc]">📅 นัดชำระที่ตั้งไว้</div>
-          <div className="flex flex-col gap-2">
-            {plans.map((p) => (
-              <div key={p.id} className="rounded-xl border border-subtle bg-surface-2 p-3">
-                <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
-                  <span className="font-bold">ครบกำหนด {p.due_date}</span>
-                  <span className="ml-auto font-extrabold text-primary-soft">{baht(p.amount)}</span>
-                </div>
-                <div className="mt-0.5 text-[11.5px] text-ink-muted2">{p.items.map((i) => `${i.label} ×${i.qty}`).join(' · ')}</div>
-                <button onClick={() => { if (confirm('ยกเลิกนัดชำระนี้?')) { dispatch(closePaymentPlan(p.id, 'cancelled')); flash('ยกเลิกนัดชำระแล้ว'); } }}
-                  className="mt-1.5 text-[11.5px] text-ink-faint underline">ยกเลิกนัดนี้</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {closedPlans.length > 0 && (
-        <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-3.5">
-          <div className="mb-1.5 text-[12px] font-bold text-ink-muted">นัดชำระที่ปิดแล้ว</div>
-          <div className="flex flex-col gap-1">
-            {closedPlans.map((p) => (
-              <div key={p.id} className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink-faint">
-                <span>{p.due_date}</span>
-                <span className={p.status === 'done' ? 'text-[#4ade80]' : ''}>{p.status === 'done' ? 'จ่ายแล้ว ✓' : 'ยกเลิก'}</span>
-                <span className="ml-auto font-semibold text-ink-muted2">{baht(p.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Link href="/plans" className="mb-4 flex items-center gap-2.5 rounded-card border border-[#a855f7]/40 bg-[#a855f7]/[0.07] p-3.5">
+          <span className="text-[20px]">📅</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-bold text-[#c084fc]">นัดชำระที่ต้องจ่าย {plans.length} รายการ</span>
+            <span className="block text-[11.5px] text-ink-muted2">ใกล้สุด {plans[0].due_date} · รวม {baht(plans.reduce((s, p) => s + p.amount, 0))}</span>
+          </span>
+          <span className="shrink-0 text-[12px] font-bold text-primary-soft">ไปจ่าย →</span>
+        </Link>
       )}
 
       {orders.length === 0 ? (

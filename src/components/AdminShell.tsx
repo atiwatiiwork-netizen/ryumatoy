@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
@@ -9,6 +9,8 @@ import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
+import { markPlanReminded } from '@/data/mutations';
+import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
@@ -24,6 +26,25 @@ export function AdminShell({ children }: { children: ReactNode }) {
     store.onPersistError = (m) => flash('บันทึกไม่สำเร็จ — ' + m);
     return () => { store.onPersistError = undefined; };
   }, [flash]);
+
+  // ── เตือนนัดชำระอัตโนมัติเมื่อถึงกำหนด (v57) ────────────────────────────
+  // Vercel ไม่ได้รันอะไรตอนเราหลับ (ไม่มี scheduler) → ยิงตอน "แอดมินเปิดแอป" แทน
+  // ยิงครั้งเดียวต่อนัด (กันด้วย reminded_at ที่ประทับ + เซฟก่อนยิง) แล้วปุ่มเตือนมือยังใช้ได้เหมือนเดิม
+  const firedRef = useRef(false);
+  useEffect(() => {
+    if (firedRef.current || !isAdmin) return;
+    const targets = plansDue(db).filter((p) => !p.reminded_at);
+    if (targets.length === 0) return;
+    firedRef.current = true;
+    (async () => {
+      for (const p of targets) store.update(markPlanReminded(p.id));
+      await store.flush();               // ประทับ+เซฟก่อน แล้วค่อยยิง — กันเตือนซ้ำเมื่อเปิดสองเครื่อง
+      if (!pushEnabled(db, 'plan_due')) return;
+      for (const p of targets)
+        sendPush(subsForUsers(db, [p.user_id]), { title: '📅 ถึงกำหนดชำระแล้วครับ', body: `ยอดที่นัดไว้ ${p.amount.toLocaleString()} บาท — กดจ่ายได้เลยที่เมนู "นัดชำระ"`, url: '/plans' }, (m) => store.update(m)).catch(() => {});
+      flash(`เตือนนัดชำระอัตโนมัติ ${targets.length} รายการแล้ว 🔔`);
+    })();
+  }, [db, isAdmin, flash]);
 
   // Wait for the session restore before deciding lock-vs-admin — otherwise every resume/reload flashes
   // the Facebook login screen (isLoggedIn is momentarily false), and a stalled getSession would strand
