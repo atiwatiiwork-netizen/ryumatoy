@@ -67,10 +67,15 @@ export function usesWarehouseGate(db: Database, productId: string): boolean {
   return db.batches.some((b) => b.product_id === productId) || db.sourcingRequests.some((r) => r.product_id === productId);
 }
 
-/** A ticket still in 'production' with no warehouse date, on a warehouse-gated product = waiting for the
- *  warehouse gate (the Filter). */
+/** A ticket still in 'production' with no warehouse date = waiting for the warehouse gate.
+ *
+ *  ⚠ ต้องมี "รหัส SF" ของล็อตนั้นก่อนเสมอ (เจ้าของ 2026-07-26): รหัส SF คือสัญญาณว่าแอดมิน
+ *  กำลังตามล็อตนี้ผ่านตารางโกดังจีนจริงๆ. เดิมไม่เช็ค → ตั๋วที่เพิ่งมอบให้ลูกค้าในรอบที่
+ *  "ยังผลิตอยู่" ถูกดึงเข้าคิว "ยืนยันเข้าโกดังจีน" ทันทีทั้งที่ยังไม่มีอะไรให้ยืนยัน
+ *  และแอดมินไม่มีทางกด ผลิต → เดินทาง ได้เลย (คิวโกดังเป็นทางเดียว) — ตอนนี้กดที่การ์ดรอบได้ */
 export function awaitingWarehouse(db: Database, t: PreorderTicket): boolean {
-  return t.product_status === 'production' && !t.warehouse_at && usesWarehouseGate(db, t.product_id);
+  return t.product_status === 'production' && !t.warehouse_at
+    && usesWarehouseGate(db, t.product_id) && !!ticketSfCode(db, t);
 }
 
 /** Does a product still have ticket(s) waiting for the warehouse gate? Used to STOP the old Status-tab

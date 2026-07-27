@@ -565,6 +565,32 @@ export const confirmWarehouse = (ticketId: string, opts: { date: string; transpo
   return { ...db, tickets, products };
 };
 
+/** ผลิต → กำลังเดินทางมาไทย ของ "ทั้งรอบ" (เจ้าของ 2026-07-26).
+ *  ทางลัดที่แอดมินกดเองได้จากการ์ดรอบ โดยไม่ต้องผ่านคิวยืนยันโกดังจีน — ใช้เมื่อรู้เองว่าของออกแล้ว
+ *  (คิวโกดังยังมีอยู่สำหรับล็อตที่ตามด้วยรหัส SF + ตารางโกดัง ซึ่งจะได้วันเข้าโกดังที่แม่นกว่า)
+ *  วันที่ที่ใส่ = จุดเริ่มนับ ETA เหมือน warehouse_at เพื่อให้ลูกค้าเห็น "คาดถึงไทย" ได้เหมือนกัน. */
+export const departSpecialRound = (batchId: string, opts: { transport: SourcingTransport; date?: string }) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b) return db;
+  const date = opts.date || new Date().toISOString().slice(0, 10);
+  const cohort = db.tickets.filter((t) => t.batch_id === batchId && t.product_status === 'production');
+  const p = db.products.find((x) => x.id === b.product_id);
+  const productProd = !!p && !p.is_stock && p.status === 'production';
+  if (cohort.length === 0 && !productProd) return db; // ไม่มีอะไรให้ขยับ — อย่าทำให้ store dirty
+  const ids = new Set(cohort.map((t) => t.id));
+  const tickets = db.tickets.map((t) => (ids.has(t.id)
+    ? { ...t, product_status: 'shipping' as const, warehouse_at: t.warehouse_at ?? date, warehouse_transport: opts.transport }
+    : t));
+  // ยก SKU เป็น "เดินทาง" ต่อเมื่อไม่มีตั๋วใบไหนของสินค้านี้ค้างที่ผลิตแล้ว (กันรอบอื่นที่ยังผลิตอยู่)
+  const stillProd = tickets.some((t) => t.product_id === b.product_id && t.product_status === 'production');
+  const products = !stillProd
+    ? db.products.map((x) => (x.id === b.product_id && x.status === 'production'
+      ? { ...x, status: 'shipping' as const, shipped_at: x.shipped_at ?? date, eta_note: 'กำลังเดินทางมาไทย' }
+      : x))
+    : db.products;
+  return { ...db, tickets, products };
+};
+
 /** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
 export const editBatch = (batchId: string, patch: { price?: number; qty?: number; label?: string }) => (db: Database): Database => {
   if (db.tickets.some((t) => t.batch_id === batchId)) return db; // locked once a ticket references it

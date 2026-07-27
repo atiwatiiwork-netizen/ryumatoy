@@ -10,7 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
+import { openSpecialRound, departSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
 import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
@@ -736,6 +736,29 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     dispatch(setProductSf(p.id, sf.trim()));
     flash('บันทึกรหัสชิปปิ้งแล้ว — รอเทียบตารางโกดัง ✓');
   };
+  // ── ผลิต → เดินทาง (แอดมินกดเอง ไม่ต้องผ่านคิวโกดัง) ──
+  const [depTr, setDepTr] = useState<'truck' | 'ship'>('truck');
+  // กดได้เมื่อรอบนี้ยังมีตั๋วค้างที่ "ผลิต" หรือ (รอบไม่มีลูกค้าแต่ตัว SKU ยังผลิตอยู่ และเป็นรอบล่าสุด)
+  const canDepart = nProd > 0 || (tickets.length === 0 && !!p && !p.is_stock && p.status === 'production' && roundNo === totalRounds);
+  const doDepart = () => {
+    const label = depTr === 'ship' ? 'เรือ 🚢' : 'รถ 🚚';
+    if (!confirm(`ของรอบนี้ออกจากจีนแล้ว? (${label})\n${nProd > 0 ? `ตั๋ว ${nProd} ใบจะเป็น "กำลังเดินทางมาไทย" + เริ่มนับ ETA` : 'ยังไม่มีลูกค้า — ตัวสินค้าจะเป็น "กำลังเดินทาง"'}\nลูกค้าจะเริ่มจ่ายส่วนต่างได้`)) return;
+    const before = nProd;
+    dispatch(departSpecialRound(b.id, { transport: depTr }));
+    let moved = 0;
+    dispatch((d) => { moved = before - d.tickets.filter((t) => t.batch_id === b.id && t.product_status === 'production').length; return d; });
+    if (before > 0 && moved <= 0) return flash('เปลี่ยนสถานะไม่สำเร็จ — ลองรีเฟรชแล้วกดใหม่');
+    if (p && pushEnabled(db, 'lot_shipping')) {
+      const seen = new Set<string>();
+      for (const t of tickets.filter((x) => x.product_status === 'production')) {
+        if (seen.has(t.owner_id)) continue;
+        seen.add(t.owner_id);
+        sendPush(subsForUsers(db, [t.owner_id]), { title: '🚚 ของกำลังเดินทางมาไทย', body: `${productLabel(db, p.id)} ออกจากจีนแล้ว — เริ่มชำระส่วนต่างได้เลย`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
+      }
+    }
+    flash(before > 0 ? `กำลังเดินทางมาไทย ${label} · ${moved} ตั๋ว ✓ แจ้งลูกค้าแล้ว` : `ตั้งเป็นกำลังเดินทางมาไทย ${label} แล้ว ✓`);
+  };
+
   // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้.
   // รอบไม่มีลูกค้า/จบยอดแล้ว: ของเหลือกลายเป็น In-Stock มือ 1 อัตโนมัติ (เจ้าของ 2026-07-22)
   const doArrive = () => {
@@ -868,6 +891,20 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         )}
         {!readOnly && b.status === 'open' && remaining > 0 && (
           <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
+        )}
+        {/* ผลิต → กำลังเดินทางมาไทย: แอดมินกดเองได้จากตรงนี้ (เจ้าของ 2026-07-26)
+            เดิมมีทางเดียวคือคิว "ยืนยันเข้าโกดังจีน" ซึ่งใช้ได้เฉพาะล็อตที่มีรหัส SF + ตารางโกดัง
+            ทำให้ล็อตที่ยังผลิตอยู่ค้างเติ่งไปต่อไม่ได้ */}
+        {!fullPay && canDepart && (
+          <span className="inline-flex items-center gap-1 rounded-lg border border-[#2563eb]/45 bg-[#2563eb]/[0.1] px-1.5 py-1">
+            <select value={depTr} onChange={(e) => setDepTr(e.target.value as 'truck' | 'ship')} className="rounded bg-transparent text-[12px] font-bold text-[#60a5fa] outline-none">
+              <option value="truck">🚚 รถ</option>
+              <option value="ship">🚢 เรือ</option>
+            </select>
+            <button onClick={doDepart} className="rounded bg-[#2563eb] px-2 py-1 text-[12px] font-bold text-white">
+              ออกเดินทางแล้ว{nProd > 0 ? ` (${nProd})` : ''}
+            </button>
+          </span>
         )}
         {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่
             (รวมรอบไม่มีลูกค้า — ถึงแล้วของเหลือกลายเป็น In-Stock มือ 1) */}
