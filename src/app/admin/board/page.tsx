@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -35,6 +36,7 @@ export default function AdminBoardPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/production', label: '🔁 ปิดรอบสั่งผลิต' }, { href: '/admin/board', label: '📋 กระดานปิดพรี' }]} />
       <div className="mb-1 text-2xl font-extrabold">กระดานปิดพรี</div>
       <div className="mb-5 text-[13px] text-ink-faint">1 กระดาน = 1 ค่าย · อัปโหลดโปสเตอร์ + เลือกสินค้าของค่ายนั้น · กด “ปิดกระดาน” เมื่อค่ายไม่รับแล้ว → ไปใส่จำนวนไฟนอลที่ “ปิดรอบสั่งผลิต”</div>
 

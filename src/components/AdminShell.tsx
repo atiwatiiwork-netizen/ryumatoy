@@ -74,40 +74,43 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // badge "งานค้างวันนี้" = งานด่วน (ทำก่อน) + นัดชำระที่ถึงกำหนด + ปัญหาข้อมูลที่ต้องแก้
   const todayJobs = worklist(db).filter((w) => w.urgency === 'now').reduce((s, w) => s + w.count, 0) + plansDue(db).length + dataIssues(db).length;
 
-  type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number };
-  const it = (href: string, icon: IconName, label: string, badge?: number): NavItem => ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge });
+  const newMembers = db.users.filter((u) => u.approved === false && !u.is_admin).length;
+  const rankReq = db.rankRequests.filter((r) => r.status === 'pending').length;
+  const sourcingJobs = db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length;
+
+  type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string };
+  const it = (href: string, icon: IconName, label: string, badge?: number, sub?: string): NavItem =>
+    ({ href, icon, label, active: href === '/admin' ? path === '/admin' : path.startsWith(href), badge, sub });
+  // ── โครงเมนู (จัดใหม่ 2026-07-26) ────────────────────────────────────────
+  // เดิม 19 ปุ่ม 5 กลุ่ม แบ่งตาม "ชื่อฟีเจอร์" (สินค้า/สมาชิก/ออเดอร์/แบนเนอร์) ทำให้
+  //   · งานเดียวกันกระจายหลายเมนู (ปิดรอบ ↔ กระดานปิดพรี, สมาชิก ↔ Ranks, คูปอง ↔ Event)
+  //   · กลุ่มชื่อไม่ตรงของข้างใน ("แบนเนอร์" มี Push Control, "ออเดอร์" มีตั้งค่าการเงิน)
+  //   · เปิดมาไม่รู้ควรเริ่มตรงไหน เพราะ Dashboard/งานค้างวันนี้/วิเคราะห์ ตอบคำถามใกล้กัน
+  // ใหม่: แบ่งตาม "จังหวะการทำงานจริง" → ทำวันนี้ → ของ&รอบ → ลูกค้า → ร้าน
+  //   หน้าที่เป็นมุมย่อยของงานเดียวกันถูกยุบไปเป็น "แท็บ" บนหัวหน้าหลัก (AdminTabs) — URL เดิมใช้ได้หมด
   const groups: { title?: string; items: NavItem[] }[] = [
-    { items: [
-      it('/admin', 'dashboard', 'Dashboard'),
-      // ศูนย์รวมงานค้างข้ามทุกโมดูล + ซ่อมข้อมูล + นัดชำระ + ประวัติ (เจ้าของ 2026-07-25)
-      it('/admin/today', 'bolt', 'งานค้างวันนี้', todayJobs),
-      it('/admin/analytics', 'sliders', 'วิเคราะห์รายเดือน'),
-      // ศูนย์จัดส่ง (เจ้าของ 2026-07-23): คำขอรับของ → ใบปะหน้า → ใส่เลขพัสดุ → ปิดงาน ครบที่เดียว
-      it('/admin/shipping', 'truck', 'จัดส่ง', shippingJobs),
+    { title: 'ทำวันนี้', items: [
+      // หน้าแรกที่ควรเปิด: รวมงานค้างข้ามทุกโมดูล + นัดชำระ + สุขภาพข้อมูล + ประวัติ
+      it('/admin/today', 'bolt', 'งานค้างวันนี้', todayJobs, 'เปิดมาดูอันนี้ก่อน'),
+      it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP, 'ตรวจเงินเข้า'),
+      it('/admin/shipping', 'truck', 'จัดส่ง', shippingJobs, 'แพ็ค → เลขพัสดุ'),
+      it('/admin/sourcing', 'search', 'หาของ', sourcingJobs, 'ตามของให้ลูกค้า'),
     ] },
-    { title: 'สินค้า', items: [
-      it('/admin/products', 'box', 'Pre-Order'),
-      it('/admin/instock', 'store', 'In-Stock'),
-      it('/admin/production', 'swap', 'ปิดรอบสั่งผลิต'),
-      it('/admin/board', 'tag', 'กระดานปิดพรี'),
-      it('/admin/stock', 'bolt', 'สต๊อกใบพรี'),
+    { title: 'ของ & รอบขาย', items: [
+      it('/admin/products', 'box', 'Pre-Order', undefined, 'แคตตาล็อกพรี'),
+      it('/admin/instock', 'store', 'In-Stock', undefined, 'ของพร้อมส่ง'),
+      it('/admin/stock', 'bolt', 'สต๊อกใบพรี', undefined, 'รอบพิเศษ + วงจรของ'),
+      it('/admin/production', 'swap', 'ปิดรอบ / กระดาน', undefined, 'ปิดยอด + โพสต์กระดาน'),
     ] },
-    { title: 'สมาชิก', items: [
-      it('/admin/members', 'user', 'สมาชิก', db.users.filter((u) => u.approved === false && !u.is_admin).length),
-      it('/admin/ranks', 'verified', 'Ranks', db.rankRequests.filter((r) => r.status === 'pending').length),
-      it('/admin/coupons', 'tag', 'คูปอง'),
+    { title: 'ลูกค้า', items: [
+      it('/admin/members', 'user', 'สมาชิก & Ranks', newMembers + rankReq, 'อนุมัติ + เลื่อนขั้น'),
+      it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด', undefined, 'ค้นตั๋ว/ตรวจย้อนหลัง'),
+      it('/admin/coupons', 'tag', 'คูปอง & กิจกรรม', undefined, 'ส่วนลด + Event'),
     ] },
-    { title: 'ออเดอร์', items: [
-      it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP),
-      it('/admin/sourcing', 'search', 'หาของ', db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length),
-      it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด'),
-      it('/admin/payment', 'payments', 'ตั้งค่าการเงิน'),
-    ] },
-    { title: 'แบนเนอร์', items: [
-      it('/admin/home', 'home', 'หน้าแรก / โปรโมชั่น'),
-      it('/admin/events', 'heart', 'กิจกรรม / Event'),
-      it('/admin/push', 'bell', 'Push Control'),
-      it('/admin/poster', 'camera', 'สร้างรูปโปรโมท'),
+    { title: 'ร้าน', items: [
+      it('/admin', 'dashboard', 'ภาพรวม & ตัวเลข', undefined, 'เงิน + สถานะรวม'),
+      it('/admin/home', 'home', 'หน้าร้าน & โปสเตอร์', undefined, 'แบนเนอร์ + รูปโปรโมท'),
+      it('/admin/payment', 'payments', 'ตั้งค่า', undefined, 'บัญชีรับเงิน + แจ้งเตือน'),
     ] },
   ];
 
@@ -129,11 +132,15 @@ export function AdminShell({ children }: { children: ReactNode }) {
                 <Link
                   key={n.label}
                   href={n.href}
-                  className={cx('flex items-center gap-2.5 rounded-[11px] px-3 py-[10px] text-sm', n.active ? 'bg-cta font-bold text-white' : 'font-medium text-ink-muted2')}
+                  className={cx('flex items-center gap-2.5 rounded-[11px] px-3 py-[9px] text-sm', n.active ? 'bg-cta font-bold text-white' : 'font-medium text-ink-muted2')}
                 >
-                  <Icon name={n.icon} size={19} />
-                  <span className="flex-1">{n.label}</span>
-                  {n.badge ? <span className="rounded-full bg-primary-bright px-[7px] text-[11px] font-bold text-white">{n.badge}</span> : null}
+                  <Icon name={n.icon} size={19} className="shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate leading-tight">{n.label}</span>
+                    {/* คำอธิบายสั้นใต้ชื่อเมนู — บอกว่าเข้าไปทำอะไร ไม่ต้องเดาจากชื่อ */}
+                    {n.sub && <span className={cx('block truncate text-[10px] leading-tight', n.active ? 'text-white/70' : 'text-ink-faint')}>{n.sub}</span>}
+                  </span>
+                  {n.badge ? <span className="shrink-0 rounded-full bg-primary-bright px-[7px] text-[11px] font-bold text-white">{n.badge}</span> : null}
                 </Link>
               ))}
             </div>

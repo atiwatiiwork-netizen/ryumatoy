@@ -1,6 +1,7 @@
 'use client';
 
 import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useToast } from '@/state/ToastProvider';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
@@ -51,6 +52,7 @@ export default function PushControlPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/payment', label: '💳 บัญชีรับเงิน' }, { href: '/admin/push', label: '🔔 แจ้งเตือน (Push)' }]} />
       <div className="mb-1 text-2xl font-extrabold">Push Control</div>
       <div className="mb-5 text-[13px] text-ink-faint">ศูนย์ควบคุมการแจ้งเตือน — เห็นทุก trigger ในระบบ · เปิด/ปิดได้ · ดูเครื่องที่รับ</div>
 

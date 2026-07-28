@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { QRCodeCanvas } from 'qrcode.react';
 import { useDatabase } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -327,6 +328,7 @@ export default function PosterPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/home', label: '🖼 แบนเนอร์หน้าแรก' }, { href: '/admin/poster', label: '📸 สร้างรูปโปรโมท' }]} />
       <div className="mb-1 text-2xl font-extrabold">สร้างรูปโปรโมท</div>
       <div className="mb-5 text-[13px] text-ink-faint">เลือกสินค้า → ได้รูป grid 1080×1080 พร้อมโลโก้ + QR เข้ากลุ่มไลน์ → โหลดไปลง LINE / Facebook</div>
 

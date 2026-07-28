@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
@@ -46,6 +47,7 @@ export default function AdminPaymentPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/payment', label: '💳 บัญชีรับเงิน' }, { href: '/admin/push', label: '🔔 แจ้งเตือน (Push)' }]} />
       <div className="mb-2 text-2xl font-extrabold">ตั้งค่าการเงิน</div>
       <div className="mb-6 text-[13px] text-ink-faint">บัญชี/QR ที่ “เปิด” จะถูกใช้แสดงให้ลูกค้าตอนชำระเงิน (ใช้ตัวแรกที่เปิดอยู่)</div>
 

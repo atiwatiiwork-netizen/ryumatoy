@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -101,6 +102,7 @@ export default function AdminMembersPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/members', label: '👤 สมาชิก' }, { href: '/admin/ranks', label: '🏅 Ranks' }]} />
       <div className="mb-1 flex items-center gap-3">
         <span className="text-2xl font-extrabold">สมาชิก</span>
         <button onClick={repair} className={cx('ml-auto rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold', dupCount + missingCount > 0 ? 'border-[#fbbf24]/50 bg-[#d97706]/[0.12] text-[#fbbf24]' : 'border-subtle bg-surface-3 text-ink-muted2')}>

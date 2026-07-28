@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
@@ -44,6 +45,7 @@ export default function ProductionPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/production', label: '🔁 ปิดรอบสั่งผลิต' }, { href: '/admin/board', label: '📋 กระดานปิดพรี' }]} />
       <div className="mb-2 text-2xl font-extrabold">ปิดรอบสั่งผลิต</div>
       <div className="mb-5 text-[13px] text-ink-faint">เลือกค่าย → ติ๊กรายการที่ค่ายเรียกเก็บ → ใส่จำนวนไฟนอลที่จะสั่ง → กดปิดรอบ (ส่วนที่เกินยอดจอง = สต๊อกร้าน)</div>
 

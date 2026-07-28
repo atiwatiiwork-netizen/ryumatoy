@@ -7,6 +7,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
+import { AdminTabs } from '@/components/AdminTabs';
 import { cx } from '@/components/ui';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
@@ -154,6 +155,7 @@ export default function AdminDashboardPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin', label: '📊 ภาพรวมร้าน' }, { href: '/admin/analytics', label: '📈 ตัวเลขรายเดือน' }]} />
       <div className="mb-[22px] flex items-center justify-between">
         <div>
           <div className="text-2xl font-extrabold">ภาพรวมร้าน</div>

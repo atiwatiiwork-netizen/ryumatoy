@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { RANK } from '@/lib/theme';
@@ -34,6 +35,7 @@ export default function AdminRanksPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/members', label: '👤 สมาชิก' }, { href: '/admin/ranks', label: '🏅 Ranks' }]} />
       <div className="mb-1 text-2xl font-extrabold">Ranks</div>
       <div className="mb-5 text-[13px] text-ink-faint">คำร้องเปลี่ยนยศ · มอบยศเอง · ตั้งสิทธิพิเศษแต่ละ rank</div>
 

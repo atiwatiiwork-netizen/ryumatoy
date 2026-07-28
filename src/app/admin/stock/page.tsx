@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
@@ -28,6 +29,7 @@ export default function StockPage() {
   const [tab, setTab] = useState<'legacy' | 'surplus'>('legacy');
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/products', label: '📦 Pre-Order' }, { href: '/admin/instock', label: '🏪 In-Stock' }, { href: '/admin/stock', label: '⚡ สต๊อกใบพรี' }]} />
       <div className="mb-1 text-2xl font-extrabold">สต๊อกใบพรี</div>
       <div className="mb-3 text-[13px] text-ink-faint">เปิดขาย “พรีรอบพิเศษ” — ล็อตจำกัดจำนวนบน SKU เดิม/ของที่มีอยู่ · ราคา snapshot ไม่กระทบคนเดิม · ขายเป็นใบพรี · 1 SKU เปิดได้ทีละรอบ</div>
 

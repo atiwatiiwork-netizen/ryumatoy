@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
@@ -101,6 +102,7 @@ export default function AdminEventsPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }]} />
       <div className="mb-1 text-2xl font-extrabold">กิจกรรม / Event</div>
       <div className="mb-5 text-[13px] text-ink-faint">พรีครบตามเป้า รับคูปองอัตโนมัติ · แสดงแบนเนอร์หน้าแรก + ความคืบหน้าในหน้าสินค้า</div>
 

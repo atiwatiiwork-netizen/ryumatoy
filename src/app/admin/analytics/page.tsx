@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useDatabase } from '@/state/DataProvider';
 import { Icon, type IconName } from '@/components/Icon';
+import { AdminTabs } from '@/components/AdminTabs';
 import { cx } from '@/components/ui';
 import { ticketsInMonth, topFranchises, topMakers, ticketMonths, bellAdoption, installAdoption, currentYm, type RankRow } from '@/domain/services/analytics';
 import { cashIn, outstanding, debtors, cashMonths } from '@/domain/services/money';
@@ -33,6 +34,7 @@ export default function AnalyticsPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin', label: '📊 ภาพรวมร้าน' }, { href: '/admin/analytics', label: '📈 ตัวเลขรายเดือน' }]} />
       <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="text-2xl font-extrabold">วิเคราะห์รายเดือน</div>
@@ -46,23 +48,37 @@ export default function AnalyticsPage() {
         </label>
       </div>
 
-      {/* headline */}
-      <div className="mb-[22px] grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-        <Stat label="ใบพรีเดือนนี้" value={String(totalTickets)} sub={`${totalPieces} ชิ้น`} icon="box" />
-        <Stat label="จำนวนเรื่อง" value={String(franchises.length)} icon="heart" />
-        <Stat label="จำนวนค่าย" value={String(makers.length)} icon="tag" />
-        <Stat label="เปิดกระดิ่ง" value={`${bell.enabled}/${bell.total}`} sub={`${bellPct}%`} icon="bell" green />
+      {/* headline — ย่อเป็นแถบเดียว ไม่ใช่การ์ดใหญ่ 4 ใบ (ตัวเลขประกอบ ไม่ใช่พระเอกของหน้า) */}
+      <div className="mb-[18px] flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-subtle bg-surface-2 px-5 py-3.5">
+        <Mini label="ใบพรีเดือนนี้" value={String(totalTickets)} sub={`${totalPieces} ชิ้น`} />
+        <Mini label="เรื่อง" value={String(franchises.length)} />
+        <Mini label="ค่าย" value={String(makers.length)} />
+        <Mini label="เปิดกระดิ่ง" value={`${bell.enabled}/${bell.total}`} sub={`${bellPct}%`} green />
       </div>
 
       {/* ── เส้นเงิน (flow review 2026-07-25): เงินเข้าแยกที่มา + ค้างเก็บ ── */}
       <div className="mb-[18px] rounded-2xl border border-[#16a34a]/35 bg-[#16a34a]/[0.05] p-5">
         <div className="mb-3 flex items-center gap-2 text-base font-bold text-[#4ade80]"><Icon name="payments" size={18} /> เงินเข้า · {monthLabel(ym)}</div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <MoneyCard label="รับเข้าทั้งหมด" value={baht(cash.total)} tone="text-[#4ade80]" big />
-          <MoneyCard label="มัดจำ / เต็มจำนวน" value={baht(cash.deposits)} sub={`${cash.orders} ออเดอร์อนุมัติ`} />
-          <MoneyCard label="ส่วนต่างที่เก็บได้" value={baht(cash.remaining)} sub="ตอนของถึงไทย" />
-          <MoneyCard label="มัดจำหาของ" value={baht(cash.sourcing)} sub="เริ่มงานแล้ว" />
-          <MoneyCard label="ตั๋วที่มอบเอง" value={baht(cash.granted)} sub="เก็บเงินนอกระบบ" />
+        {/* ยอดรวมเด่นใบเดียว + ที่มาแยกเป็นบรรทัด — เดิม 5 การ์ดเรียงยาวจนตกขอบจอ อ่านไม่ทัน */}
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+          <div>
+            <div className="text-[11.5px] text-ink-muted">รับเข้าทั้งหมด</div>
+            <div className="text-[30px] font-extrabold leading-tight text-[#4ade80]">{baht(cash.total)}</div>
+          </div>
+          <div className="flex min-w-[260px] flex-1 flex-col divide-y divide-hair">
+            {[
+              { l: 'มัดจำ / เต็มจำนวน', v: cash.deposits, s: `${cash.orders} ออเดอร์อนุมัติ` },
+              { l: 'ส่วนต่างที่เก็บได้', v: cash.remaining, s: 'ตอนของถึงไทย' },
+              { l: 'มัดจำหาของ', v: cash.sourcing, s: 'เริ่มงานแล้ว' },
+              { l: 'ตั๋วที่มอบเอง', v: cash.granted, s: 'เก็บเงินนอกระบบ' },
+            ].map((r) => (
+              <div key={r.l} className="flex items-center gap-2 py-1 text-[12.5px]">
+                <span className="text-ink-muted2">{r.l}</span>
+                <span className="text-[11px] text-ink-faint">{r.s}</span>
+                <span className={cx('ml-auto font-bold', r.v > 0 ? 'text-ink' : 'text-ink-faint')}>{baht(r.v)}</span>
+              </div>
+            ))}
+          </div>
         </div>
         <div className="mt-2 text-[11px] text-ink-faint">นับตามวันที่ “รับเงินจริง” (วันอนุมัติสลิป) · ยอดมัดจำเป็นยอดสุทธิหลังหักคูปองแล้ว</div>
       </div>
@@ -107,12 +123,15 @@ export default function AnalyticsPage() {
   );
 }
 
-function MoneyCard({ label, value, sub, tone, big }: { label: string; value: string; sub?: string; tone?: string; big?: boolean }) {
+/** ตัวเลขประกอบแบบบรรทัดเดียว — ใช้แทนการ์ดใหญ่ตรงหัวหน้า (ลดพื้นที่ ลดสายตาที่ต้องกวาด) */
+function Mini({ label, value, sub, green }: { label: string; value: string; sub?: string; green?: boolean }) {
   return (
-    <div className="rounded-xl border border-subtle bg-surface-2 px-3.5 py-3">
-      <div className="text-[11.5px] text-ink-muted">{label}</div>
-      <div className={cx('mt-0.5 font-extrabold', big ? 'text-[22px]' : 'text-[16px]', tone ?? 'text-ink')}>{value}</div>
-      {sub && <div className="text-[10.5px] text-ink-faint">{sub}</div>}
+    <div>
+      <div className="text-[11px] text-ink-faint">{label}</div>
+      <div className="flex items-baseline gap-1.5">
+        <span className={cx('text-[19px] font-extrabold leading-tight', green ? 'text-[#4ade80]' : 'text-ink')}>{value}</span>
+        {sub && <span className="text-[11px] text-ink-faint">{sub}</span>}
+      </div>
     </div>
   );
 }
@@ -169,17 +188,3 @@ function AdoptionCard({ icon, title, hint, done, total, pct, color, fill, remain
   );
 }
 
-function Stat({ label, value, sub, icon, green }: { label: string; value: string; sub?: string; icon: IconName; green?: boolean }) {
-  return (
-    <div className="rounded-card border border-subtle bg-surface-2 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-[12.5px] text-ink-muted">{label}</span>
-        <Icon name={icon} size={18} className={green ? 'text-[#4ade80]' : 'text-ink-faint'} />
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <div className={cx('text-[26px] font-extrabold', green ? 'text-[#4ade80]' : 'text-ink')}>{value}</div>
-        {sub && <div className="text-[12.5px] text-ink-faint">{sub}</div>}
-      </div>
-    </div>
-  );
-}

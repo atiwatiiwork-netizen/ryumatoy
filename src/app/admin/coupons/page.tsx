@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { RANK } from '@/lib/theme';
@@ -36,6 +37,7 @@ export default function AdminCouponsPage() {
 
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }]} />
       <div className="mb-1 text-2xl font-extrabold">คูปองส่วนลด</div>
       <div className="mb-5 text-[13px] text-ink-faint">สร้างคูปอง (ลดเป็นบาท) · มอบให้ลูกค้า · ติดตามใครได้/ใครใช้</div>
 

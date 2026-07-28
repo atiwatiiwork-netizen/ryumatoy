@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { Icon } from '@/components/Icon';
@@ -14,6 +15,7 @@ const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.
 export default function AdminHomePage() {
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/home', label: '🖼 แบนเนอร์หน้าแรก' }, { href: '/admin/poster', label: '📸 สร้างรูปโปรโมท' }]} />
       <div className="mb-1 text-2xl font-extrabold">หน้าแรก / โปรโมชั่น</div>
       <div className="mb-5 text-[13px] text-ink-faint">จัดการรูปสไลด์ประกาศ/โปรโมชั่นบนสุดของหน้าลูกค้า + แบนเนอร์สินค้าเด่น</div>
       <PromoManager />

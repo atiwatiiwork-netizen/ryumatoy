@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AdminTabs } from '@/components/AdminTabs';
 import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -39,6 +40,7 @@ export default function AdminProductsPage() {
   const [tab, setTab] = useState<Tab>('products');
   return (
     <div>
+      <AdminTabs tabs={[{ href: '/admin/products', label: '📦 Pre-Order' }, { href: '/admin/instock', label: '🏪 In-Stock' }, { href: '/admin/stock', label: '⚡ สต๊อกใบพรี' }]} />
       <div className="mb-5 text-2xl font-extrabold">Pre-Order · จัดการสินค้า</div>
       <div className="mb-6 flex flex-wrap items-center gap-2">
         {/* กลุ่มจัดการแคตตาล็อก */}
