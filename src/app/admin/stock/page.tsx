@@ -11,7 +11,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, departSpecialRound, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
+import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
 import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
@@ -245,7 +245,9 @@ function LegacyCreate() {
   const [height, setHeight] = useState('');
   const [wcf, setWcf] = useState<WcfType>('wcf');
   const [dep, setDep] = useState(''); // custom มัดจำ — blank = ใช้เรทตามชนิด (finished goods มักใช้ 1000)
-  const [startStatus, setStartStatus] = useState<'production' | 'shipping'>('shipping'); // ผลิต(รอโกดัง)/เดินทาง
+  // ผลิต(รอโกดัง)/เดินทาง — default ผลิต (เจ้าของ 2026-07-28: ของสั่งใหม่เริ่มที่ผลิตแทบทุกล็อต
+  // และ default เดิม 'shipping' ทำให้ SKU ขึ้น "กำลังเดินทาง" เองโดยไม่ได้ตั้งใจ)
+  const [startStatus, setStartStatus] = useState<'production' | 'shipping'>('production');
   // DEFAULT = ร่าง (เจ้าของ 2026-07-20: "กดสร้างแล้วยังไม่เปิดขาย — แอดมินมากดเองถึงจะเปิดขาย + push")
   // สลับเป็น 🚀 ได้ถ้าอยากเปิดขาย+แจ้งลูกค้าทันทีตอนสร้าง
   const [publish, setPublish] = useState(false);
@@ -698,6 +700,20 @@ function RoundLog() {
   );
 }
 
+/** ลำดับสถานะการเดินทาง — ใช้เทียบว่าใบไหน "หน้า/หลัง" เป้าหมายที่จะย้อนกลับ */
+const FLOW: Record<string, number> = { open: 0, production: 1, shipping: 2, arrived: 3, delivered: 4, closed: 5 };
+
+/** ปุ่มขั้นสถานะในแถบ "สถานะรอบ" — ขั้นที่กำลังเป็นอยู่จะทึบ, ขั้นอื่นกดเพื่อย้าย (เดินหน้า/ถอยหลัง) */
+function Step({ on, tone, onClick, children }: { on: boolean; tone: 'amber' | 'blue' | 'green'; onClick: () => void; children: React.ReactNode }) {
+  const active = tone === 'amber' ? 'bg-[#d97706] text-white' : tone === 'blue' ? 'bg-[#2563eb] text-white' : 'bg-success text-white';
+  const idle = tone === 'amber' ? 'text-[#fbbf24] hover:bg-[#d97706]/15' : tone === 'blue' ? 'text-[#60a5fa] hover:bg-[#2563eb]/15' : 'text-[#4ade80] hover:bg-[#16a34a]/15';
+  return (
+    <button onClick={onClick} disabled={on} aria-current={on} className={cx('rounded px-2 py-1 text-[11.5px] font-bold transition-colors', on ? active : cx('bg-transparent', idle))}>
+      {children}
+    </button>
+  );
+}
+
 function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: boolean }) {
   const db = useDatabase();
   const dispatch = useDispatch();
@@ -723,11 +739,9 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
   // ── สถานะการเดินทางของรอบนี้ (นับจากตั๋วในรอบ ไม่ใช่ตัว SKU — กันข้ามรอบ) ──
   const moving = tickets.filter((t) => ['production', 'shipping'].includes(t.product_status));
-  // รอบไม่มีลูกค้า: ของ (ตัว SKU) ยังเดินทางอยู่เอง — ต้องกดถึงไทยได้เหมือนกัน (เฉพาะรอบล่าสุดของ SKU
+  // รอบไม่มีลูกค้า: ของ (ตัว SKU) ยังเดินทางอยู่เอง — ต้องกดขยับสถานะได้เหมือนกัน (เฉพาะรอบล่าสุดของ SKU
   // กันการ์ดรอบเก่าในประวัติไปอ่านสถานะของรอบใหม่) → ถึงแล้วของเหลือกลายเป็น In-Stock มือ 1
   const totalRounds = db.batches.filter((x) => x.product_id === b.product_id).length;
-  const productMoving = !!p && !p.is_stock && (p.status === 'production' || p.status === 'shipping');
-  const canArriveNoTickets = tickets.length === 0 && productMoving && roundNo === totalRounds;
   const nProd = tickets.filter((t) => t.product_status === 'production').length;
   const nShip = tickets.filter((t) => t.product_status === 'shipping').length;
   const nArr = tickets.filter((t) => ['arrived', 'delivered'].includes(t.product_status) || t.status === 'shipped').length;
@@ -740,8 +754,6 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   };
   // ── ผลิต → เดินทาง (แอดมินกดเอง ไม่ต้องผ่านคิวโกดัง) ──
   const [depTr, setDepTr] = useState<'truck' | 'ship'>('truck');
-  // กดได้เมื่อรอบนี้ยังมีตั๋วค้างที่ "ผลิต" หรือ (รอบไม่มีลูกค้าแต่ตัว SKU ยังผลิตอยู่ และเป็นรอบล่าสุด)
-  const canDepart = nProd > 0 || (tickets.length === 0 && !!p && !p.is_stock && p.status === 'production' && roundNo === totalRounds);
   const doDepart = () => {
     const label = depTr === 'ship' ? 'เรือ 🚢' : 'รถ 🚚';
     if (!confirm(`ของรอบนี้ออกจากจีนแล้ว? (${label})\n${nProd > 0 ? `ตั๋ว ${nProd} ใบจะเป็น "กำลังเดินทางมาไทย" + เริ่มนับ ETA` : 'ยังไม่มีลูกค้า — ตัวสินค้าจะเป็น "กำลังเดินทาง"'}\nลูกค้าจะเริ่มจ่ายส่วนต่างได้`)) return;
@@ -759,6 +771,40 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       }
     }
     flash(before > 0 ? `กำลังเดินทางมาไทย ${label} · ${moved} ตั๋ว ✓ แจ้งลูกค้าแล้ว` : `ตั้งเป็นกำลังเดินทางมาไทย ${label} แล้ว ✓`);
+  };
+
+  // ── สถานะ "ตอนนี้" ของรอบ (ใช้วาดแถบสถานะ) ──
+  // ตั๋วมาก่อนเสมอ (ใบที่ตามหลังสุดคือสถานะจริงของรอบ); รอบที่ยังไม่มีลูกค้าอ่านจากตัว SKU
+  // เฉพาะรอบล่าสุด — การ์ดรอบเก่าในประวัติต้องไม่ไปคุมสถานะของรอบใหม่
+  const phase: 'production' | 'shipping' | 'arrived' | null =
+    nProd > 0 ? 'production'
+    : nShip > 0 ? 'shipping'
+    : nArr > 0 ? 'arrived'
+    : tickets.length === 0 && p && !p.is_stock && roundNo === totalRounds
+      && (p.status === 'production' || p.status === 'shipping' || p.status === 'arrived') ? p.status
+    : null;
+
+  // ── ย้อนสถานะกลับ (แก้ตอนตั้งผิด/กดพลาด) — ไม่แจ้งเตือนลูกค้า ──
+  const doRevert = (target: 'production' | 'shipping') => {
+    if (phase === target) return;
+    if (p?.is_stock) return flash('SKU นี้กลายเป็น In-Stock ไปแล้ว — ย้อนสถานะรอบไม่ได้ (แก้ที่แท็บ In-Stock)');
+    const locked = tickets.filter((t) => t.status === 'shipped' || t.delivery);
+    if (locked.length > 0) return flash(`ย้อนไม่ได้ — มีตั๋ว ${locked.length} ใบที่ส่งของ/ลูกค้าเลือกวิธีรับของแล้ว`);
+    const backN = tickets.filter((t) => FLOW[t.product_status] > FLOW[target]).length;
+    const label = target === 'production' ? 'กำลังผลิต (รอเข้าโกดัง)' : 'กำลังเดินทางมาไทย';
+    if (!confirm(`ย้อนสถานะรอบนี้กลับเป็น "${label}"?\n`
+      + (backN > 0 ? `ตั๋ว ${backN} ใบจะถอยกลับตามด้วย\n` : 'รอบนี้ยังไม่มีลูกค้า — เปลี่ยนเฉพาะตัวสินค้า\n')
+      + (target === 'production' ? 'วันเข้าโกดัง/ETA จะถูกล้าง (เริ่มนับใหม่ตอนกดออกเดินทาง)\n' : '')
+      + '\n⚠ ไม่มีการแจ้งเตือนลูกค้า')) return;
+    dispatch(revertRoundStatus(b.id, target));
+    let ok = false;
+    dispatch((d) => {
+      const pp = d.products.find((x) => x.id === b.product_id);
+      const ts = d.tickets.filter((t) => t.batch_id === b.id);
+      ok = ts.length > 0 ? !ts.some((t) => FLOW[t.product_status] > FLOW[target]) : pp?.status === target;
+      return d;
+    });
+    flash(ok ? `ย้อนกลับเป็น "${label}" แล้ว ✓` : 'ย้อนสถานะไม่สำเร็จ — ลองรีเฟรชแล้วกดใหม่');
   };
 
   // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้.
@@ -894,26 +940,28 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         {!readOnly && b.status === 'open' && remaining > 0 && (
           <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
         )}
-        {/* ผลิต → กำลังเดินทางมาไทย: แอดมินกดเองได้จากตรงนี้ (เจ้าของ 2026-07-26)
-            เดิมมีทางเดียวคือคิว "ยืนยันเข้าโกดังจีน" ซึ่งใช้ได้เฉพาะล็อตที่มีรหัส SF + ตารางโกดัง
-            ทำให้ล็อตที่ยังผลิตอยู่ค้างเติ่งไปต่อไม่ได้ */}
-        {!fullPay && canDepart && (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-[#2563eb]/45 bg-[#2563eb]/[0.1] px-1.5 py-1">
-            <select value={depTr} onChange={(e) => setDepTr(e.target.value as 'truck' | 'ship')} className="rounded bg-transparent text-[12px] font-bold text-[#60a5fa] outline-none">
-              <option value="truck">🚚 รถ</option>
-              <option value="ship">🚢 เรือ</option>
-            </select>
-            <button onClick={doDepart} className="rounded bg-[#2563eb] px-2 py-1 text-[12px] font-bold text-white">
-              ออกเดินทางแล้ว{nProd > 0 ? ` (${nProd})` : ''}
-            </button>
+        {/* แถบสถานะรอบ — กดสลับได้ทั้งเดินหน้าและ "ย้อนกลับ" (เจ้าของ 2026-07-28)
+            ผลิต → เดินทาง: ไม่ต้องรอคิวยืนยันโกดัง (ใช้ได้เฉพาะล็อตที่มี SF + ตารางโกดัง)
+            ย้อนกลับ: ไว้แก้ตอนตั้งจุดเริ่มผิด/กดพลาด — ไม่ยิงแจ้งเตือนลูกค้า */}
+        {!fullPay && phase && (
+          <span className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-subtle bg-surface-3/60 px-1.5 py-1">
+            <span className="pr-0.5 text-[10.5px] font-bold text-ink-faint">สถานะรอบ</span>
+            <Step on={phase === 'production'} tone="amber" onClick={() => doRevert('production')}>🏭 ผลิต{nProd > 0 ? ` ${nProd}` : ''}</Step>
+            <span className="text-[10px] text-ink-faint">›</span>
+            {phase === 'production' && (
+              <select value={depTr} onChange={(e) => setDepTr(e.target.value as 'truck' | 'ship')} aria-label="ขนส่ง" className="rounded bg-transparent text-[11.5px] font-bold text-[#60a5fa] outline-none">
+                <option value="truck">🚚 รถ</option>
+                <option value="ship">🚢 เรือ</option>
+              </select>
+            )}
+            <Step on={phase === 'shipping'} tone="blue" onClick={() => (phase === 'production' ? doDepart() : doRevert('shipping'))}>
+              🚚 เดินทาง{nShip > 0 ? ` ${nShip}` : ''}
+            </Step>
+            <span className="text-[10px] text-ink-faint">›</span>
+            <Step on={phase === 'arrived'} tone="green" onClick={doArrive}>
+              🇹🇭 ถึงไทย{nArr > 0 ? ` ${nArr}` : tickets.length === 0 && phase !== 'arrived' ? ' → In-Stock' : ''}
+            </Step>
           </span>
-        )}
-        {/* ถึงไทยแล้ว = logistics ไม่เกี่ยวปิด/เปิดการขาย → โชว์แม้รอบปิดไปแล้ว ถ้ายังมีของเดินทางอยู่
-            (รวมรอบไม่มีลูกค้า — ถึงแล้วของเหลือกลายเป็น In-Stock มือ 1) */}
-        {!fullPay && (moving.length > 0 || canArriveNoTickets) && (
-          <button onClick={doArrive} className="rounded-lg bg-success px-3 py-1.5 text-[12px] font-bold text-white">
-            🇹🇭 ถึงไทยแล้ว{moving.length > 0 ? ` (${moving.length})` : ' → In-Stock'}
-          </button>
         )}
         {(soldOut || readOnly) && !restock && <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRestock(true); }} className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">➕ มีของเพิ่ม</button>}
         {!readOnly && noBuyers && !edit && <button onClick={() => { setEp(String(b.price_total)); setEq(String(b.stock_qty)); setEl(b.label); setEdit(true); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">แก้ไข</button>}

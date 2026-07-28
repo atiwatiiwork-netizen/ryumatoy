@@ -469,7 +469,10 @@ export const createLegacyStockProduct = (data: {
     ? data.price
     : Math.min(data.price, (data.deposit && data.deposit > 0 ? data.deposit : depositFor(db.settings, data.wcf_type ?? 'wcf')));
   // full-pay = ของอยู่ในมือ → arrived. deposit round: admin picks ผลิต(รอโกดัง) / เดินทาง.
-  const status: ProductStatus = data.fullPay ? 'arrived' : (data.startStatus ?? 'shipping');
+  // ค่าเริ่มต้น = ผลิต (เจ้าของ 2026-07-28): ของสั่งใหม่เกือบทุกล็อตเริ่มที่ผลิต และเดิม default
+  // เป็น 'shipping' ทำให้ SKU ที่สร้างชุดเดียว 6 ตัวขึ้น "กำลังเดินทาง" ทั้งหมดโดยไม่ได้ตั้งใจ
+  // (ตรงกับ restockSpecialRound ที่ default 'production' อยู่แล้ว)
+  const status: ProductStatus = data.fullPay ? 'arrived' : (data.startStatus ?? 'production');
   const product: Product = {
     id: pid, franchise_id: data.franchise_id, manufacturer_id: data.manufacturer_id,
     series_id: data.series_id || undefined, series_name: data.series_name, character_name: data.character_name || undefined,
@@ -586,6 +589,58 @@ export const departSpecialRound = (batchId: string, opts: { transport: SourcingT
   const products = !stillProd
     ? db.products.map((x) => (x.id === b.product_id && x.status === 'production'
       ? { ...x, status: 'shipping' as const, shipped_at: x.shipped_at ?? date, eta_note: 'กำลังเดินทางมาไทย' }
+      : x))
+    : db.products;
+  return { ...db, tickets, products };
+};
+
+// ลำดับสถานะการเดินทาง — ใช้เทียบว่า "หน้า/หลัง" กัน (เดียวกับ setProductStatus)
+const FLOW_ORDER: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered', 'closed'];
+const flowRank = (s: ProductStatus) => FLOW_ORDER.indexOf(s);
+
+/** ตั๋วที่ "จบงานแล้ว" — ย้อนสถานะรอบไม่ได้ เพราะของถึงมือ/กำลังจะถึงมือลูกค้าแล้ว */
+const doneTicket = (t: PreorderTicket) => t.status === 'shipped' || !!t.delivery;
+
+/**
+ * ย้อนสถานะ "ทั้งรอบ" กลับ (เจ้าของ 2026-07-28) — เดินทาง → ผลิต, ถึงไทย → เดินทาง/ผลิต.
+ * ใช้ตอนตั้งจุดเริ่มผิดตอนสร้าง หรือกดปุ่มถัดไปพลาด (เคส 6 SKU Akatsuki ที่สร้างชุดเดียวแล้ว
+ * กลายเป็น "กำลังเดินทาง" ทั้งหมด). กติกากันข้อมูลเละ:
+ *   · SKU ที่แปลงเป็น In-Stock แล้ว ย้อนไม่ได้ (ของเข้าสต๊อกขายไปแล้ว — คนละเส้นทาง)
+ *   · ถ้ามีตั๋วใบไหนในรอบส่งของแล้ว/ลูกค้าเลือกวิธีรับของแล้ว = ย้อนทั้งรอบไม่ได้ (แก้รายใบแทน)
+ *   · แตะเฉพาะตั๋วของรอบนี้ที่อยู่ "หน้า" เป้าหมาย — ตั๋วรอบอื่นและตั๋วที่ยังตามหลังไม่ถูกแตะ
+ *   · กลับไป "ผลิต" = ล้างวันเข้าโกดัง/ขนส่ง (ETA ต้องหยุดนับ ไม่งั้นลูกค้าเห็นวันคาดถึงค้างอยู่)
+ */
+export const revertRoundStatus = (batchId: string, target: 'production' | 'shipping') => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b) return db;
+  const p = db.products.find((x) => x.id === b.product_id);
+  if (!p || p.is_stock) return db;
+  const mine = db.tickets.filter((t) => t.batch_id === batchId);
+  if (mine.some(doneTicket)) return db; // มีตั๋วจบงานแล้ว — ห้ามย้อนทั้งรอบ
+  const back = mine.filter((t) => flowRank(t.product_status) > flowRank(target));
+  const productAhead = flowRank(p.status) > flowRank(target) && flowRank(p.status) <= flowRank('arrived');
+  if (back.length === 0 && !productAhead) return db; // ไม่มีอะไรให้ย้อน — อย่าทำให้ store dirty
+  const ids = new Set(back.map((t) => t.id));
+  const tickets = db.tickets.map((t) => (ids.has(t.id)
+    ? {
+        ...t, product_status: target,
+        // ผลิต = ยังไม่เข้าโกดัง → ล้างจุดเริ่มนับ ETA ทิ้ง (เดินทาง = คงวันเดิมไว้)
+        ...(target === 'production' ? { warehouse_at: undefined, warehouse_transport: undefined } : {}),
+      }
+    : t));
+  // ยก SKU ตามได้ต่อเมื่อไม่มีของ "ที่ยังเดินทางอยู่จริง" ของสินค้านี้ค้างหน้าเป้าหมาย
+  // ⚠ นับเฉพาะตั๋วที่ยัง ผลิต/เดินทาง (สูตรเดียวกับ arriveSpecialRound) — ตั๋วรอบเก่าที่ถึงไทย/ส่งไปแล้ว
+  // ต้องไม่บล็อก ไม่งั้น SKU ที่เคยมีล็อตเก่าจบไปแล้วจะย้อนสถานะรอบใหม่ไม่ได้เลย
+  const othersAhead = tickets.some((t) => t.product_id === b.product_id
+    && (t.product_status === 'production' || t.product_status === 'shipping')
+    && flowRank(t.product_status) > flowRank(target));
+  const products = !othersAhead && productAhead
+    ? db.products.map((x) => (x.id === b.product_id
+      ? {
+          ...x, status: target,
+          shipped_at: target === 'shipping' ? (x.shipped_at ?? new Date().toISOString()) : undefined,
+          eta_note: target === 'shipping' ? 'ระหว่างทาง' : 'ผลิต · รอเข้าโกดัง',
+        }
       : x))
     : db.products;
   return { ...db, tickets, products };

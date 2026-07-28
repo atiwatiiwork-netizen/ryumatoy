@@ -41,7 +41,9 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
     if (s) { try { return JSON.parse(s).sd as Shared; } catch { /* ร่างเสีย — เริ่มใหม่ */ } }
     return {
       manufacturer_id: db.manufacturers[0]?.id ?? '', franchise_id: db.franchises[0]?.id ?? '',
-      wcf_type: 'wcf', fullPay: false, startStatus: 'shipping', label: '',
+      // เริ่มที่ "ผลิต" เสมอ (เจ้าของ 2026-07-28) — เดิม default เป็น 'เดินทางแล้ว' ทำให้สร้างชุด
+      // 6 ตัวแล้วขึ้น "กำลังเดินทาง" ทั้งหมดโดยไม่ได้ตั้งใจ; ของสั่งใหม่เกือบทุกล็อตเริ่มที่ผลิต
+      wcf_type: 'wcf', fullPay: false, startStatus: 'production', label: '',
     };
   });
   const [rows, setRows] = useState<Row[]>(() => {
@@ -120,7 +122,9 @@ export function BulkNewSku({ onDone }: { onDone: () => void }) {
     if (validRows.length === 0) return flash('ยังไม่มีแถวที่กรอกครบ (ต้องมี ชื่อ + ราคา + จำนวน)');
     const n = validRows.length;
     const pieces = validRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-    if (!confirm(`สร้าง ${n} สินค้า (รวม ${pieces} ชิ้น)\n\nทุกตัวจะเป็น "ร่าง" — ยังไม่ขึ้นหน้าร้าน ไม่มีการแจ้งลูกค้า\nกดปุ่ม "เปิดขาย" ที่การ์ดรอบทีละตัวเมื่อพร้อม`)) return;
+    // บอกจุดเริ่ม flow ให้ชัดในกล่องยืนยัน — เคส 2026-07-26 คือตั้ง "เดินทางแล้ว" ค้างไว้แล้วไม่ทันสังเกต
+    const startTxt = sd.fullPay ? 'ของอยู่ในมือ (พร้อมส่ง)' : sd.startStatus === 'production' ? 'กำลังผลิต (รอเข้าโกดัง)' : '⚠ กำลังเดินทางมาไทยแล้ว';
+    if (!confirm(`สร้าง ${n} สินค้า (รวม ${pieces} ชิ้น)\nสถานะเริ่มต้น: ${startTxt}\n\nทุกตัวจะเป็น "ร่าง" — ยังไม่ขึ้นหน้าร้าน ไม่มีการแจ้งลูกค้า\nกดปุ่ม "เปิดขาย" ที่การ์ดรอบทีละตัวเมื่อพร้อม`)) return;
     setBusy(true);
     const items = validRows.map((r) => {
       const character = r.name.trim();
