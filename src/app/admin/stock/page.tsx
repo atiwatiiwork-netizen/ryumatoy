@@ -16,6 +16,7 @@ import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { ticketSourceOf } from '@/domain/services/ticketSource';
+import { pendingHeld } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
@@ -941,7 +942,13 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-bold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}</div>
-          <div className="mt-0.5 font-mono text-[11px] text-ink-faint">เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}{p && !p.is_stock ? ` · 🔒 คลัง SKU ${stockRemaining(db, p)}` : ''}</div>
+          {/* ตัวเลขให้อ่านแบบเดียวกับที่เจ้าของคิด (เคส Orochimaru "ไม่ 14 หรอ"): ขาย/เปิดกด/ติดจอง/เก็บ
+              ⏳ ติดจอง = คนกำลังจ่าย/สลิปรอตรวจ — ฝั่งลูกค้าเห็น "หมดชั่วคราว" ตอนเลขนี้กินของเหลือหมด */}
+          <div className="mt-0.5 font-mono text-[11px] text-ink-faint">
+            เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}
+            {(() => { const held = pendingHeld(db, b.product_id, b.id); return held > 0 ? <span className="animate-blink font-bold text-[#fbbf24]"> · ⏳ ติดจอง {held} (ลูกค้าเห็นเหลือ {Math.max(0, remaining - held)})</span> : null; })()}
+            {p && !p.is_stock ? ` · 🔒 เก็บหลังรอบนี้ ${Math.max(0, stockRemaining(db, p) - remaining)}` : ''}
+          </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10.5px] font-bold">
             {fullPay ? <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ของอยู่ไทย · พร้อมส่ง</span> : (<>
               {nProd > 0 && <span className="rounded-md bg-[#d97706]/15 px-1.5 py-0.5 text-[#fbbf24]">ผลิต/รอโกดัง {nProd}</span>}

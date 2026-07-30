@@ -24,6 +24,7 @@ import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domai
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
+import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -134,6 +135,14 @@ export default function CheckoutPage() {
     if (clientSoldOut) return; // ของหมดตั้งแต่ยังไม่เริ่ม — ไม่ต้อง hold (ลูกค้าต้องเอาของหมดออกก่อน)
     started.current = true;
     (async () => {
+      // ใช้ hold เดิมของแท็บนี้ก่อนถ้ายังไม่หมดอายุ (เคส Pl Tree 2026-07-30: เข้าๆ ออกๆ หน้าจ่าย
+      // = จองใหม่ทุกครั้ง ถือของซ้ำหลายใบพร้อมกัน กินสต๊อกคนอื่นฟรีคนละ 15 นาที ทั้งที่จะซื้อใบเดียว)
+      try {
+        const saved = JSON.parse(readStore('session', 'ryuma_hold:' + stockKey) ?? 'null') as { ids: string[]; until: number } | null;
+        if (saved && Array.isArray(saved.ids) && saved.ids.length > 0 && saved.until > Date.now() + 10_000) {
+          setResIds(saved.ids); setResUntil(saved.until); return;
+        }
+      } catch { /* ร่างเสีย — จองใหม่ตามปกติ */ }
       const ids: string[] = []; let earliest = Infinity;
       for (const l of stockLines) {
         const r = await reserveStock(l.productId, l.batchId, l.qty, currentUserId);
@@ -141,7 +150,10 @@ export default function CheckoutPage() {
         else setSoldOut(true);
       }
       setResIds(ids);
-      if (earliest !== Infinity) setResUntil(earliest);
+      if (earliest !== Infinity) {
+        setResUntil(earliest);
+        writeStore('session', 'ryuma_hold:' + stockKey, JSON.stringify({ ids, until: earliest }));
+      }
     })();
     // ⚠ deps ต้องเป็น "ค่าคงที่" ไม่ใช่ stockLines ที่สร้างใหม่ทุก render — ไม่งั้น effect วิ่งทุกเฟรม
     //   แล้วมีแค่ started.current กันไว้ชั้นเดียว ถ้าใครแก้โค้ดจน ref นั้นเลื่อน = ยิง reserveStock รัว
@@ -213,6 +225,8 @@ export default function CheckoutPage() {
       return flash('บันทึกออเดอร์ไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (ตะกร้ายังอยู่ครบ)');
     }
     cart.clear();
+    // ออเดอร์เกิดจริงแล้ว → hold ชุดนี้ถูกใช้ไปแล้ว (paid) — ล้างที่จำไว้ กันรอบซื้อหน้าเอา id เก่ามาใช้ซ้ำ
+    removeStore('session', 'ryuma_hold:' + stockKey);
     // ping the shop owner's LINE (fire-and-forget; no-op if LINE env isn't set)
     const buyerName = db.users.find((x) => x.id === currentUserId)?.display_name ?? 'ลูกค้า';
     notifyAdminLine(noPayment
