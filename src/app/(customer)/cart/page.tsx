@@ -7,6 +7,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { productLabel } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
+import { userBatchQuota, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -67,9 +68,15 @@ export default function CartPage() {
                   {isPre ? 'พรีออเดอร์ · มัดจำ' : 'พร้อมส่ง · เต็มจำนวน'}
                 </span>
                 <div className="mt-2 flex items-center justify-between">
-                  <Stepper qty={l.qty} onChange={(q) => cart.setQty(l.productId, l.variantId, q, l.batchId)} />
+                  {/* รอบพิเศษจำกัด 3 ตัว/คน (เจ้าของ 2026-07-30) — เพดาน = โควตาที่เหลือ
+                      (หักตั๋วที่มี + สลิปรอตรวจแล้ว) กันกดบวกเกินแล้วไปตายตอนส่งออเดอร์ */}
+                  <Stepper qty={l.qty} max={l.batchId ? userBatchQuota(db, CURRENT_USER_ID, l.batchId) : undefined}
+                    onChange={(q) => cart.setQty(l.productId, l.variantId, q, l.batchId)} />
                   <span className="text-sm font-bold text-primary-soft">{baht(unitDeposit(l) * l.qty)}</span>
                 </div>
+                {l.batchId && l.qty >= userBatchQuota(db, CURRENT_USER_ID, l.batchId) && (
+                  <div className="mt-1 text-[10.5px] font-semibold text-ink-faint">รอบพิเศษจำกัด {BATCH_MAX_PER_USER} ตัว/คน</div>
+                )}
               </div>
             </div>
           );
@@ -109,13 +116,13 @@ function Row({ label, value, green }: { label: string; value: string; green?: bo
   );
 }
 
-function Stepper({ qty, onChange }: { qty: number; onChange: (q: number) => void }) {
+function Stepper({ qty, max, onChange }: { qty: number; max?: number; onChange: (q: number) => void }) {
   const btn = 'grid h-7 w-7 place-items-center rounded-lg border border-subtle bg-surface-3 text-ink';
   return (
     <div className="flex items-center gap-2.5">
       <button className={btn} onClick={() => onChange(qty - 1)}><Icon name="minus" size={15} /></button>
       <span className="min-w-[14px] text-center text-sm font-bold">{qty}</span>
-      <button className={`${btn} text-primary-bright`} onClick={() => onChange(qty + 1)}><Icon name="plus" size={15} /></button>
+      <button className={cx(btn, 'text-primary-bright disabled:opacity-35')} disabled={max != null && qty >= max} onClick={() => onChange(max != null ? Math.min(max, qty + 1) : qty + 1)}><Icon name="plus" size={15} /></button>
     </div>
   );
 }

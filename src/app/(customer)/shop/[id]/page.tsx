@@ -15,7 +15,7 @@ import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, rema
 import { depositForRank } from '@/domain/services/ranks';
 import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { useSmartBack } from '@/lib/nav';
-import { availableFor, batchAvailable } from '@/domain/services/reservations';
+import { availableFor, batchAvailable, batchGoneState, stockGoneState, userBatchQuota, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
@@ -79,6 +79,13 @@ export default function ProductDetailPage() {
   const limited = batch ? true : product.is_stock;
   const avail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
   const soldOut = limited && (avail ?? 1) <= 0;
+  // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ — ไม่ผ่าน/หมดเวลาแล้วของหลุดคืน
+  // · 'gone' = ตั๋วออกครบจริง ไม่มีทางหลุด
+  const goneState = batch ? batchGoneState(db, batch) : product.is_stock ? stockGoneState(db, product) : null;
+  // เพดานรอบพิเศษ 3 ตัว/คน: โควตาที่เหลือหลังหัก ตั๋วที่มี + hold ค้างของตัวเอง + ที่อยู่ในตะกร้าแล้ว
+  const inCartBatch = batch ? cart.lines.filter((l) => l.batchId === batch.id).reduce((s, l) => s + l.qty, 0) : 0;
+  const quotaLeft = batch ? Math.max(0, userBatchQuota(db, CURRENT_USER_ID, batch.id) - inCartBatch) : Infinity;
+  const capReached = !!batch && !soldOut && quotaLeft <= 0;
 
   // Gate รอบพิเศษ (เจ้าของ 2026-07-23): ต้องเคยมีใบพรี (หรือมีพรีปกติในตะกร้า) ถึงซื้อรอบพิเศษได้
   const specialLocked = !!batch && !canBuySpecialWithLines(db, CURRENT_USER_ID, cart.lines);
@@ -91,8 +98,9 @@ export default function ProductDetailPage() {
   const addToCart = () => {
     if (batchGone) return flash('รอบพิเศษนี้ปิดไปแล้ว — กลับไปดูรอบที่เปิดอยู่ได้ที่หน้าร้าน');
     if (closedForOrder) return flash('ปิดรับจองรอบนี้แล้ว — รอรอบถัดไปนะครับ 🙏');
-    if (soldOut) return flash('สินค้าหมด/ถูกจองครบแล้ว');
+    if (soldOut) return flash(goneState === 'temp' ? 'หมดชั่วคราว — มีคนกำลังชำระอยู่ ถ้าหลุดจะกลับมาให้กด' : 'สินค้าหมด/ถูกจองครบแล้ว');
     if (specialLocked) return flash('รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เปิดพรีสักตัวก่อนนะครับ 🙏');
+    if (capReached) return flash(`รอบพิเศษจำกัด ${BATCH_MAX_PER_USER} ตัว/คน — คุณครบโควตาแล้ว (รวมที่อยู่ในตะกร้า/รอตรวจสลิป)`);
     cart.add({ productId: product.id, variantId: batch ? undefined : variantId, batchId: batch?.id, depositEach: deposit, priceEach: price });
     flash('เพิ่มลงตะกร้าแล้ว');
     router.push('/cart');
@@ -193,8 +201,22 @@ export default function ProductDetailPage() {
       )}
       {/* กฎร้าน: ลูกค้าห้ามเห็นจำนวนสต๊อกจริง — บอกได้แค่ เหลือน้อย(กระพริบ) / 1 ชิ้นสุดท้าย / หมด */}
       {limited && (
-        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? 'text-primary-soft' : avail === 1 ? 'animate-pulse text-[#f87171]' : 'animate-pulse text-[#fbbf24]')}>
-          {soldOut ? 'สินค้าหมด / ถูกจองครบแล้ว' : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : 'สินค้าเหลือน้อย · รีบจองก่อนหมด'}
+        <div className={cx('mb-2 text-[13px] font-bold', soldOut ? (goneState === 'temp' ? 'animate-blink text-[#fbbf24]' : 'text-primary-soft') : avail === 1 ? 'animate-pulse text-[#f87171]' : 'animate-pulse text-[#fbbf24]')}>
+          {soldOut
+            ? (goneState === 'temp' ? '⏳ สินค้าหมดชั่วคราว — รอหลุด' : 'สินค้าหมด / ถูกจองครบแล้ว')
+            : avail === 1 ? 'เหลือ 1 ชิ้นสุดท้าย!' : 'สินค้าเหลือน้อย · รีบจองก่อนหมด'}
+        </div>
+      )}
+      {/* หมดชั่วคราว = มีคนถือ hold/สลิปรอตรวจอยู่ — อธิบายให้รู้ว่ารอได้ ไม่ใช่จบแล้ว (เจ้าของ 2026-07-30) */}
+      {soldOut && goneState === 'temp' && (
+        <div className="mb-2.5 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-3 text-[12.5px] text-[#fbbf24]">
+          มีคนกำลังชำระ/รอตรวจสลิปตัวสุดท้ายอยู่ — ถ้าชำระไม่สำเร็จหรือหมดเวลา ของจะกลับมาให้กดทันที ลองแวะมาเช็คอีกทีนะครับ
+        </div>
+      )}
+      {/* ครบโควตา 3 ตัว/คน (นับรวมตะกร้า + สลิปรอตรวจ + ตั๋วที่มีในรอบนี้) */}
+      {capReached && !specialLocked && (
+        <div className="mb-2.5 rounded-xl border border-subtle bg-surface-3/60 px-3.5 py-3 text-[12.5px] text-ink-muted2">
+          รอบพิเศษนี้จำกัด {BATCH_MAX_PER_USER} ตัว/คน — คุณรับครบโควตาแล้ว (นับรวมที่อยู่ในตะกร้า/กำลังรอตรวจสลิป)
         </div>
       )}
       {/* Gate รอบพิเศษ: ลูกค้าที่ยังไม่มีใบพรี เห็นชัดว่าทำไมซื้อไม่ได้ + ชวนไปพรี (ไม่ใช่แค่ปุ่มเทา) */}
@@ -217,8 +239,13 @@ export default function ProductDetailPage() {
       )}
       <div className="flex gap-2.5">
         <button disabled title="เร็วๆ นี้" className="grid h-[50px] w-[50px] flex-shrink-0 place-items-center rounded-btn border border-subtle bg-surface-3 text-ink-faint opacity-45"><Icon name="chat" size={20} /></button>
-        <Button onClick={addToCart} icon="cart" disabled={soldOut || specialLocked || closedForOrder || batchGone}>
-          {batchGone ? 'รอบพิเศษปิดแล้ว' : closedForOrder ? 'ปิดรับจองแล้ว' : soldOut ? 'สินค้าหมด' : specialLocked ? '🔒 เฉพาะลูกค้าที่มีใบพรี' : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}
+        <Button onClick={addToCart} icon="cart" disabled={soldOut || specialLocked || closedForOrder || batchGone || capReached}>
+          {batchGone ? 'รอบพิเศษปิดแล้ว'
+            : closedForOrder ? 'ปิดรับจองแล้ว'
+            : soldOut ? (goneState === 'temp' ? 'หมดชั่วคราว · รอหลุด' : 'สินค้าหมด')
+            : specialLocked ? '🔒 เฉพาะลูกค้าที่มีใบพรี'
+            : capReached ? `ครบโควตา ${BATCH_MAX_PER_USER} ตัว/คน`
+            : `เพิ่มลงตะกร้า · ${baht(shownDeposit)}`}
         </Button>
       </div>
 

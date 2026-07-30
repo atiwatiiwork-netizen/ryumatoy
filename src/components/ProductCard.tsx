@@ -9,7 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine, variantsOf } from '@/domain/services/catalog';
-import { availableFor } from '@/domain/services/reservations';
+import { availableFor, stockGoneState } from '@/domain/services/reservations';
 import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
@@ -73,8 +73,10 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   };
 
   const soldOut = stockLeft != null && stockLeft <= 0;
-  // ของหมด = กดเข้าไปไม่ได้ (กติกาเดียวกับ BatchCard) — เดิมยังคลิกเข้าหน้าสินค้าได้
-  const Wrap = soldOut
+  // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ อาจหลุดกลับมา · 'gone' = หมดจริง
+  const goneKind = soldOut ? stockGoneState(db, product) ?? 'gone' : null;
+  // หมดจริงเท่านั้นที่กดเข้าไม่ได้ (กติกาเดียวกับ BatchCard) — หมดชั่วคราวยังเข้าไปเฝ้ารอหลุดได้
+  const Wrap = goneKind === 'gone'
     ? ({ className, children }: { className?: string; children: React.ReactNode }) => <div className={className}>{children}</div>
     : ({ className, children }: { className?: string; children: React.ReactNode }) => <Link href={`/shop/${product.id}`} className={className}>{children}</Link>;
   return (
@@ -84,7 +86,11 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
         {inClosingBoard && <span className="absolute left-2 top-2 rounded-md bg-[#16a34a] px-1.5 py-0.5 text-[9px] font-extrabold text-white">ใกล้ปิดพรี</span>}
         {/* มือ 2 ต้องเห็นตั้งแต่การ์ด (มือ 1 = ค่าปกติ ไม่ติดป้ายให้รก) */}
         {product.is_stock && product.stock_cond?.hand === 2 && <span className="absolute left-2 top-2 rounded-md bg-[#d97706] px-1.5 py-0.5 text-[9px] font-extrabold text-white">มือ 2</span>}
-        {soldOut && <span className="absolute inset-0 grid place-items-center bg-black/45 text-[13px] font-extrabold text-white">สินค้าหมด</span>}
+        {soldOut && (
+          <span className={cx('absolute inset-0 grid place-items-center bg-black/45 text-[13px] font-extrabold', goneKind === 'temp' ? 'animate-blink text-[#fbbf24]' : 'text-white')}>
+            {goneKind === 'temp' ? '⏳ หมดชั่วคราว · รอหลุด' : 'สินค้าหมด'}
+          </span>
+        )}
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>
       <div className="px-[11px] pb-3 pt-2.5">
@@ -120,7 +126,9 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           <div className="mt-1 animate-blink text-[10.5px] font-extrabold text-[#60a5fa]">🚚 กำลังเดินทางมาไทย</div>
         )}
         {stockLeft != null && (stockLeft <= 0
-          ? <div className="text-[10.5px] font-bold text-ink-faint">สินค้าหมด</div>
+          ? (goneKind === 'temp'
+            ? <div className="animate-blink text-[10.5px] font-extrabold text-[#fbbf24]">⏳ หมดชั่วคราว · รอหลุด</div>
+            : <div className="text-[10.5px] font-bold text-ink-faint">สินค้าหมด</div>)
           : stockLeft === 1
             ? <div className="animate-blink text-[10.5px] font-extrabold text-[#f87171]">🔥 ชิ้นสุดท้าย!</div>
             : stockLeft <= 3
@@ -132,7 +140,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           canQuickAdd
             ? <button onClick={doAdd} className="mt-2 w-full rounded-lg bg-cta py-2 text-[12.5px] font-bold text-white">+ ใส่ตะกร้า</button>
             : soldOut
-              ? <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-faint">สินค้าหมด</div>
+              ? <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-faint">{goneKind === 'temp' ? 'หมดชั่วคราว · รอหลุด' : 'สินค้าหมด'}</div>
               : <div className="mt-2 w-full rounded-lg border border-subtle py-2 text-center text-[12px] font-semibold text-ink-muted2">เลือกแบบในหน้าสินค้า →</div>
         )}
       </div>

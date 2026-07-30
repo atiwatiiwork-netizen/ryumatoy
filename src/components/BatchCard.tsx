@@ -5,7 +5,7 @@ import type { ProductBatch } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { baht } from '@/lib/theme';
 import { metaLine } from '@/domain/services/catalog';
-import { batchAvailable } from '@/domain/services/reservations';
+import { batchAvailable, batchGoneState } from '@/domain/services/reservations';
 import { ProductThumb, cx } from './ui';
 
 /** A special pre-order round (สต๊อกใบพรี) shown on the shop — same figure, its own lot/price.
@@ -21,6 +21,9 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
   const soldOut = avail <= 0;
   const lastOne = avail === 1;
   const fullPay = batch.deposit_amount >= batch.price_total;
+  // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ — อาจหลุดกลับมา (ยังกดเข้าไปเฝ้าได้)
+  // · 'gone' = ตั๋วออกครบจริง — กดเข้าไม่ได้แล้ว
+  const gone = batchGoneState(db, batch);
 
   const inner = (
     <div className={cx('block overflow-hidden rounded-card border bg-surface-2', soldOut ? 'border-subtle opacity-60' : 'border-accent-soft')}>
@@ -29,7 +32,9 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
         <span className="absolute right-2 top-2 rounded-md bg-cta px-2 py-0.5 text-[10px] font-bold text-white">{batch.label || 'รอบพิเศษ'}</span>
         {soldOut && (
           <div className="absolute inset-0 grid place-items-center bg-black/55">
-            <span className="rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-bold text-white">สินค้าหมด</span>
+            <span className={cx('rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-bold', gone === 'temp' ? 'animate-blink text-[#fbbf24]' : 'text-white')}>
+              {gone === 'temp' ? '⏳ หมดชั่วคราว · รอหลุด' : 'สินค้าหมด'}
+            </span>
           </div>
         )}
       </div>
@@ -38,7 +43,9 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
         <div className="line-clamp-2 min-h-[34px] text-[13px] font-semibold leading-tight">{product.series_name}</div>
         {soldOut ? (
           // ปิดราคา/มัดจำเมื่อรอบขายหมด — เหลือแค่ป้ายสถานะ (ไม่โชว์ตัวเลขให้สับสน)
-          <div className="mt-1.5 text-[13px] font-extrabold text-ink-faint">ปิดรอบ · สินค้าหมด</div>
+          gone === 'temp'
+            ? <div className="mt-1.5 animate-blink text-[12.5px] font-extrabold text-[#fbbf24]">⏳ หมดชั่วคราว — รอสลิปตรวจ อาจมีของหลุด</div>
+            : <div className="mt-1.5 text-[13px] font-extrabold text-ink-faint">ปิดรอบ · สินค้าหมด</div>
         ) : (
           <>
             <div className="mt-1.5 flex items-center gap-2">
@@ -60,6 +67,6 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
     </div>
   );
 
-  // sold-out stays visible but is not clickable (nothing to buy)
-  return soldOut ? inner : <Link href={`/shop/${product.id}?batch=${batch.id}`}>{inner}</Link>;
+  // หมดจริง (gone) = กดเข้าไม่ได้แล้ว (เจ้าของ 2026-07-30) · หมดชั่วคราว (temp) ยังกดเข้าไปเฝ้ารอหลุดได้
+  return gone === 'gone' ? inner : <Link href={`/shop/${product.id}?batch=${batch.id}`}>{inner}</Link>;
 }

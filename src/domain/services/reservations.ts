@@ -62,3 +62,37 @@ export function availableFor(db: Database, p: Product): number {
 export function batchAvailable(db: Database, b: ProductBatch): number {
   return Math.max(0, (b.stock_qty ?? 0) - batchSoldTickets(db, b.id) - pendingHeld(db, b.product_id, b.id));
 }
+
+// ── เพดานซื้อรอบพิเศษต่อคน (เจ้าของ 2026-07-30 — ของ hot คนแย่งกัน เช่น Orochimaru) ──
+export const BATCH_MAX_PER_USER = 3;
+
+/** จำนวนที่คนนี้ "ถือแล้ว" ในรอบ = ตั๋วที่ออกแล้ว (รวมที่แอดมินมอบ) + hold ค้างของตัวเอง
+ *  (กำลังอยู่หน้าจ่าย/สลิปรอตรวจ). excludeResIds = hold ที่หนุนออเดอร์ที่กำลังส่งอยู่ตอนนี้ —
+ *  ต้องยกเว้น ไม่งั้นการซื้อครั้งแรกถูกนับซ้ำ (hold 3 + รายการ 3 = 6 ทั้งที่คือของก้อนเดียวกัน). */
+export function userTakenInBatch(db: Database, userId: string, batchId: string, excludeResIds?: string[]): number {
+  const fromTickets = db.tickets.filter((t) => t.batch_id === batchId && t.owner_id === userId).reduce((s, t) => s + t.qty, 0);
+  const fromHolds = db.stockReservations
+    .filter((r) => r.batch_id === batchId && r.user_id === userId && !excludeResIds?.includes(r.id))
+    .filter(isPendingHold)
+    .reduce((s, r) => s + r.qty, 0);
+  return fromTickets + fromHolds;
+}
+
+/** โควตาที่ยังซื้อได้ในรอบนี้ตามเพดานต่อคน (ยังไม่หักว่าสต๊อกเหลือจริงเท่าไหร่). */
+export function userBatchQuota(db: Database, userId: string, batchId: string): number {
+  return Math.max(0, BATCH_MAX_PER_USER - userTakenInBatch(db, userId, batchId));
+}
+
+/** สถานะ "หมด" ของรอบ (เจ้าของ 2026-07-30): null = ยังมีของ ·
+ *  'temp' = หมดชั่วคราว — มีคนถือ hold/สลิปรอตรวจอยู่ ถ้าไม่ผ่าน/หมดเวลา ของจะหลุดกลับมา ·
+ *  'gone' = หมดจริง — ตั๋วออกครบทั้งรอบแล้ว ไม่มีทางหลุด. */
+export function batchGoneState(db: Database, b: ProductBatch): 'temp' | 'gone' | null {
+  if (batchAvailable(db, b) > 0) return null;
+  return pendingHeld(db, b.product_id, b.id) > 0 ? 'temp' : 'gone';
+}
+
+/** เวอร์ชัน in-stock ของ batchGoneState — แนวคิดเดียวกัน (hold ค้าง = อาจหลุดคืน). */
+export function stockGoneState(db: Database, p: Product): 'temp' | 'gone' | null {
+  if (!p.is_stock || availableFor(db, p) > 0) return null;
+  return pendingHeld(db, p.id) > 0 ? 'temp' : 'gone';
+}

@@ -20,7 +20,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
   };
 }
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
-import { pendingHeld } from '../domain/services/reservations';
+import { pendingHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
@@ -80,6 +80,28 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
       return p.is_stock || p.status === 'open';
     });
     if (!sellable) return db;
+    // เพดานต่อคนต่อรอบพิเศษ (เจ้าของ 2026-07-30 — ของ hot คนแย่งกัน): ตั๋วที่มีแล้ว (รวมแอดมินมอบ)
+    // + hold ค้างของตัวเอง (ออเดอร์ก่อนที่สลิปยังรอตรวจ — ไม่นับ hold ที่หนุนออเดอร์นี้เอง)
+    // + ที่ซื้อครั้งนี้ ต้องไม่เกิน BATCH_MAX_PER_USER. ปัดตกทั้งออเดอร์แบบเดียวกับ gate —
+    // UI กันไว้ชั้นนอกแล้ว ชั้นนี้กันยิงตรง/ตะกร้าค้างข้ามเครื่อง/เปิดสองแท็บ
+    const perBatch = new Map<string, number>();
+    for (const l of lines) if (l.batchId) perBatch.set(l.batchId, (perBatch.get(l.batchId) ?? 0) + l.qty);
+    for (const [bid, q] of perBatch)
+      if (userTakenInBatch(db, userId, bid, reservationIds) + q > BATCH_MAX_PER_USER) return db;
+    // กันขายเกินของที่เหลือจริง ณ วินาทีส่ง (เจ้าของ 2026-07-30 — ของ hot คนแย่งกัน): ด่านหลักคือ
+    // RPC จอง (atomic ฝั่ง server) แต่ออเดอร์ที่ยิงตรง/ไม่มี hold ต้องไม่ทะลุ. ของที่ "ซื้อได้" ของ
+    // คนนี้ = ที่ว่างจริง + hold ของออเดอร์นี้เอง (available หัก hold ทุกใบไปแล้ว รวมของตัวเอง)
+    const ownHeld = (bid: string | undefined, pid: string) => db.stockReservations
+      .filter((r) => (bid ? r.batch_id === bid : r.product_id === pid && !r.batch_id) && !!reservationIds?.includes(r.id))
+      .filter(isPendingHold).reduce((s, r) => s + r.qty, 0);
+    for (const [bid, q] of perBatch) {
+      const b = db.batches.find((x) => x.id === bid);
+      if (!b || q > batchAvailable(db, b) + ownHeld(bid, b.product_id)) return db;
+    }
+    for (const l of lines) {
+      const p = db.products.find((x) => x.id === l.productId);
+      if (p?.is_stock && !l.batchId && l.qty > availableFor(db, p) + ownHeld(undefined, p.id)) return db;
+    }
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
     const items: OrderItem[] = lines.map((l) => {
