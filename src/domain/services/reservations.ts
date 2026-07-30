@@ -64,7 +64,8 @@ export function batchAvailable(db: Database, b: ProductBatch): number {
 }
 
 // ── เพดานซื้อรอบพิเศษต่อคน (เจ้าของ 2026-07-30 — ของ hot คนแย่งกัน เช่น Orochimaru) ──
-export const BATCH_MAX_PER_USER = 3;
+// เดิม 3 → ลดเป็น 2 (เจ้าของสั่งคืนวันเดียวกัน ก่อนลงจริง)
+export const BATCH_MAX_PER_USER = 2;
 
 /** จำนวนที่คนนี้ "ถือแล้ว" ในรอบ = ตั๋วที่ออกแล้ว (รวมที่แอดมินมอบ) + hold ค้างของตัวเอง
  *  (กำลังอยู่หน้าจ่าย/สลิปรอตรวจ). excludeResIds = hold ที่หนุนออเดอร์ที่กำลังส่งอยู่ตอนนี้ —

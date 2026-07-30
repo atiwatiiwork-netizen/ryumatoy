@@ -7,7 +7,8 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { productLabel } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
-import { userBatchQuota, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
+import { userBatchQuota, BATCH_MAX_PER_USER, batchAvailable, availableFor, pendingHeld } from '@/domain/services/reservations';
+import { useToast } from '@/state/ToastProvider';
 import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
@@ -30,6 +31,27 @@ export default function CartPage() {
   const depositSum = cart.lines.reduce((s, l) => (db.products.some((p) => p.id === l.productId) ? s + unitDeposit(l) * l.qty : s), 0);
   const payNow = depositSum;
   const goBack = useSmartBack('/shop'); // back to wherever the customer came from (board / shop)
+  const { flash } = useToast();
+
+  // ── สถานะ "ของหมด" ต่อบรรทัด (เจ้าของ 2026-07-30: ของหมดต้องรู้ตั้งแต่ตะกร้า ไม่ใช่ไปงงหน้าชำระ) ──
+  // 'temp' = มีคนถือ hold/สลิปรอตรวจ (รอของหลุดได้) · 'gone' = ตั๋วออกครบจริง · null = ยังซื้อได้
+  const lineGone = (l: (typeof cart.lines)[number]): 'temp' | 'gone' | null => {
+    const p = db.products.find((pp) => pp.id === l.productId);
+    if (!p) return null;
+    if (l.batchId) {
+      const b = db.batches.find((bb) => bb.id === l.batchId);
+      if (!b || b.status !== 'open' || b.published === false) return 'gone'; // รอบปิดไปแล้ว
+      if (l.qty <= batchAvailable(db, b)) return null;
+      return pendingHeld(db, p.id, l.batchId) > 0 ? 'temp' : 'gone';
+    }
+    if (p.is_stock && l.qty > availableFor(db, p)) return pendingHeld(db, p.id) > 0 ? 'temp' : 'gone';
+    return null;
+  };
+  const deadCount = cart.lines.filter((l) => lineGone(l) !== null).length;
+  const goCheckout = () => {
+    if (deadCount > 0) return flash('⏳ มีสินค้าหมดชั่วคราวในตะกร้า — รอของหลุด หรือเอาออกก่อนแล้วค่อยชำระ');
+    router.push('/checkout');
+  };
 
   if (cart.lines.length === 0) {
     return (
@@ -56,8 +78,9 @@ export default function CartPage() {
           const isPre = !product.is_stock;
           // line photo: the chosen แบบ's own image first, else the product photo
           const img = variant?.image_url ?? product.images[0] ?? db.variants.find((v) => v.product_id === product.id && v.image_url)?.image_url;
+          const gone = lineGone(l);
           return (
-            <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')} className="flex gap-3 rounded-card border border-subtle bg-surface-2 p-[11px]">
+            <div key={l.productId + (l.variantId ?? '') + (l.batchId ?? '')} className={cx('flex gap-3 rounded-card border bg-surface-2 p-[11px]', gone ? 'border-[#d97706]/45 opacity-90' : 'border-subtle')}>
               <ProductThumb isStock={product.is_stock} size={72} showRibbon={false} src={img} />
               <div className="min-w-0 flex-1">
                 <div className="flex justify-between gap-2">
@@ -67,6 +90,11 @@ export default function CartPage() {
                 <span className={cx('mt-1.5 inline-block rounded-md px-2 py-0.5 text-[10.5px] font-semibold', isPre ? 'bg-[#16a34a]/[0.14] text-[#4ade80]' : 'bg-[#2563eb]/[0.14] text-[#60a5fa]')}>
                   {isPre ? 'พรีออเดอร์ · มัดจำ' : 'พร้อมส่ง · เต็มจำนวน'}
                 </span>
+                {gone && (
+                  <span className={cx('ml-1.5 mt-1.5 inline-block rounded-md px-2 py-0.5 text-[10.5px] font-bold', gone === 'temp' ? 'animate-blink bg-[#d97706]/20 text-[#fbbf24]' : 'bg-white/[0.08] text-ink-faint')}>
+                    {gone === 'temp' ? '⏳ หมดชั่วคราว · รอของหลุด' : 'สินค้าหมดแล้ว'}
+                  </span>
+                )}
                 <div className="mt-2 flex items-center justify-between">
                   {/* รอบพิเศษจำกัด 3 ตัว/คน (เจ้าของ 2026-07-30) — เพดาน = โควตาที่เหลือ
                       (หักตั๋วที่มี + สลิปรอตรวจแล้ว) กันกดบวกเกินแล้วไปตายตอนส่งออเดอร์ */}
@@ -96,7 +124,12 @@ export default function CartPage() {
         </div>
       </div>
 
-      <Button icon="arrowRight" onClick={() => router.push('/checkout')}>สรุปออเดอร์</Button>
+      {deadCount > 0 && (
+        <div className="mb-2.5 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-2.5 text-[12.5px] text-[#fbbf24]">
+          ⏳ มีสินค้าหมดชั่วคราว {deadCount} รายการ — ถ้าคนที่จองไว้ไม่ชำระ ของจะกลับมาให้กด หรือเอาออกจากตะกร้าก่อนแล้วค่อยชำระรายการอื่น
+        </div>
+      )}
+      <Button icon="arrowRight" onClick={goCheckout}>สรุปออเดอร์</Button>
 
       {/* นัดจ่ายทีหลัง (v57 เจ้าของ 2026-07-26): ย้ายไปเป็นงานแอดมินล้วน — ลูกค้าตั้งนัดเองไม่ได้แล้ว
           แอดมินออกนัดให้ที่ /admin/today แล้วลูกค้าจ่ายจากเมนู "นัดชำระ" (/plans) */}

@@ -16,7 +16,7 @@ import { submitOrder, markPlanPaid } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel } from '@/domain/services/catalog';
-import { batchAvailable, availableFor } from '@/domain/services/reservations';
+import { batchAvailable, availableFor, isPendingHold, pendingHeld } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
@@ -81,27 +81,53 @@ export default function CheckoutPage() {
   // ⚠ ต้องเช็ค "ทุกบรรทัด" ไม่ใช่เฉพาะของที่มีจำนวนจำกัด — พรีปกติที่ปิดรับจองไปแล้ว
   //   เคยไม่ถูกเช็คเลย: หน้าจอโชว์เลขบัญชี → ลูกค้าโอน → submitOrder ปัดตกด้วย sellable guard
   //   = โอนแล้วไม่มีออเดอร์ (เคสเดียวกับ Kid Naruto คนละประตู) audit v57 #2
+  const [resIds, setResIds] = useState<string[]>([]);
+  // hold "ของออเดอร์นี้เอง" ต้องไม่ถูกนับเป็นของคนอื่น (บั๊กแฝง 2026-07-30): หลัง poll ดึง
+  // reservation ของเราเข้ามาใน db แล้ว available จะเหลือ 0 ทั้งที่คนถือคือเราเอง —
+  // ไม่หักออกจะโดนบล็อก "ถูกจองครบแล้ว" ทั้งที่กำลังถือของอยู่ (สูตรเดียวกับ submitOrder)
+  const ownHeldHere = (batchId: string | undefined, productId: string) => db.stockReservations
+    .filter((r) => (batchId ? r.batch_id === batchId : r.product_id === productId && !r.batch_id) && resIds.includes(r.id))
+    .filter(isPendingHold).reduce((s, r) => s + r.qty, 0);
   const deadLines = validLines.filter((l) => {
     const p = db.products.find((pp) => pp.id === l.productId);
     if (!p) return true;
     if (l.batchId) {
       const b = db.batches.find((bb) => bb.id === l.batchId);
       if (!b || b.status !== 'open' || b.published === false) return true;   // รอบปิด/ยังเป็นร่าง
-      return l.qty > batchAvailable(db, b);
+      return l.qty > batchAvailable(db, b) + ownHeldHere(l.batchId, p.id);
     }
-    if (p.is_stock) return l.qty > availableFor(db, p);
+    if (p.is_stock) return l.qty > availableFor(db, p) + ownHeldHere(undefined, p.id);
     return p.status !== 'open';                                             // พรีปกติปิดรับจองแล้ว
   });
   // ตะกร้ามีของ แต่สินค้าถูกลบออกจากร้านหมดแล้ว → ต้องบล็อกเหมือนของหมด
   // (เดิมหลุดทุกด่าน: validLines ว่าง → ยอด 0 → เข้าโหมด "ไม่ต้องโอน" → กดยืนยันได้ตั๋วเปล่า) audit ลูกค้า #3
   const allGone = cart.lines.length > 0 && validLines.length === 0;
   const clientSoldOut = deadLines.length > 0 || allGone;
-  const [resIds, setResIds] = useState<string[]>([]);
   const [resUntil, setResUntil] = useState<number | null>(null);
   const [soldOut, setSoldOut] = useState(false);
   const [expired, setExpired] = useState(false);
   const [nowTs, setNowTs] = useState(Date.now());
   const started = useRef(false);
+
+  // ── ของหมดตั้งแต่ "ก่อนเข้า" หน้า → ไม่ให้เข้าเลย (เจ้าของ 2026-07-30: ลูกค้ากดเข้ามาแล้วงง) ──
+  // เด้งกลับตะกร้าพร้อม text ลอยบอกเหตุผล: มี hold/สลิปค้าง = "หมดชั่วคราว รอของหลุด" / ตั๋วครบจริง = หมดแล้ว
+  // เฉพาะตอนยังไม่เริ่มจอง (started=false) — ถ้าของหมดกลางทางระหว่างถือ hold อยู่ ให้แผงเดิมในหน้าจัดการ
+  const bounced = useRef(false);
+  useEffect(() => {
+    if (!clientSoldOut || bounced.current || started.current || mustLogin || needsApproval) return;
+    bounced.current = true;
+    const anyTemp = deadLines.some((l) => {
+      const p = db.products.find((pp) => pp.id === l.productId);
+      if (!p) return false;
+      if (l.batchId) return pendingHeld(db, p.id, l.batchId) > 0;
+      return p.is_stock && pendingHeld(db, p.id) > 0;
+    });
+    flash(allGone ? 'สินค้าในตะกร้าถูกนำออกจากร้านแล้ว — ลบออกจากตะกร้าได้เลย'
+      : anyTemp ? '⏳ สินค้าหมดชั่วคราว กรุณารอของหลุด — ถ้าคนที่จองไว้ไม่ชำระ ของจะกลับมาให้กด'
+      : 'สินค้าหมดแล้ว — ถูกจองครบทั้งรอบ 🙏');
+    router.replace('/cart');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientSoldOut, mustLogin, needsApproval]);
 
   useEffect(() => {
     if (started.current || mustLogin || needsApproval || !needsReserve) return;
