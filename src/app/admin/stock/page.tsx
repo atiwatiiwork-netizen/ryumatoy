@@ -1114,29 +1114,68 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         </div>
       )}
 
-      {open && (
-        <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
-          <div className="mb-2 text-[12px] font-semibold text-ink-muted">📋 ประวัติตั๋วของล็อตนี้ — รอบ {roundNo} “{b.label}” · เปิด {fmtDate(b.created_at)} · {buyers.reduce((s, x) => s + x.qty, 0)} ชิ้น · แตะรายชื่อดูตั๋ว/สลิป</div>
-          {tickets.length === 0 ? <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div> : (
-            <div className="flex flex-col gap-1.5">
-              {tickets.map((t) => {
-                // ที่มาของตั๋วในล็อต: มอบเอง (ให้ตั๋ว) หรือซื้อผ่านหน้าร้าน — ราคาอ่านจาก snapshot บนตั๋ว
-                const granted = ticketSourceOf(db, t) === 'granted';
-                const unit = Math.round((t.deposit_paid + t.remaining_amount) / Math.max(1, t.qty));
-                return (
-                  <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
-                    <span className="flex items-center gap-2">
-                      <Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}
-                      <span className={cx('rounded px-1.5 py-0.5 text-[10px] font-bold', granted ? 'bg-[#8b5cf6]/[0.16] text-[#c4b5fd]' : 'bg-[#d4af37]/15 text-[#f1d27a]')}>{granted ? '🎁 ให้ตั๋ว' : `🛒 ซื้อรอบ ${roundNo}`}</span>
-                    </span>
-                    <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unit)}/ชิ้น</b>{unit !== b.price_total ? <span className="text-[10.5px] text-[#fbbf24]"> (รอบนี้ {baht(b.price_total)})</span> : null} · มัดจำ <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
-                  </button>
-                );
-              })}
+      {open && (() => {
+        // ── ประวัติตั๋วทั้ง SKU จัดกลุ่มใหม่ (เจ้าของ 2026-07-30: เดิมกองรวมกันอ่านงง) ──
+        // สรุปหัว: มีทั้งหมด N = มอบตั๋ว x ราคา x / รอบ 1 x ราคา x / รอบ 2 ... / เก็บ
+        // กลุ่ม: 🎁 มอบตั๋ว (เรียงวันที่เก่า→ใหม่) แล้วค่อย 🛒 ซื้อรอบ X ทีละรอบ
+        const roundsAll = db.batches.filter((x) => x.product_id === b.product_id).sort((x, y) => (x.created_at < y.created_at ? -1 : 1));
+        const noOf = (bid: string) => roundsAll.findIndex((x) => x.id === bid) + 1;
+        const skuTickets = db.tickets.filter((t) => t.product_id === b.product_id && t.batch_id);
+        const byDate = (x: PreorderTicket, y: PreorderTicket) => (x.created_at < y.created_at ? -1 : 1);
+        const grantedRows = skuTickets.filter((t) => ticketSourceOf(db, t) === 'granted').sort(byDate);
+        const buyGroups = roundsAll
+          .map((r) => ({ no: noOf(r.id), rows: skuTickets.filter((t) => t.batch_id === r.id && ticketSourceOf(db, t) !== 'granted').sort(byDate) }))
+          .filter((g) => g.rows.length > 0);
+        const qtyOf = (rows: PreorderTicket[]) => rows.reduce((s, t) => s + t.qty, 0);
+        const unitOf = (t: PreorderTicket) => Math.round((t.deposit_paid + t.remaining_amount) / Math.max(1, t.qty));
+        // ราคาในกลุ่ม: ราคาเดียว → "฿1,640" · หลายราคา → "฿1,640×5 · ฿2,040×2"
+        const priceMix = (rows: PreorderTicket[]) => {
+          const m = new Map<number, number>();
+          rows.forEach((t) => m.set(unitOf(t), (m.get(unitOf(t)) ?? 0) + t.qty));
+          const es = [...m.entries()].sort((x, y) => x[0] - y[0]);
+          return es.length === 1 ? `ราคา ${baht(es[0][0])}` : es.map(([u, n]) => `${baht(u)}×${n}`).join(' · ');
+        };
+        const pool = p && !p.is_stock ? (p.surplus_qty ?? 0) : null;
+        const keep = p && !p.is_stock ? Math.max(0, stockRemaining(db, p) - (b.status === 'open' ? remaining : 0)) : null;
+        const Row = ({ t, tag }: { t: PreorderTicket; tag?: string }) => (
+          <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
+            <span className="flex items-center gap-2">
+              <Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}
+              {tag && <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">{tag}</span>}
+            </span>
+            <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unitOf(t))}</b> · มัดจำ {t.deposit_paid > 0 ? <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> : <b className="text-[#f87171]">฿0 ยังไม่จ่าย</b>} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
+          </button>
+        );
+        return (
+          <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
+            <div className="mb-1.5 text-[12px] font-semibold text-ink-muted">📋 ประวัติตั๋ว {p?.series_name} · แตะรายชื่อดูตั๋ว/สลิป</div>
+            {/* สรุปยอดแบบอ่านรวดเดียวจบ */}
+            <div className="mb-2.5 flex flex-wrap gap-1.5 text-[11px] font-bold">
+              {pool != null && <span className="rounded-md bg-white/[0.08] px-2 py-1 text-ink">มีทั้งหมด {pool} ชิ้น</span>}
+              {grantedRows.length > 0 && <span className="rounded-md bg-[#8b5cf6]/[0.16] px-2 py-1 text-[#c4b5fd]">🎁 มอบตั๋ว {qtyOf(grantedRows)} · {priceMix(grantedRows)}</span>}
+              {buyGroups.map((g) => <span key={g.no} className="rounded-md bg-[#d4af37]/15 px-2 py-1 text-[#f1d27a]">🛒 รอบ {g.no} ขาย {qtyOf(g.rows)} · {priceMix(g.rows)}</span>)}
+              {b.status === 'open' && remaining > 0 && <span className="rounded-md bg-[#16a34a]/15 px-2 py-1 text-[#4ade80]">เปิดขายเหลือ {remaining}</span>}
+              {keep != null && keep > 0 && <span className="rounded-md bg-white/[0.08] px-2 py-1 text-ink-muted2">🔒 เก็บในคลัง {keep}</span>}
             </div>
-          )}
-        </div>
-      )}
+            {skuTickets.length === 0 ? <div className="text-[12.5px] text-ink-faint">ยังไม่มีตั๋วเลย</div> : (
+              <div className="flex flex-col gap-2.5">
+                {grantedRows.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[11px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว ({grantedRows.length} ใบ · เรียงตามวันที่)</div>
+                    <div className="flex flex-col gap-1">{grantedRows.map((t) => <Row key={t.id} t={t} tag={roundsAll.length > 1 ? `รอบ ${noOf(t.batch_id!)}` : undefined} />)}</div>
+                  </div>
+                )}
+                {buyGroups.map((g) => (
+                  <div key={g.no}>
+                    <div className="mb-1 text-[11px] font-bold text-[#f1d27a]">🛒 ซื้อหน้าร้าน รอบ {g.no} ({g.rows.length} ใบ · เรียงตามวันที่)</div>
+                    <div className="flex flex-col gap-1">{g.rows.map((t) => <Row key={t.id} t={t} />)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {peek && <TicketPeek ticket={peek} onClose={() => setPeek(null)} />}
     </div>

@@ -76,14 +76,22 @@ export function grantedTicketIds(db: Database): Set<string> {
   const hit = grantedCache.get(db);
   if (hit) return hit;
   // ออเดอร์ที่อนุมัติแล้วครอบคลุมตั๋วใบไหนบ้าง — จับคู่ด้วย เจ้าของ+สินค้า+รอบ แบบใช้ครั้งเดียว
+  // ⚠ คนเดียวกัน "ทั้งซื้อทั้งถูกมอบ" ในรอบเดียว (เจอตอนจัดกลุ่มประวัติ 2026-07-30): เดิมหยิบใบแรก
+  //   ที่เจอ → ป้าย ให้ตั๋ว/ซื้อ สลับใบกันได้ (ยอดเงินต่อคนไม่ผิด แต่ประวัติชี้ผิดใบ)
+  //   ตอนนี้เลือกใบที่ "มัดจำตรงกับออเดอร์" ก่อน แล้วค่อยใบที่เวลาใกล้ตอนอนุมัติสุด
   const covered = new Set<string>();
   for (const o of db.orders) {
     if (o.status !== 'approved') continue;
+    const oTime = new Date(o.approved_at ?? o.created_at).getTime();
     for (const it of o.items) {
-      const t = db.tickets.find((x) => !covered.has(x.id) && x.owner_id === o.user_id
+      const cands = db.tickets.filter((x) => !covered.has(x.id) && x.owner_id === o.user_id
         && x.product_id === it.product_id && (x.batch_id ?? null) === (it.batch_id ?? null)
         && (x.variant_id ?? null) === (it.variant_id ?? null));
-      if (t) covered.add(t.id);
+      if (cands.length === 0) continue;
+      const score = (x: PreorderTicket) =>
+        ((x.deposit_paid ?? 0) === (it.unit_deposit ?? 0) * x.qty ? 0 : 1e12)
+        + Math.abs(new Date(x.approved_at ?? x.created_at).getTime() - oTime);
+      covered.add(cands.sort((a, b) => score(a) - score(b))[0].id);
     }
   }
   // ⚠ ตัดตั๋วที่เกิดจาก "หาของ" ออก — มัดจำก้อนนั้นถูกนับไปแล้วในช่อง sourcing
