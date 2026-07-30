@@ -398,11 +398,45 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
   return { ...db, products, stockAdditions, batches: [batch, ...db.batches] };
 };
 
-/** เปิดขายรอบร่าง (publish) — ขึ้นหน้าร้านตั้งแต่ตอนนี้; ผู้เรียก (UI) เป็นคนยิง push เอง. */
-export const publishBatch = (batchId: string) => (db: Database): Database => {
+/** เปิดขายรอบร่าง (publish) — ขึ้นหน้าร้านตั้งแต่ตอนนี้; ผู้เรียก (UI) เป็นคนยิง push เอง.
+ *
+ *  flow เจ้าของ 2026-07-28: ก่อนเปิดขายให้ **ตั้งราคา/มัดจำ/จำนวนของล็อตนี้** ได้ที่จุดเดียวกัน
+ *  (สร้างร่างไว้ก่อน → มอบตั๋วลูกค้าเก่าราคาที่ตกลงกัน → ค่อยตั้งราคาหน้าร้านตอนกดเปิดขาย)
+ *  กติกา snapshot: ตั๋วที่มอบ/ขายไปแล้ว **ราคาอยู่บนตั๋วใครตั๋วมัน ไม่ถูกแตะ** — ราคาใหม่มีผลเฉพาะ
+ *  คนที่ซื้อจากหน้าร้านหลังเปิดขาย (แต่ละล็อตก็ snapshot ของตัวเอง ไม่ปนกันข้ามรอบ)
+ *  จำนวน: ลดต่ำกว่าที่มอบ+จองค้างไปแล้วไม่ได้ (คลาดเคลื่อน = คืน db เดิม ให้ UI แจ้ง)
+ *  ปรับจำนวนแล้วคลัง SKU (surplus) ขยับตาม + ลง stockAdditions ให้ตรวจย้อนหลังได้. */
+export const publishBatch = (batchId: string, patch?: { price?: number; deposit?: number; qty?: number }) => (db: Database): Database => {
   const b = db.batches.find((x) => x.id === batchId);
   if (!b || b.status !== 'open' || b.published !== false) return db;
-  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, published: true } : x)) };
+  const wasFullPay = b.deposit_amount >= b.price_total;
+  const price = patch?.price != null && patch.price > 0 ? Math.round(patch.price) : b.price_total;
+  // ไม่ระบุมัดจำ: รอบจ่ายเต็มตามราคาใหม่ / รอบมัดจำคงยอดเดิม (แต่ห้ามเกินราคาใหม่)
+  const deposit = patch?.deposit != null && patch.deposit > 0
+    ? Math.min(price, Math.round(patch.deposit))
+    : wasFullPay ? price : Math.min(price, b.deposit_amount);
+  let qty = b.stock_qty;
+  if (patch?.qty != null && patch.qty > 0) {
+    const taken = db.tickets.filter((t) => t.batch_id === b.id).reduce((s, t) => s + t.qty, 0)
+      + pendingHeld(db, b.product_id, b.id);
+    if (Math.floor(patch.qty) < taken) return db; // ต่ำกว่าที่มอบ/จองค้างแล้ว — ไม่รับ
+    qty = Math.floor(patch.qty);
+  }
+  const dQty = qty - b.stock_qty;
+  const now = new Date().toISOString();
+  return {
+    ...db,
+    batches: db.batches.map((x) => (x.id === batchId
+      ? { ...x, published: true, price_total: price, deposit_amount: deposit, stock_qty: qty }
+      : x)),
+    // จำนวนเปลี่ยน → คลัง SKU ต้องขยับเท่ากัน (openSpecialRound เคย +stock_qty เข้า surplus ไว้)
+    products: dQty !== 0
+      ? db.products.map((x) => (x.id === b.product_id ? { ...x, surplus_qty: Math.max(0, (x.surplus_qty ?? 0) + dQty) } : x))
+      : db.products,
+    stockAdditions: dQty !== 0
+      ? [{ id: id('sa'), product_id: b.product_id, qty: dQty, note: `ปรับจำนวนตอนเปิดขาย "${b.label}" ${dQty > 0 ? '+' : ''}${dQty}`, created_at: now }, ...db.stockAdditions]
+      : db.stockAdditions,
+  };
 };
 
 /**

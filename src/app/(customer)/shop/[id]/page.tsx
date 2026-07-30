@@ -46,7 +46,14 @@ export default function ProductDetailPage() {
 
   // reopened stock batch (from a ?batch= link) overrides the price/deposit
   // ร่าง (published === false) เข้าผ่านลิงก์ตรงไม่ได้ — ยังไม่เปิดขาย (v53)
-  const batch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open' && b.published !== false);
+  const linkedBatch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open' && b.published !== false);
+  // ไม่มี ?batch= ในลิงก์ (เข้าตรง/บุ๊กมาร์ก): ถ้ากระดานหลักปิดรับแล้วแต่มีรอบพิเศษเปิดขายอยู่
+  // → โชว์รอบนั้นเลย ไม่งั้นลูกค้าเห็นราคาบอร์ดเก่า + "ปิดรับจองแล้ว" ทั้งที่รอบกำลังขาย (2026-07-28)
+  // กระดานหลักยัง 'open' อยู่ = ขายทางบอร์ดตามเดิม ไม่แย่งกัน
+  const autoBatch = !params.get('batch') && !product.is_stock && product.status !== 'open'
+    ? db.batches.find((b) => b.product_id === product.id && b.status === 'open' && b.published !== false)
+    : undefined;
+  const batch = linkedBatch ?? autoBatch;
   const variant = variants.find((v) => v.id === variantId);
   const rawPrice = batch ? batch.price_total : (variant?.price_total ?? product.price_total);
   const rawDeposit = batch ? batch.deposit_amount : (variant?.deposit_amount ?? product.deposit_amount);

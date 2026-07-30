@@ -15,6 +15,7 @@ import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacySt
 import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
+import { ticketSourceOf } from '@/domain/services/ticketSource';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
@@ -832,14 +833,32 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
   };
 
-  // ── ร่าง → เปิดขาย (publish): ขึ้นหน้าร้าน + push (DNA: ไม่บอกจำนวน) ──
+  // ── ร่าง → เปิดขาย (publish): ตั้งราคา/มัดจำ/จำนวนของล็อตนี้ก่อน แล้วค่อยขึ้นหน้าร้าน + push ──
+  // (เจ้าของ 2026-07-28: มอบตั๋วลูกค้าเก่าราคาที่ตกลงไว้ → ตอนเปิดขายจริงค่อยตั้งราคาหน้าร้าน
+  //  ตั๋วที่ออกไปแล้ว snapshot ราคาใครราคามัน ไม่ถูกแตะ · DNA push: ไม่บอกจำนวน)
   const isDraft = b.status === 'open' && b.published === false;
+  const [pubOpen, setPubOpen] = useState(false);
+  const [pubPrice, setPubPrice] = useState(String(b.price_total));
+  const [pubDep, setPubDep] = useState(fullPay ? '' : String(b.deposit_amount));
+  const [pubQty, setPubQty] = useState(String(b.stock_qty));
   const doPublish = () => {
-    if (!confirm(`เปิดขาย "${p?.series_name}" ขึ้นหน้าร้าน + แจ้งลูกค้า?`)) return;
-    dispatch(publishBatch(b.id));
+    const pr = Number(pubPrice) || 0;
+    const dp = Number(pubDep) || 0;
+    const q = Number(pubQty) || 0;
+    if (pr <= 0) return flash('ใส่ราคาขายก่อน');
+    if (!fullPay && dp > 0 && dp >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย');
+    if (q < sold) return flash(`จำนวนต้องไม่ต่ำกว่า ${sold} (มอบ/ขายไปแล้ว)`);
+    const effDep = fullPay ? pr : (dp > 0 ? dp : Math.min(b.deposit_amount, pr));
+    if (!confirm(`เปิดขาย "${p?.series_name}" · ${baht(pr)}${fullPay ? ' (จ่ายเต็ม)' : ` · มัดจำ ${baht(effDep)}`} · ${q} ชิ้น\nขึ้นหน้าร้าน + แจ้งลูกค้าทันที${tickets.length > 0 ? `\nตั๋วที่ออกแล้ว ${tickets.length} ใบ ราคาเดิมไม่เปลี่ยน (snapshot)` : ''}`)) return;
+    dispatch(publishBatch(b.id, { price: pr, deposit: fullPay ? undefined : (dp > 0 ? dp : undefined), qty: q }));
+    // อ่านกลับ — จำนวนต่ำกว่าที่มอบ+จองค้าง (hold ที่มองไม่เห็นบนหน้า) จะถูก mutation ปัดตก
+    let live: ProductBatch | undefined;
+    dispatch((d) => { live = d.batches.find((x) => x.id === b.id); return d; });
+    if (!live || live.published === false) return flash('เปิดขายไม่สำเร็จ — จำนวนอาจต่ำกว่าที่จองค้างอยู่ ลองเพิ่มจำนวนแล้วกดใหม่');
     if (p && pushEnabled(db, 'restock'))
-      sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(b.price_total)}${fullPay ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(b.deposit_amount)}`}`, url: `/shop/${b.product_id}?batch=${b.id}` }, dispatch).catch(() => {});
-    flash('🚀 เปิดขายแล้ว · ขึ้นหน้าร้าน + แจ้งลูกค้า');
+      sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(live.price_total)}${live.deposit_amount >= live.price_total ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(live.deposit_amount)}`}`, url: `/shop/${b.product_id}?batch=${b.id}` }, dispatch).catch(() => {});
+    setPubOpen(false);
+    flash(`🚀 เปิดขายแล้ว ${baht(live.price_total)} · ${live.stock_qty} ชิ้น · ขึ้นหน้าร้าน + แจ้งลูกค้า`);
   };
 
   // ── มอบตั๋วให้ลูกค้าโดยตรง (ไล่เก็บใบพรีเก่า) — ตัดสต๊อกรอบอัตโนมัติ ──
@@ -935,7 +954,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.1] px-3 py-1.5 text-[12px] font-bold text-[#f1d27a]">🎫 ลูกค้า ({tickets.length}) {open ? '▲' : '▼'}</button>
         {isDraft && !readOnly && (
-          <button onClick={doPublish} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">🚀 เปิดขาย + แจ้งลูกค้า</button>
+          <button onClick={() => setPubOpen((v) => !v)} className={cx('rounded-lg px-3 py-1.5 text-[12px] font-bold text-white', pubOpen ? 'bg-surface-4' : 'bg-cta')}>🚀 เปิดขาย + แจ้งลูกค้า {pubOpen ? '▲' : ''}</button>
         )}
         {!readOnly && b.status === 'open' && remaining > 0 && (
           <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
@@ -968,6 +987,30 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         {!readOnly && noBuyers && <button onClick={() => { if (confirm('ยกเลิกรอบนี้? (ยังไม่มีคนซื้อ)')) { dispatch(removeBatch(b.id)); flash('ยกเลิกรอบแล้ว'); } }} className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-2.5 py-1.5 text-[12px] font-semibold text-primary-soft">ยกเลิก</button>}
         {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
       </div>
+
+      {/* ตั้งราคา/มัดจำ/จำนวน "ของล็อตนี้" ก่อนเปิดขายจริง — ตั๋วที่ออกแล้วไม่ถูกแตะ (snapshot) */}
+      {pubOpen && isDraft && !readOnly && (
+        <div className="mt-2 rounded-lg border border-[#d4af37]/50 bg-[#d4af37]/[0.06] p-2.5">
+          <div className="mb-2 text-[11.5px] font-bold text-[#f1d27a]">🚀 ตั้งราคาล็อตนี้ก่อนเปิดขาย — ยืนยันแล้วขึ้นหน้าร้าน + แจ้งลูกค้าทันที</div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-[11px] text-ink-faint">ราคาขาย/ชิ้น
+              <input value={pubPrice} onChange={(e) => setPubPrice(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" className="mt-0.5 block w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
+            </label>
+            {!fullPay && (
+              <label className="text-[11px] text-ink-faint">มัดจำ/ชิ้น
+                <input value={pubDep} onChange={(e) => setPubDep(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder={String(b.deposit_amount)} className="mt-0.5 block w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
+              </label>
+            )}
+            <label className="text-[11px] text-ink-faint">จำนวน (ขั้นต่ำ {sold})
+              <input value={pubQty} onChange={(e) => setPubQty(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" className="mt-0.5 block w-20 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
+            </label>
+            <button onClick={doPublish} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">ยืนยันเปิดขาย + แจ้งลูกค้า</button>
+          </div>
+          {tickets.length > 0 && (
+            <div className="mt-1.5 text-[11px] text-ink-faint">🔒 ตั๋วที่มอบไปแล้ว {tickets.length} ใบ ({sold} ชิ้น) ราคาเดิมบนตั๋วไม่เปลี่ยน — ราคาใหม่ใช้กับคนซื้อหน้าร้านเท่านั้น</div>
+          )}
+        </div>
+      )}
 
       {/* มอบตั๋วให้ลูกค้าโดยตรง — ตัดสต๊อกรอบทันที · เลขตั๋วจองจาก server · มัดจำที่รับมาแล้วปรับได้ */}
       {granting && (
@@ -1040,15 +1083,23 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
       {open && (
         <div className="mt-2 rounded-xl border border-subtle bg-surface-3 p-3">
-          <div className="mb-2 text-[12px] font-semibold text-ink-muted">รอบ {roundNo} · เปิด {fmtDate(b.created_at)} · คนซื้อ {buyers.reduce((s, x) => s + x.qty, 0)} ตัว · แตะรายชื่อดูตั๋ว/สลิป</div>
+          <div className="mb-2 text-[12px] font-semibold text-ink-muted">📋 ประวัติตั๋วของล็อตนี้ — รอบ {roundNo} “{b.label}” · เปิด {fmtDate(b.created_at)} · {buyers.reduce((s, x) => s + x.qty, 0)} ชิ้น · แตะรายชื่อดูตั๋ว/สลิป</div>
           {tickets.length === 0 ? <div className="text-[12.5px] text-ink-faint">ยังไม่มีคนซื้อ</div> : (
             <div className="flex flex-col gap-1.5">
-              {tickets.map((t) => (
-                <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
-                  <span className="flex items-center gap-2"><Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}</span>
-                  <span className="text-ink-muted">×{t.qty} · มัดจำ <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> · รวม <b className="text-ink">{baht(t.deposit_paid + t.remaining_amount)}</b> · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
-                </button>
-              ))}
+              {tickets.map((t) => {
+                // ที่มาของตั๋วในล็อต: มอบเอง (ให้ตั๋ว) หรือซื้อผ่านหน้าร้าน — ราคาอ่านจาก snapshot บนตั๋ว
+                const granted = ticketSourceOf(db, t) === 'granted';
+                const unit = Math.round((t.deposit_paid + t.remaining_amount) / Math.max(1, t.qty));
+                return (
+                  <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
+                    <span className="flex items-center gap-2">
+                      <Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}
+                      <span className={cx('rounded px-1.5 py-0.5 text-[10px] font-bold', granted ? 'bg-[#8b5cf6]/[0.16] text-[#c4b5fd]' : 'bg-[#d4af37]/15 text-[#f1d27a]')}>{granted ? '🎁 ให้ตั๋ว' : `🛒 ซื้อรอบ ${roundNo}`}</span>
+                    </span>
+                    <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unit)}/ชิ้น</b>{unit !== b.price_total ? <span className="text-[10.5px] text-[#fbbf24]"> (รอบนี้ {baht(b.price_total)})</span> : null} · มัดจำ <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
