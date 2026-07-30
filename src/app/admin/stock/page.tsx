@@ -840,16 +840,19 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [pubOpen, setPubOpen] = useState(false);
   const [pubPrice, setPubPrice] = useState(String(b.price_total));
   const [pubDep, setPubDep] = useState(fullPay ? '' : String(b.deposit_amount));
-  const [pubQty, setPubQty] = useState(String(b.stock_qty));
+  // ช่องจำนวน = "เปิดขายหน้าร้านกี่ชิ้น" ไม่รวมที่มอบไปแล้ว (บั๊ก Orochimaru 2026-07-30:
+  // เดิมช่องนี้คือ "ทั้งรอบ" — แอดมินใส่ 5 ตั้งใจขาย 5 แต่ 5 ที่มอบแล้วกินโควตาหมด → ขึ้นสินค้าหมดทันที)
+  const [pubQty, setPubQty] = useState(String(Math.max(0, b.stock_qty - sold)));
   const doPublish = () => {
     const pr = Number(pubPrice) || 0;
     const dp = Number(pubDep) || 0;
-    const q = Number(pubQty) || 0;
+    const sell = Number(pubQty) || 0; // ขายหน้าร้าน (ชิ้น)
     if (pr <= 0) return flash('ใส่ราคาขายก่อน');
     if (!fullPay && dp > 0 && dp >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย');
-    if (q < sold) return flash(`จำนวนต้องไม่ต่ำกว่า ${sold} (มอบ/ขายไปแล้ว)`);
+    if (sell < 1) return flash('ใส่จำนวนที่จะเปิดขายอย่างน้อย 1 ชิ้น');
+    const q = sold + sell; // ทั้งรอบ = มอบแล้ว + เปิดขาย
     const effDep = fullPay ? pr : (dp > 0 ? dp : Math.min(b.deposit_amount, pr));
-    if (!confirm(`เปิดขาย "${p?.series_name}" · ${baht(pr)}${fullPay ? ' (จ่ายเต็ม)' : ` · มัดจำ ${baht(effDep)}`} · ${q} ชิ้น\nขึ้นหน้าร้าน + แจ้งลูกค้าทันที${tickets.length > 0 ? `\nตั๋วที่ออกแล้ว ${tickets.length} ใบ ราคาเดิมไม่เปลี่ยน (snapshot)` : ''}`)) return;
+    if (!confirm(`เปิดขาย "${p?.series_name}" · ${baht(pr)}${fullPay ? ' (จ่ายเต็ม)' : ` · มัดจำ ${baht(effDep)}`}\nเปิดให้กดหน้าร้าน ${sell} ชิ้น${sold > 0 ? ` (รวมทั้งรอบ ${q}: มอบแล้ว ${sold} + ขาย ${sell})` : ''}\nขึ้นหน้าร้าน + แจ้งลูกค้าทันที${tickets.length > 0 ? `\nตั๋วที่มอบแล้ว ${tickets.length} ใบ ราคาเดิมไม่เปลี่ยน (snapshot)` : ''}`)) return;
     dispatch(publishBatch(b.id, { price: pr, deposit: fullPay ? undefined : (dp > 0 ? dp : undefined), qty: q }));
     // อ่านกลับ — จำนวนต่ำกว่าที่มอบ+จองค้าง (hold ที่มองไม่เห็นบนหน้า) จะถูก mutation ปัดตก
     let live: ProductBatch | undefined;
@@ -858,7 +861,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     if (p && pushEnabled(db, 'restock'))
       sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(live.price_total)}${live.deposit_amount >= live.price_total ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(live.deposit_amount)}`}`, url: `/shop/${b.product_id}?batch=${b.id}` }, dispatch).catch(() => {});
     setPubOpen(false);
-    flash(`🚀 เปิดขายแล้ว ${baht(live.price_total)} · ${live.stock_qty} ชิ้น · ขึ้นหน้าร้าน + แจ้งลูกค้า`);
+    flash(`🚀 เปิดขายแล้ว ${baht(live.price_total)} · เปิดให้กด ${live.stock_qty - sold} ชิ้น · ขึ้นหน้าร้าน + แจ้งลูกค้า`);
   };
 
   // ── มอบตั๋วให้ลูกค้าโดยตรง (ไล่เก็บใบพรีเก่า) — ตัดสต๊อกรอบอัตโนมัติ ──
@@ -954,7 +957,17 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.1] px-3 py-1.5 text-[12px] font-bold text-[#f1d27a]">🎫 ลูกค้า ({tickets.length}) {open ? '▲' : '▼'}</button>
         {isDraft && !readOnly && (
-          <button onClick={() => setPubOpen((v) => !v)} className={cx('rounded-lg px-3 py-1.5 text-[12px] font-bold text-white', pubOpen ? 'bg-surface-4' : 'bg-cta')}>🚀 เปิดขาย + แจ้งลูกค้า {pubOpen ? '▲' : ''}</button>
+          <button onClick={() => setPubOpen((v) => {
+            const next = !v;
+            if (next) {
+              // ค่าตั้งต้นต้องอ่าน "ตอนเปิดแผง" ไม่ใช่ตอนการ์ด mount — ไม่งั้นมอบตั๋วไปแล้ว
+              // แผงยังโชว์เลขเก่า (เคส Orochimaru: ควรขึ้น 9 ที่เหลือ ไม่ใช่ 14 ทั้งรอบ)
+              setPubPrice(String(b.price_total));
+              setPubDep(fullPay ? '' : String(b.deposit_amount));
+              setPubQty(String(Math.max(0, b.stock_qty - sold)));
+            }
+            return next;
+          })} className={cx('rounded-lg px-3 py-1.5 text-[12px] font-bold text-white', pubOpen ? 'bg-surface-4' : 'bg-cta')}>🚀 เปิดขาย + แจ้งลูกค้า {pubOpen ? '▲' : ''}</button>
         )}
         {!readOnly && b.status === 'open' && remaining > 0 && (
           <button onClick={() => setGranting((v) => !v)} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-1.5 text-[12px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว</button>
@@ -1001,14 +1014,27 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
                 <input value={pubDep} onChange={(e) => setPubDep(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder={String(b.deposit_amount)} className="mt-0.5 block w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
               </label>
             )}
-            <label className="text-[11px] text-ink-faint">จำนวน (ขั้นต่ำ {sold})
+            <label className="text-[11px] text-ink-faint">เปิดขายหน้าร้าน (ชิ้น)
               <input value={pubQty} onChange={(e) => setPubQty(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" className="mt-0.5 block w-20 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
             </label>
             <button onClick={doPublish} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">ยืนยันเปิดขาย + แจ้งลูกค้า</button>
           </div>
-          {tickets.length > 0 && (
-            <div className="mt-1.5 text-[11px] text-ink-faint">🔒 ตั๋วที่มอบไปแล้ว {tickets.length} ใบ ({sold} ชิ้น) ราคาเดิมบนตั๋วไม่เปลี่ยน — ราคาใหม่ใช้กับคนซื้อหน้าร้านเท่านั้น</div>
-          )}
+          {/* สรุปเลขให้เห็นก่อนกด — กันตีความช่องจำนวนผิด (เคส Orochimaru: ใส่ 5 = ขาย 5 ไม่ใช่ทั้งรอบ 5) */}
+          <div className="mt-1.5 text-[11px] text-ink-faint">
+            {(() => {
+              const sell = Number(pubQty) || 0;
+              const pool = p && !p.is_stock ? stockRemaining(db, p) : null; // ของในคลังที่ยังไม่ถูกขาย
+              return (
+                <>
+                  {sold > 0 && <>🔒 มอบไปแล้ว {sold} ชิ้น (ราคาเดิมบนตั๋ว) · </>}
+                  เปิดให้กดหน้าร้าน {sell} ชิ้น{sold > 0 && <> = รวมทั้งรอบ {sold + sell}</>}
+                  {pool != null && <> · คลังยังไม่ขาย {pool} ชิ้น → {sell <= pool
+                    ? `ขายหมดแล้วจะเหลือเก็บ ${pool - sell}`
+                    : `⚠ เกินคลัง ${sell - pool} ชิ้น (ระบบจะบวกคลังเพิ่มให้)`}</>}
+                </>
+              );
+            })()}
+          </div>
         </div>
       )}
 

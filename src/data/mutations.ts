@@ -444,19 +444,25 @@ export const publishBatch = (batchId: string, patch?: { price?: number; deposit?
     if (Math.floor(patch.qty) < taken) return db; // ต่ำกว่าที่มอบ/จองค้างแล้ว — ไม่รับ
     qty = Math.floor(patch.qty);
   }
-  const dQty = qty - b.stock_qty;
+  // คลัง SKU (surplus = ของจริงในมือ) — บั๊ก Orochimaru 2026-07-30: เดิมลดจำนวนรอบแล้วไป "หั่นคลัง"
+  // ตามด้วย (14→รอบ 5 = คลังโดนลบ 9 ทิ้ง ของหายจากบัญชี). กติกาที่ถูก: ลดจำนวนรอบ = ของกลับเข้าคลัง
+  // (คลังไม่เปลี่ยน) · เพิ่มจำนวนรอบ = ใช้ของว่างในคลังก่อน ถ้าคลังไม่พอค่อยขยาย (แอดมินหาของมาเพิ่ม)
+  const p = db.products.find((x) => x.id === b.product_id);
+  const soldAll = db.tickets.filter((t) => t.batch_id && db.batches.some((bb) => bb.id === t.batch_id && bb.product_id === b.product_id)).reduce((s, t) => s + t.qty, 0);
+  const soldThis = db.tickets.filter((t) => t.batch_id === b.id).reduce((s, t) => s + t.qty, 0);
+  const required = soldAll + (qty - soldThis); // ของที่คลังต้องมีรองรับ: ขายไปแล้วทุกรอบ + ที่รอบนี้ยังขายได้
+  const grow = Math.max(0, required - (p?.surplus_qty ?? 0));
   const now = new Date().toISOString();
   return {
     ...db,
     batches: db.batches.map((x) => (x.id === batchId
       ? { ...x, published: true, price_total: price, deposit_amount: deposit, stock_qty: qty }
       : x)),
-    // จำนวนเปลี่ยน → คลัง SKU ต้องขยับเท่ากัน (openSpecialRound เคย +stock_qty เข้า surplus ไว้)
-    products: dQty !== 0
-      ? db.products.map((x) => (x.id === b.product_id ? { ...x, surplus_qty: Math.max(0, (x.surplus_qty ?? 0) + dQty) } : x))
+    products: grow > 0
+      ? db.products.map((x) => (x.id === b.product_id ? { ...x, surplus_qty: (x.surplus_qty ?? 0) + grow } : x))
       : db.products,
-    stockAdditions: dQty !== 0
-      ? [{ id: id('sa'), product_id: b.product_id, qty: dQty, note: `ปรับจำนวนตอนเปิดขาย "${b.label}" ${dQty > 0 ? '+' : ''}${dQty}`, created_at: now }, ...db.stockAdditions]
+    stockAdditions: grow > 0
+      ? [{ id: id('sa'), product_id: b.product_id, qty: grow, note: `เพิ่มของตอนเปิดขาย "${b.label}" +${grow}`, created_at: now }, ...db.stockAdditions]
       : db.stockAdditions,
   };
 };
