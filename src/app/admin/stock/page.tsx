@@ -11,7 +11,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
+import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
 import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
@@ -917,18 +917,36 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [rd, setRd] = useState(String(b.deposit_amount));
   // จุดเริ่มรอบใหม่ (concept 2026-07-23): ผลิต (default, ผ่านโกดัง) / ของออกเดินทางแล้ว
   const [rStart, setRStart] = useState<'production' | 'shipping'>('production');
+  // ของที่ยัง "ไม่ถูกขาย" ในคลัง SKU — คือของที่ปิดรอบทิ้งไว้แล้วยังเอามาขายต่อได้
+  const poolLeft = p && !p.is_stock ? Math.max(0, stockRemaining(db, p) - (b.status === 'open' ? remaining : 0)) : 0;
+  // แหล่งของรอบใหม่: 'pool' = ขายของที่เหลือในคลัง (ไม่บวกคลังซ้ำ) · 'new' = ของมาเพิ่มจากจีน
+  const [rSrc, setRSrc] = useState<'pool' | 'new'>('pool');
   const doRestock = () => {
     const q = Number(rq) || 0;
-    if (q <= 0) return flash('กรอกจำนวนที่มาเพิ่ม');
-    dispatch(restockSpecialRound(b.product_id, { qty: q, price: Number(rp) || undefined, deposit: Number(rd) || undefined, startStatus: rStart }));
+    if (q <= 0) return flash(rSrc === 'pool' ? 'กรอกจำนวนที่จะเอามาขาย' : 'กรอกจำนวนที่มาเพิ่ม');
+    if (rSrc === 'pool' && q > poolLeft) return flash(`คลังเหลือ ${poolLeft} ชิ้น — ถ้าของมาเพิ่มจากจีน ให้สลับเป็น "ของมาเพิ่ม"`);
+    dispatch(restockSpecialRound(b.product_id, { qty: q, price: Number(rp) || undefined, deposit: Number(rd) || undefined, startStatus: rStart, fromPool: rSrc === 'pool' }));
     // อ่านรอบใหม่ที่เพิ่งเปิด (no-op dispatch) เพื่อลิงก์ push ให้ตรงรอบ
     let newBatchId = '';
     dispatch((d) => { newBatchId = d.batches.find((x) => x.product_id === b.product_id && x.status === 'open')?.id ?? ''; return d; });
     if (p && pushEnabled(db, 'restock'))
       // ส่งแค่ชื่อ + ราคา — ไม่บอกจำนวนที่มาเพิ่ม (สร้างความเร่งด่วน + ไม่เผยสต๊อก)
       sendPush(subsForNewProduct(db, p), { title: '🔥 มาเพิ่มแล้ว!', body: `${p.series_name} · เปิดรอบใหม่ ${baht(Number(rp) || b.price_total)}`, url: `/shop/${b.product_id}${newBatchId ? `?batch=${newBatchId}` : ''}` }, dispatch).catch(() => {});
-    flash(`เปิดรอบใหม่ +${q} ชิ้นแล้ว 🔥 (รอบเก่าเก็บเข้าประวัติ)`);
+    flash(rSrc === 'pool'
+      ? `เปิดรอบใหม่ขายของที่เหลือ ${q} ชิ้นแล้ว 🔥 (คลังเท่าเดิม ไม่ได้เพิ่มของ)`
+      : `เปิดรอบใหม่ +${q} ชิ้นแล้ว 🔥 (รอบเก่าเก็บเข้าประวัติ)`);
     setRestock(false); setRq('');
+  };
+
+  // เผลอกดปิดรอบ → กดกลับได้ (เจ้าของ 2026-07-30) — ปิดรอบเป็นแค่การเก็บเข้าประวัติ ไม่ได้ทำลายอะไร
+  const canReopen = b.status === 'closed' && !!p && !p.is_stock
+    && !db.batches.some((x) => x.product_id === b.product_id && x.status === 'open');
+  const doReopen = () => {
+    if (!confirm(`เปิดรอบนี้กลับมาขายต่อ?\n"${p?.series_name} · ${b.label}" · ${baht(b.price_total)} · ขายไปแล้ว ${sold}/${b.stock_qty}\n\nของที่เหลือในรอบจะกลับมาให้ลูกค้ากดได้เหมือนเดิม`)) return;
+    dispatch(uncloseBatch(b.id));
+    let ok = false;
+    dispatch((d) => { ok = d.batches.find((x) => x.id === b.id)?.status === 'open'; return d; });
+    flash(ok ? 'เปิดรอบกลับมาแล้ว ✓' : 'เปิดกลับไม่ได้ — SKU นี้มีรอบอื่นเปิดอยู่ (ปิดรอบนั้นก่อน)');
   };
 
   return (
@@ -1002,7 +1020,14 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
             </Step>
           </span>
         )}
-        {(soldOut || readOnly) && !restock && <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRestock(true); }} className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">➕ มีของเพิ่ม</button>}
+        {/* เผลอกดปิดรอบ → กดกลับได้เลย (ไม่ต้องสร้างรอบใหม่ให้ข้อมูลเละ) */}
+        {canReopen && <button onClick={doReopen} className="rounded-lg border border-[#2563eb]/50 bg-[#2563eb]/[0.14] px-2.5 py-1.5 text-[12px] font-bold text-[#60a5fa]">↩ เปิดรอบนี้กลับ</button>}
+        {(soldOut || readOnly) && !restock && (
+          <button onClick={() => { setRp(String(b.price_total)); setRd(String(b.deposit_amount)); setRSrc(poolLeft > 0 ? 'pool' : 'new'); setRq(poolLeft > 0 ? String(poolLeft) : ''); setRestock(true); }}
+            className="rounded-lg border border-[#16a34a]/45 bg-[#16a34a]/[0.12] px-2.5 py-1.5 text-[12px] font-bold text-[#4ade80]">
+            {poolLeft > 0 ? `📦 ขายของที่เหลือ (${poolLeft})` : '➕ มีของเพิ่ม'}
+          </button>
+        )}
         {!readOnly && noBuyers && !edit && <button onClick={() => { setEp(String(b.price_total)); setEq(String(b.stock_qty)); setEl(b.label); setEdit(true); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">แก้ไข</button>}
         {!readOnly && noBuyers && <button onClick={() => { if (confirm('ยกเลิกรอบนี้? (ยังไม่มีคนซื้อ)')) { dispatch(removeBatch(b.id)); flash('ยกเลิกรอบแล้ว'); } }} className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-2.5 py-1.5 text-[12px] font-semibold text-primary-soft">ยกเลิก</button>}
         {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
@@ -1087,7 +1112,16 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
       {restock && (
         <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-[#16a34a]/35 bg-[#16a34a]/[0.06] p-2.5">
-          <label className="text-[12px] text-ink-muted">มาเพิ่ม (ชิ้น)<input autoFocus className="ml-1 w-16 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={rq} onChange={(e) => setRq(e.target.value.replace(/[^\d]/g, ''))} placeholder="5" /></label>
+          {/* แหล่งของ: ของที่เหลือในคลัง (ไม่ทำให้คลังบวม) vs ของมาเพิ่มจากจีน — เจ้าของ 2026-07-30 */}
+          {poolLeft > 0 && (
+            <div className="inline-flex w-full overflow-hidden rounded-lg border border-subtle">
+              {([['pool', `📦 ขายของที่เหลือในคลัง (${poolLeft})`], ['new', '➕ ของมาเพิ่มจากจีน']] as const).map(([k, label]) => (
+                <button key={k} onClick={() => { setRSrc(k); setRq(k === 'pool' ? String(poolLeft) : ''); }}
+                  className={cx('flex-1 px-2.5 py-1.5 text-[11.5px] font-bold', rSrc === k ? 'bg-primary text-white' : 'bg-surface-2 text-ink-muted2')}>{label}</button>
+              ))}
+            </div>
+          )}
+          <label className="text-[12px] text-ink-muted">{rSrc === 'pool' ? 'ขาย (ชิ้น)' : 'มาเพิ่ม (ชิ้น)'}<input autoFocus className="ml-1 w-16 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={rq} onChange={(e) => setRq(e.target.value.replace(/[^\d]/g, ''))} placeholder="5" /></label>
           <label className="text-[12px] text-ink-muted">ราคา<input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={rp} onChange={(e) => setRp(e.target.value.replace(/[^\d]/g, ''))} /></label>
           <label className="text-[12px] text-ink-muted">มัดจำ<input className="ml-1 w-24 rounded-lg border border-subtle bg-surface-2 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={rd} onChange={(e) => setRd(e.target.value.replace(/[^\d]/g, ''))} /></label>
           {/* จุดเริ่มรอบใหม่ — เฉพาะรอบมัดจำ (มัดจำ >= ราคา = ของในมือ → arrived อัตโนมัติ) */}
@@ -1100,7 +1134,12 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
           )}
           <button onClick={doRestock} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">🔥 เปิดรอบใหม่ + แจ้งลูกค้า</button>
           <button onClick={() => setRestock(false)} className="py-2 text-[12px] text-ink-faint">ยกเลิก</button>
-          <span className="w-full text-[11px] text-ink-faint">รอบเก่าจะถูกเก็บเข้าประวัติ (log คนซื้อแยกรอบ) · push "🔥 มาเพิ่มแล้ว!" ถึงลูกค้าที่เปิดแจ้งเตือน</span>
+          <span className="w-full text-[11px] text-ink-faint">
+            {rSrc === 'pool'
+              ? `ขายของที่มีอยู่แล้วในคลัง — คลังไม่เพิ่ม (เหลือหลังเปิดรอบนี้ ${Math.max(0, poolLeft - (Number(rq) || 0))} ชิ้น) · `
+              : 'ของมาเพิ่มจากจีน — คลังจะเพิ่มตามจำนวนที่ใส่ · '}
+            รอบเก่าเก็บเข้าประวัติ (log คนซื้อแยกรอบ) · push "🔥 มาเพิ่มแล้ว!" ถึงลูกค้าที่เปิดแจ้งเตือน
+          </span>
         </div>
       )}
 

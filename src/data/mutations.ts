@@ -371,6 +371,18 @@ export const closeBatch = (batchId: string) => (db: Database): Database => ({
   batches: db.batches.map((b) => (b.id === batchId ? { ...b, status: 'closed' } : b)),
 });
 
+/** เปิดรอบที่ปิดไปแล้วกลับมาขายต่อ (เจ้าของ 2026-07-30: "ดันเผลอไปกดปิดรอบ ทำไรไม่ได้เลย").
+ *  ปิดรอบเป็นแค่การ "เก็บเข้าประวัติ" ไม่ได้ทำลายอะไร — กดพลาดต้องกู้ได้ในคลิกเดียว
+ *  กติกา: SKU นั้นต้องไม่มีรอบอื่นเปิดค้างอยู่ (1 SKU = 1 รอบเปิด) และต้องไม่ใช่สินค้าที่แปลงเป็น In-Stock แล้ว */
+export const uncloseBatch = (batchId: string) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b || b.status !== 'closed') return db;
+  const p = db.products.find((x) => x.id === b.product_id);
+  if (!p || p.is_stock) return db;                                            // ของเข้าสต๊อกพร้อมส่งไปแล้ว
+  if (db.batches.some((x) => x.product_id === b.product_id && x.status === 'open')) return db;
+  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, status: 'open' as const } : x)) };
+};
+
 export const removeBatch = (batchId: string) => (db: Database): Database => ({
   ...db,
   // never delete a round that has buyers — it would orphan their tickets (batch_id → nothing)
@@ -561,7 +573,7 @@ export const bulkCreateStockRounds = (items: Parameters<typeof createLegacyStock
  * frozen per-batch) and opens a FRESH batch in the same mutation — no half-state where two rounds
  * are open. Price/deposit default to the previous round's snapshot; label defaults to "รอบ N".
  */
-export const restockSpecialRound = (productId: string, opts: { qty: number; price?: number; deposit?: number; label?: string; startStatus?: 'production' | 'shipping' }) => (db: Database): Database => {
+export const restockSpecialRound = (productId: string, opts: { qty: number; price?: number; deposit?: number; label?: string; startStatus?: 'production' | 'shipping'; fromPool?: boolean }) => (db: Database): Database => {
   const rounds = db.batches.filter((b) => b.product_id === productId);
   const last = [...rounds].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
   const price = opts.price && opts.price > 0 ? opts.price : (last?.price_total ?? db.products.find((p) => p.id === productId)?.price_total ?? 0);
@@ -584,7 +596,10 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
   };
   return openSpecialRound(productId, {
     qty: opts.qty, price, deposit, fullPay,
-    label: opts.label?.trim() || `รอบ ${rounds.length + 1}`, addSurplus: true,
+    label: opts.label?.trim() || `รอบ ${rounds.length + 1}`,
+    // fromPool = "ขายของที่เหลือในคลัง" ไม่ใช่ของมาเพิ่ม → ห้ามบวก surplus ซ้ำ ไม่งั้นคลังบวมเอง
+    // (เจ้าของ 2026-07-30: ปิดรอบแล้วเหลือ 4 ชิ้น ต้องเอามาขายต่อได้โดยของไม่งอก)
+    addSurplus: !opts.fromPool,
   })(closed);
 };
 
