@@ -79,6 +79,17 @@ create table if not exists auction_entries (
   used_at     timestamptz
 );
 
+-- ── ฟังก์ชัน ────────────────────────────────────────────────────────────────
+-- ⚠ drop ก่อน create ทุกตัว: ถ้าเคยรันเวอร์ชันก่อนหน้าไว้แล้วชื่อพารามิเตอร์/return type
+-- ไม่ตรงกัน `create or replace` จะฟ้อง 42P13 (cannot change ...) แล้วสคริปต์ตายทั้งไฟล์
+drop function if exists ryuma_bid_step(int);
+drop function if exists ryuma_can_bid(text);
+drop function if exists ryuma_place_bid(text, int);
+drop function if exists ryuma_auction_buynow(text);
+drop function if exists ryuma_auction_close(text);
+drop function if exists ryuma_auction_state(text);
+drop function if exists ryuma_auction_bids(text);
+
 -- ── ขั้นบันไดการบิด ─────────────────────────────────────────────────────────
 create or replace function ryuma_bid_step(p_price int)
 returns int language sql immutable as $$
@@ -322,3 +333,13 @@ grant execute on function ryuma_auction_buynow(text)      to anon, authenticated
 grant execute on function ryuma_auction_close(text)       to anon, authenticated;
 grant execute on function ryuma_auction_state(text)       to anon, authenticated;
 grant execute on function ryuma_auction_bids(text)        to anon, authenticated;
+
+-- ── ตรวจหลังรัน: ต้องได้ 4 ตาราง + 7 ฟังก์ชัน ───────────────────────────────
+select 'ตาราง' as kind, string_agg(table_name, ', ' order by table_name) as ok
+  from information_schema.tables
+ where table_schema = 'public' and table_name like 'auction%'
+union all
+select 'ฟังก์ชัน', string_agg(proname, ', ' order by proname)
+  from pg_proc
+ where proname in ('ryuma_bid_step','ryuma_can_bid','ryuma_place_bid','ryuma_auction_buynow',
+                   'ryuma_auction_close','ryuma_auction_state','ryuma_auction_bids');

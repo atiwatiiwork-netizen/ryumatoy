@@ -13,6 +13,13 @@
 -- หมายเหตุ: ใช้ app_user_id() (v20) + is_app_admin() (v21) ที่มีอยู่แล้ว
 -- ============================================================================
 
+-- ⚠ ต้อง drop ก่อน create: ถ้าฟังก์ชันเดิมในฐานข้อมูลจริงมีชื่อพารามิเตอร์หรือ return type
+-- ต่างจากไฟล์นี้แม้แต่นิดเดียว `create or replace` จะฟ้อง 42P13 แล้วสคริปต์ตายทั้งไฟล์
+-- (สิทธิ์ grant หายไปตอน drop แต่มี grant ใหม่ให้ท้ายไฟล์แล้ว)
+drop function if exists ryuma_reserve_pay(text);
+drop function if exists ryuma_reserve_confirm(text);
+drop function if exists ryuma_reserve_release(text);
+
 create or replace function ryuma_reserve_pay(p_id text)
 returns json language plpgsql security definer set search_path = public, extensions as $$
 declare r stock_reservations;
