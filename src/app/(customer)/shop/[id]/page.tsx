@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
@@ -22,6 +22,8 @@ import { RANK } from '@/lib/theme';
 import { EventProgress } from '@/components/EventBits';
 import { StockCondCard } from '@/components/StockCond';
 import { copyText } from '@/lib/clipboard';
+import { checkAvailable } from '@/lib/reserve';
+import { store } from '@/data/store';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -41,6 +43,38 @@ export default function ProductDetailPage() {
   //   → ไม่มีแบบไหนถูกไฮไลต์ ราคาตกไปใช้ราคา product และตั๋วที่ออกไม่รู้ว่าเป็นแบบไหน (audit ลูกค้า #1)
   const variantId = picked && variants.some((v) => v.id === picked) ? picked : variants[0]?.id;
   const setVariantId = setPicked;
+
+  // ── เช็คของเหลือ "สดจาก server" ตอนเข้าหน้าซื้อ (เจ้าของ 2026-07-30) ──
+  // เครื่องที่เปิดแอปค้างไว้ถือข้อมูลเก่าได้ถึง ~40 วิ (รอบ poll) → เห็นของที่หมดแล้วว่ายังอยู่
+  // แล้วกดเข้ามาจ่ายได้ (เงินไม่รั่ว — ด่านจองฝั่ง server กันชั้นสุดท้าย แต่ลูกค้างง)
+  // ทางแก้: ถาม ryuma_available (สูตรเดียวกับตอนจอง) ทันทีที่เข้าหน้า + ทุกครั้งที่กลับมาโฟกัส
+  // และดึงข้อมูลทั้งก้อนตามมา (reloadIfIdle) ให้ป้าย/สถานะอื่นตรงด้วย. hook นี้ต้องอยู่ก่อน
+  // early-return ด้านล่าง (กฎ hooks) — ข้างในเช็ค product เองแล้ว
+  const wantedBatchParam = params.get('batch');
+  const [liveAvail, setLiveAvail] = useState<number | null>(null);
+  useEffect(() => {
+    setLiveAvail(null); // เปลี่ยนสินค้า/รอบ = เริ่มเช็คใหม่ อย่าถือเลขของตัวเก่า
+    if (!product) return;
+    // หา "รอบที่หน้าจะขายจริง" แบบเดียวกับ logic ด้านล่าง (linked ?? auto)
+    const linked = db.batches.find((b) => b.id === wantedBatchParam && b.product_id === product.id && b.status === 'open' && b.published !== false);
+    const auto = !wantedBatchParam && !product.is_stock && product.status !== 'open'
+      ? db.batches.find((b) => b.product_id === product.id && b.status === 'open' && b.published !== false)
+      : undefined;
+    const target = linked ?? auto;
+    if (!target && !product.is_stock) return; // ของไม่จำกัดจำนวน (พรีกระดานปกติ) ไม่ต้องเช็ค
+    let dead = false;
+    const ask = async () => {
+      const n = await checkAvailable(product.id, target?.id);
+      if (!dead && n != null) setLiveAvail(n);
+    };
+    void ask();
+    void store.reloadIfIdle();
+    const onFocus = () => void ask(); // reloadIfIdle ตอน focus มีอยู่แล้วใน DataProvider
+    window.addEventListener('focus', onFocus);
+    return () => { dead = true; window.removeEventListener('focus', onFocus); };
+    // db ใน deps จะทำให้ยิงถามทุก poll — ผูกกับ id พอ (รอบไม่เปลี่ยน id กลางอากาศ)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id, wantedBatchParam]);
 
   if (!product) return <div className="p-10 text-ink-faint">ไม่พบสินค้า</div>;
 
@@ -77,11 +111,16 @@ export default function ProductDetailPage() {
     : [];
   // live availability for limited-qty items (in-stock / batch) — reservation-aware
   const limited = batch ? true : product.is_stock;
-  const avail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
+  const localAvail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
+  // เลขจริง = ค่าที่ "น้อยกว่า" ระหว่าง local กับ server (server ชนะฝั่งหมด — เครื่องเก่าห้ามเห็นของผี;
+  // ฝั่ง "server บอกมีแต่ local บอกหมด" ใช้ local เพราะ local เห็น hold ตัวเองที่ยังไม่ถึง server)
+  const avail = limited && liveAvail != null ? Math.min(localAvail ?? Infinity, liveAvail) : localAvail;
   const soldOut = limited && (avail ?? 1) <= 0;
   // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ — ไม่ผ่าน/หมดเวลาแล้วของหลุดคืน
-  // · 'gone' = ตั๋วออกครบจริง ไม่มีทางหลุด
-  const goneState = batch ? batchGoneState(db, batch) : product.is_stock ? stockGoneState(db, product) : null;
+  // · 'gone' = ตั๋วออกครบจริง ไม่มีทางหลุด · server บอกหมดแต่ local ยังไม่รู้ = 'temp' ไว้ก่อน
+  // (เดี๋ยว reloadIfIdle ตามมาแก้ป้ายเป็นสถานะจริงเอง)
+  const localGone = batch ? batchGoneState(db, batch) : product.is_stock ? stockGoneState(db, product) : null;
+  const goneState = soldOut ? (localGone ?? 'temp') : null;
   // เพดานรอบพิเศษ 3 ตัว/คน: โควตาที่เหลือหลังหัก ตั๋วที่มี + hold ค้างของตัวเอง + ที่อยู่ในตะกร้าแล้ว
   const inCartBatch = batch ? cart.lines.filter((l) => l.batchId === batch.id).reduce((s, l) => s + l.qty, 0) : 0;
   const quotaLeft = batch ? Math.max(0, userBatchQuota(db, CURRENT_USER_ID, batch.id) - inCartBatch) : Infinity;

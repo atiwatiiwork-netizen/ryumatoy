@@ -9,6 +9,7 @@ import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
 import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
 import { batchAvailable } from '@/domain/services/reservations';
+import { store } from '@/data/store';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -42,6 +43,10 @@ function ShopInner() {
   const [status, setStatus] = useState<ProductStatus | null>(() => (params.get('status') as ProductStatus) || null);
   const [query, setQuery] = useState(() => params.get('q') ?? '');
   const [limit, setLimit] = useState(PAGE_SIZE);
+
+  // เข้าหน้าร้าน = ดึงข้อมูลล่าสุดหนึ่งรอบ (เจ้าของ 2026-07-30: เครื่องที่เปิดค้างเห็นของหมดแล้ว
+  // ว่ายังอยู่ได้ถึง ~40 วิ) — reloadIfIdle ปลอดภัย: มีงานค้างเซฟจะไม่ทับ
+  useEffect(() => { void store.reloadIfIdle(); }, []);
 
   // mirror the filters into the URL (replace — no history spam) + reset paging on any change
   useEffect(() => {

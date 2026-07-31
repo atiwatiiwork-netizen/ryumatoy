@@ -29,6 +29,26 @@ async function call(fn: string, args: Record<string, unknown>): Promise<Res> {
 export const reserveStock = (productId: string, batchId: string | undefined, qty: number, userId: string) =>
   call('ryuma_reserve', { p_product_id: productId, p_batch_id: batchId ?? '', p_qty: qty, p_user_id: userId, p_ttl: 900 });
 
+/** จำนวนที่ซื้อได้ "ตอนนี้จริง" จาก server (สูตรเดียวกับตอนจอง — สต๊อก − ตั๋ว − hold ค้าง).
+ *  ใช้เช็คสดตอนลูกค้าเข้าหน้าซื้อ (เจ้าของ 2026-07-30: เครื่องที่เปิดค้างถือข้อมูลเก่า เห็นของ
+ *  ที่หมดแล้วว่ายังอยู่). คืน null เมื่อถามไม่ได้ (preview/ออฟไลน์/timeout) → ใช้ค่า local ตามเดิม.
+ *  RPC คืนเลขเปล่าๆ ไม่ใช่ object เลยไม่ผ่าน call(). */
+export const checkAvailable = async (productId: string, batchId?: string): Promise<number | null> => {
+  if (!supabase) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const { data, error } = await Promise.race([
+      supabase.rpc('ryuma_available', { p_product_id: productId, p_batch_id: batchId ?? '' }),
+      new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('avail timeout')), RPC_TIMEOUT); }),
+    ]);
+    return error != null || typeof data !== 'number' ? null : data;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /** Slip submitted → stop the 15-min timer (hold until admin decides). */
 export const payReservation = (id: string) => call('ryuma_reserve_pay', { p_id: id });
 /** Admin approved → convert hold to a real sale. */
