@@ -15,7 +15,7 @@ import * as rpc from '@/lib/auction';
 import { pushEnabled, sendAuctionPush } from '@/lib/push';
 import {
   AUCTION_STATUS_TH, BID_REJECT_TH, bidRight, checkBid, extendCapped, inSnipeWindow, isLive,
-  minNextBid, pendingEntry, stepBands, stepFor, timeLeftLabel,
+  isRoundAmount, minNextBid, pendingEntry, stepBands, stepFor, timeLeftLabel,
 } from '@/domain/services/auctions';
 import { productLabel } from '@/domain/services/catalog';
 import { baht } from '@/lib/theme';
@@ -93,6 +93,10 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   const running = isLive(view, now);
   const nextMin = live?.nextMin || minNextBid(view, bands);
   const step = stepFor(view.current_price || view.start_price, bands);
+  // ตรวจยอดที่พิมพ์เองตั้งแต่ยังพิมพ์ไม่เสร็จ (ไม่ต้องรอให้กดแล้วเด้ง toast)
+  const customErr: 'too_low' | 'not_round' | null = !custom ? null
+    : !isRoundAmount(Number(custom)) ? 'not_round'
+    : Number(custom) < nextMin ? 'too_low' : null;
 
   const product = auction.product_id ? db.products.find((p) => p.id === auction.product_id) : undefined;
   const maker = product ? db.manufacturers.find((m) => m.id === product.manufacturer_id) : undefined;
@@ -279,12 +283,17 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
                     <input
                       value={custom} onChange={(e) => setCustom(e.target.value.replace(/[^\d]/g, ''))}
                       inputMode="numeric" placeholder={`บิดเองมากกว่านี้ (ขั้นละ ${step} · ลงท้าย 0)`}
-                      className="flex-1 rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                      className={cx('flex-1 rounded-lg border bg-surface-3 px-3 py-2 text-sm text-ink placeholder:text-ink-faint',
+                        customErr ? 'border-[#dc2626]' : 'border-subtle')}
                     />
-                    <Button variant="ghost" disabled={busy || !custom} onClick={() => void bid(Number(custom))}>บิด</Button>
+                    <Button variant="ghost" disabled={busy || !custom || !!customErr} onClick={() => void bid(Number(custom))}>บิด</Button>
                   </div>
-                  <div className="text-[11.5px] text-ink-faint">
-                    ขั้นต่ำตอนนี้ {baht(nextMin)} · บิดข้ามขั้นได้ ขอแค่ลงท้ายด้วย 0
+                  {/* บอกเหตุผลตรงใต้ช่องกรอกตั้งแต่ยังพิมพ์อยู่ + ปิดปุ่มไว้เลย — เดิมต้องกดก่อน
+                      แล้วค่อยเด้ง toast แดงทับการ์ดข้างล่าง ทำให้ดูเหมือนหน้าจอพัง */}
+                  <div className={cx('text-[11.5px]', customErr ? 'font-bold text-[#f87171]' : 'text-ink-faint')}>
+                    {customErr === 'too_low' ? `ต่ำกว่าขั้นต่ำ — ต้องบิดอย่างน้อย ${baht(nextMin)}`
+                      : customErr === 'not_round' ? 'ยอดบิดต้องลงท้ายด้วย 0 (เช่น 1,020 / 1,500)'
+                      : `ขั้นต่ำตอนนี้ ${baht(nextMin)} · บิดข้ามขั้นได้ ขอแค่ลงท้ายด้วย 0`}
                   </div>
                 </div>
               ) : (
