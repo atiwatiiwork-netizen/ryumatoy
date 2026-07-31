@@ -71,7 +71,7 @@ const stripItems = (order: Row): Row => {
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, settings] =
       await Promise.all([
         sb.from('users').select('*'),
         sb.from('categories').select('*'),
@@ -109,6 +109,12 @@ export const supabaseAdapter: PersistenceAdapter = {
         // ใหม่สุดก่อนเสมอ: เรียงตาม due_date ขึ้น + limit จะ "ปักหน้าต่างไว้ที่นัดเก่าสุด"
         // พอมีครบ 500 แถว นัดที่ออกใหม่จะหลุดหน้าต่างทั้งหมด = ฟีเจอร์ตายเงียบ (audit v57 #15)
         sb.from('payment_plans').select('*').order('created_at', { ascending: false }).limit(500),
+        // ประมูล (v60) — ยังไม่รัน migration = ตารางไม่มี → ต้องไม่พังทั้งแอป (ไม่อยู่ใน fatal list)
+        sb.from('auctions').select('*'),
+        // auction_bids: RLS ให้ลูกค้าเห็นเฉพาะบิดของตัวเอง (ประวัติสาธารณะมาจาก RPC ที่ปิดชื่อ)
+        sb.from('auction_bids').select('*'),
+        sb.from('auction_watch').select('*'),
+        sb.from('auction_entries').select('*'),
         sb.from('shop_settings').select('*'),
       ]);
 
@@ -165,6 +171,10 @@ export const supabaseAdapter: PersistenceAdapter = {
       // ตารางใหม่ v56 — degrade เป็น [] ถ้ายังไม่ได้รัน migration (ไม่ทำให้แอปโหลดพัง)
       activityLogs: (activityLogs.data ?? []) as Database['activityLogs'],
       paymentPlans: (paymentPlans.data ?? []) as Database['paymentPlans'],
+      auctions: (auctions.data ?? []) as Database['auctions'],
+      auctionBids: (auctionBids.data ?? []) as Database['auctionBids'],
+      auctionWatch: (auctionWatch.data ?? []) as Database['auctionWatch'],
+      auctionEntries: (auctionEntries.data ?? []) as Database['auctionEntries'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -227,6 +237,13 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('payment_accounts', () => syncTable(sb, 'payment_accounts', next.paymentAccounts as unknown as Row[], base.paymentAccounts as unknown as Row[]));
     await step('activity_logs', () => syncAppendOnly(sb, 'activity_logs', next.activityLogs as unknown as Row[], base.activityLogs as unknown as Row[]));
     await step('payment_plans', () => syncTable(sb, 'payment_plans', next.paymentPlans as unknown as Row[], base.paymentPlans as unknown as Row[]));
+    // ประมูล (v60): เขียนได้เฉพาะ "ห้อง" (สร้าง/แก้ตอนร่าง) — ราคา/เวลาปิดเป็นของ server
+    // แก้ห้องที่ live แล้วถูกบล็อกใน mutation เพราะ upsert ทั้งแถวจะทับ current_price/ends_at ที่ RPC เพิ่งอัปเดต
+    await step('auctions', () => syncTable(sb, 'auctions', next.auctions as unknown as Row[], base.auctions as unknown as Row[]));
+    await step('auction_watch', () => syncTable(sb, 'auction_watch', next.auctionWatch as unknown as Row[], base.auctionWatch as unknown as Row[]));
+    await step('auction_entries', () => syncTable(sb, 'auction_entries', next.auctionEntries as unknown as Row[], base.auctionEntries as unknown as Row[]));
+    // auction_bids: **ไม่ sync โดยตั้งใจ** — บิดเกิดจาก RPC ฝั่ง server เท่านั้น
+    // (บิดที่ client เขียนเองได้ = ปั่นราคาได้ และบิดที่เก็บไว้ local ตอนโหมดทดลองต้องไม่ไหลขึ้นจริง)
 
     await step('orders', () => syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never)));
     await step('order_items', () => syncTable(

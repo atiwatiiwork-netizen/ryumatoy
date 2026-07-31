@@ -9,6 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
+import { needsClose } from '@/domain/services/auctions';
 import { markPlanReminded } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
@@ -77,6 +78,9 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const newMembers = db.users.filter((u) => u.approved === false && !u.is_admin).length;
   const rankReq = db.rankRequests.filter((r) => r.status === 'pending').length;
   const sourcingJobs = db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length;
+  // ประมูล (v60): หมดเวลาแล้วรอกดสรุปผล + สลิปค่าเข้าสนามรอตรวจ (ไม่มี scheduler — ต้องมีคนกด)
+  const auctionJobs = db.auctions.filter((a) => needsClose(a)).length
+    + db.auctionEntries.filter((e) => e.status === 'pending').length;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string };
   const it = (href: string, icon: IconName, label: string, badge?: number, sub?: string): NavItem =>
@@ -101,6 +105,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/instock', 'store', 'In-Stock', undefined, 'ของพร้อมส่ง'),
       it('/admin/stock', 'bolt', 'สต๊อกใบพรี', undefined, 'รอบพิเศษ + วงจรของ'),
       it('/admin/production', 'swap', 'ปิดรอบ / กระดาน', undefined, 'ปิดยอด + โพสต์กระดาน'),
+      it('/admin/auctions', 'tag', 'ประมูล', auctionJobs, 'ห้องประมูล + ลองเล่นก่อนเปิด'),
     ] },
     { title: 'ลูกค้า', items: [
       it('/admin/members', 'user', 'สมาชิก & Ranks', newMembers + rankReq, 'อนุมัติ + เลื่อนขั้น'),

@@ -179,6 +179,10 @@ export const SEED_DATABASE: Database = {
 
   activityLogs: [],
   paymentPlans: [],
+  auctions: [],
+  auctionBids: [],
+  auctionWatch: [],
+  auctionEntries: [],
   paymentAccounts: [
     { id: 'pay-1', name: 'Ryuma Toy Shop', number: '081-234-5678', active: true },
   ],

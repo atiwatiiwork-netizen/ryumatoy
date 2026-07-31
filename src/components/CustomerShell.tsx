@@ -21,6 +21,7 @@ import { CouponReceived } from './CouponTicket';
 import { ProfileGate } from './ProfileGate';
 import { OnboardGate } from './OnboardGate';
 import { InstallBellNudge } from './InstallBellNudge';
+import { auctionPublicEnabled } from '@/domain/services/auctions';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -82,7 +83,10 @@ export function CustomerShell({ children }: { children: ReactNode }) {
     reclaimed.current = true;
     flash(`↩️ พบคูปอง ${orphans} ใบที่ใช้ไม่สมบูรณ์ — ทักแอดมินเพื่อรับคืนได้เลย`);
   }, [db, CURRENT_USER_ID, flash]);
-  const { needsApproval, isLoggedIn, authReady } = useAuth();
+  const { needsApproval, isLoggedIn, authReady, isAdmin } = useAuth();
+  // ห้องประมูล (v60): เจ้าของสั่ง "ทำไว้ก่อน แต่ยังไม่เปิดให้ใช้ในฝั่งผู้ใช้"
+  // → ปุ่มอยู่บนเมนูแล้ว แต่ลูกค้ากดแล้วได้ข้อความ "เร็วๆ นี้"; แอดมินเข้าได้จริงเพื่อทดลอง
+  const auctionOpen = auctionPublicEnabled(db) || isAdmin;
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   // install-rate: stamp installed_at the first time a logged-in member opens the app in standalone
   // (home-screen). Idempotent mutation → once-only; own-row write is RLS-safe (ryuma-push-adoption).
@@ -135,7 +139,14 @@ export function CustomerShell({ children }: { children: ReactNode }) {
                 {t.topLabel}
               </Link>
             ))}
-            <button onClick={() => flash('P2P Market — กำลังพัฒนา')} className="rounded-[9px] px-[15px] py-2 text-sm font-medium text-ink-muted">P2P Market</button>
+            {auctionOpen ? (
+              <Link href="/auctions"
+                className={cx('rounded-[9px] px-[15px] py-2 text-sm', isActive('/auctions') ? 'bg-surface-4 font-bold text-ink' : 'font-medium text-ink-muted')}>
+                ห้องประมูล
+              </Link>
+            ) : (
+              <button onClick={() => flash('ห้องประมูล — เปิดเร็วๆ นี้')} className="rounded-[9px] px-[15px] py-2 text-sm font-medium text-ink-muted">ห้องประมูล</button>
+            )}
           </nav>
           <div className="flex-1" />
           <Link href="/shop" className="flex w-[260px] items-center gap-2 rounded-[10px] border border-subtle bg-surface-3 px-[13px] py-[9px] text-[13.5px] text-ink-faint">

@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "ryuma-seed",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:seed"],
+      "port": 3100
     }
   ]
 }

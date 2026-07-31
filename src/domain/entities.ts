@@ -622,6 +622,10 @@ export interface Database {
   paymentAccounts: PaymentAccount[];
   activityLogs: ActivityLog[];
   paymentPlans: PaymentPlan[];
+  auctions: Auction[];
+  auctionBids: AuctionBid[];      // โหมดทดลอง/แอดมินเท่านั้น — ลูกค้าอ่านผ่าน RPC ที่ปิดชื่อ
+  auctionWatch: AuctionWatch[];
+  auctionEntries: AuctionEntry[];
   settings: ShopSettings;
 }
 
@@ -657,4 +661,85 @@ export interface PaymentPlan {
   closed_at?: string;
   created_by?: string;   // แอดมินที่ออกนัดให้ (v57)
   order_id?: string;     // ออเดอร์ที่ลูกค้าจ่ายนัดนี้ — ปิดนัดอัตโนมัติตอนส่งสลิปสำเร็จ (v57)
+}
+
+// ── ประมูล (v60, เจ้าของเคาะสเปก 2026-07-31) ─────────────────────────────────
+export type AuctionStatus = 'draft' | 'live' | 'ended' | 'awarded' | 'paid' | 'cancelled';
+/** ห้องประมูล 1 รายการ = ของในมือ 1 ชิ้น (เจ้าของ: MVP ประมูลเฉพาะของในมือ).
+ *  ราคา/เวลาปิดเป็นของ **server** เสมอ — ฝั่งแอปแค่แสดงผล ห้ามตัดสินเอง (ดู migration v60). */
+export interface Auction {
+  id: string;
+  product_id?: string;     // ผูกกับ SKU ในคลัง (ของในมือ) — ใช้รูป/สภาพ/ค่าย จากสินค้าตัวนั้น
+  title: string;
+  images: string[];        // รูปเพิ่มเฉพาะของชิ้นนี้ (ตำหนิ/ของแถม) — ว่าง = ใช้รูปสินค้า
+  detail?: string;         // รายละเอียด + ตำหนิ
+  start_price: number;     // ราคาเปิด (default 1,000)
+  buy_now_price?: number;  // ซื้อเลย (ไม่ตั้ง = ไม่มีปุ่ม)
+  ends_at: string;         // เวลาปิดปัจจุบัน (ขยับได้เมื่อต่อเวลา)
+  original_ends_at: string;// เวลาปิดเดิม — เพดานต่อเวลานับจากตัวนี้
+  extend_min: number;      // ต่อครั้งละกี่นาที (5)
+  window_min: number;      // เริ่มกฎต่อเวลาเมื่อเหลือกี่นาที (30)
+  cap_min: number;         // ต่อได้ไม่เกินกี่นาทีจากเวลาปิดเดิม (60)
+  status: AuctionStatus;
+  current_price: number;
+  bid_count: number;
+  extend_count: number;
+  winner_user_id?: string;
+  winning_amount?: number;
+  runner_up_user_id?: string; // กติกา "2 อันดับแรกมีสิทธิ์" — #1 ไม่จ่ายใน 24 ชม. ตกมาที่คนนี้
+  runner_up_amount?: number;
+  pay_due_at?: string;
+  created_at: string;
+  closed_at?: string;
+}
+
+export type AuctionBidStatus = 'active' | 'void';
+/** บิด 1 ครั้ง. ฝั่งลูกค้า **ห้าม**อ่านตารางนี้ตรงๆ (ชื่อจะรั่ว) — ประวัติสาธารณะมาจาก
+ *  RPC `ryuma_auction_bids` ที่แทนชื่อด้วย "ผู้ประมูล #N" แล้ว. */
+export interface AuctionBid {
+  id: string;
+  auction_id: string;
+  user_id: string;
+  amount: number;
+  status: AuctionBidStatus;
+  void_reason?: string;
+  created_at: string;
+}
+
+/** แถวประวัติบิดที่ปิดชื่อแล้ว (ผลลัพธ์จาก RPC) — seq = "ผู้ประมูล #N" คงที่ต่อห้อง. */
+export interface AuctionBidRow {
+  id: string;
+  amount: number;
+  created_at: string;
+  status: AuctionBidStatus;
+  seq: number;
+  mine: boolean;
+  name?: string | null;        // แอดมินเท่านั้นที่ได้ค่านี้
+  member_code?: string | null;
+}
+
+/** กระดิ่งรายชิ้น — กดแล้วได้ push ตอนราคาขยับ/ใกล้ปิด. */
+export interface AuctionWatch {
+  id: string;
+  auction_id: string;
+  user_id: string;
+  created_at: string;
+}
+
+export type AuctionEntryStatus = 'pending' | 'approved' | 'rejected' | 'used';
+/** มัดจำเข้าสนาม ฿300 สำหรับคนที่ยังไม่มีใบพรี (เจ้าของ 2026-07-31: "ไม่ใช่กินเปล่า" —
+ *  เอาสลิปใบเดิมไปแปะเป็นมัดจำพรีรายการอื่นได้ แอดมินอนุมัติเอง).
+ *  ⚠ ที่ต้องมีตารางนี้เพราะ**กันนับเงินซ้ำ**: 300 ไม่ใช่รายได้จนกว่าจะผูกกับออเดอร์ (status 'used'). */
+export interface AuctionEntry {
+  id: string;
+  user_id: string;
+  amount: number;
+  kind: 'slip' | 'admin';
+  slip_url?: string;
+  note?: string;
+  status: AuctionEntryStatus;
+  order_id?: string;
+  created_at: string;
+  approved_at?: string;
+  used_at?: string;
 }

@@ -5,6 +5,7 @@
   "description": "Ryuma (ริวมะ) — pre-order figure & WCF web app. Next.js (App Router) + Tailwind + Supabase per ryuma-prd.md.",
   "scripts": {
     "dev": "next dev",
+    "dev:seed": "node scripts/dev-seed.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

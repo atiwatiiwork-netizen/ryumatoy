@@ -25,6 +25,7 @@ import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
+import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -1882,4 +1883,229 @@ export const reclaimCouponGrantsFor = (userId: string) => (db: Database): Databa
       ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, ticket_id: undefined, discount_amount: undefined }
       : g)),
   };
+};
+
+// ── ประมูล (v60) ────────────────────────────────────────────────────────────
+// ⚠ เส้นแบ่งที่ห้ามเบลอ: "ห้อง" (สร้าง/แก้ตอนร่าง/เปิด/ยกเลิก) เป็นงานฝั่งแอปได้
+//   แต่ **ราคา / เวลาปิด / ผู้ชนะ เป็นของ server เท่านั้น** (RPC ใน migration v60)
+//   ตัว *Local ข้างล่างมีไว้สำหรับ "โหมดทดลอง" (ยังไม่รัน v60 หรือ seed preview) เพื่อกดเล่นดูหน้าตา
+//   — ห้ามเรียกเมื่อ RPC ใช้ได้ ไม่งั้นสองเครื่องเขียนทับกันเงียบๆ เหมือนเคสขายเกิน
+
+export type NewAuction = {
+  title: string; product_id?: string; images: string[]; detail?: string;
+  start_price: number; buy_now_price?: number; ends_at: string;
+  extend_min?: number; window_min?: number; cap_min?: number;
+};
+
+/** สร้างห้องประมูล (เริ่มเป็น 'draft' เสมอ — ต้องกด "เปิดประมูล" อีกที). */
+export const createAuction = (data: NewAuction) => (db: Database): Database => ({
+  ...db,
+  auctions: [
+    {
+      id: id('auc'),
+      product_id: data.product_id,
+      title: data.title,
+      images: data.images ?? [],
+      detail: data.detail,
+      start_price: data.start_price,
+      buy_now_price: data.buy_now_price,
+      ends_at: data.ends_at,
+      original_ends_at: data.ends_at,
+      extend_min: data.extend_min ?? 5,
+      window_min: data.window_min ?? 30,
+      cap_min: data.cap_min ?? 60,
+      status: 'draft' as const,
+      current_price: 0,
+      bid_count: 0,
+      extend_count: 0,
+      created_at: new Date().toISOString(),
+    },
+    ...db.auctions,
+  ],
+});
+
+/** แก้ห้อง — **ได้เฉพาะตอนยังเป็นร่าง**. เปิดประมูลแล้วห้ามแก้กติกากลางทาง และในทางเทคนิค
+ *  การเซฟทั้งแถวจะทับ current_price/ends_at ที่ RPC เพิ่งอัปเดต (ราคาที่ลูกค้าบิดมาจะหายไป). */
+export const updateAuction = (auctionId: string, patch: Partial<NewAuction>) => (db: Database): Database => ({
+  ...db,
+  auctions: db.auctions.map((a) => {
+    if (a.id !== auctionId || a.status !== 'draft') return a;
+    const ends = patch.ends_at ?? a.ends_at;
+    return { ...a, ...patch, ends_at: ends, original_ends_at: ends };
+  }),
+});
+
+/** เปิดประมูล (ร่าง → กำลังประมูล). */
+export const openAuction = (auctionId: string) => (db: Database): Database => ({
+  ...db,
+  auctions: db.auctions.map((a) => (a.id === auctionId && a.status === 'draft' ? { ...a, status: 'live' as const } : a)),
+});
+
+/** ยกเลิกห้อง (ของเสียหาย/ขายไปแล้ว) — บิดที่มีอยู่กลายเป็นโมฆะทั้งหมด. */
+export const cancelAuction = (auctionId: string, reason?: string) => (db: Database): Database => ({
+  ...db,
+  auctions: db.auctions.map((a) => (a.id === auctionId && a.status !== 'paid'
+    ? { ...a, status: 'cancelled' as const, closed_at: new Date().toISOString(), detail: reason ? `${a.detail ?? ''}\n[ยกเลิก] ${reason}`.trim() : a.detail }
+    : a)),
+  auctionBids: db.auctionBids.map((b) => (b.auction_id === auctionId && b.status === 'active'
+    ? { ...b, status: 'void' as const, void_reason: 'ยกเลิกการประมูล' } : b)),
+});
+
+/** ลบห้องที่ยังเป็นร่าง. */
+export const removeAuction = (auctionId: string) => (db: Database): Database => {
+  const a = db.auctions.find((x) => x.id === auctionId);
+  if (!a || a.status !== 'draft') return db;
+  return { ...db, auctions: db.auctions.filter((x) => x.id !== auctionId), auctionBids: db.auctionBids.filter((b) => b.auction_id !== auctionId) };
+};
+
+/** กระดิ่งรายชิ้น (เปิด/ปิด). */
+export const toggleAuctionWatch = (auctionId: string, userId: string) => (db: Database): Database => {
+  const hit = db.auctionWatch.find((w) => w.auction_id === auctionId && w.user_id === userId);
+  return {
+    ...db,
+    auctionWatch: hit
+      ? db.auctionWatch.filter((w) => w !== hit)
+      : [...db.auctionWatch, { id: id('aw'), auction_id: auctionId, user_id: userId, created_at: new Date().toISOString() }],
+  };
+};
+
+/** แอดมินยกเลิกบิด (ลูกค้าพิมพ์ผิด → ส่งคำขอมา). ราคากลับไปที่บิดสูงสุดที่เหลืออยู่;
+ *  **เวลาปิดที่ต่อไปแล้วไม่ย้อนกลับ** (คนอื่นวางแผนจากเวลานั้นไปแล้ว). */
+export const voidAuctionBid = (bidId: string, reason: string) => (db: Database): Database => {
+  const bid = db.auctionBids.find((b) => b.id === bidId);
+  if (!bid || bid.status !== 'active') return db;
+  const bids = db.auctionBids.map((b) => (b.id === bidId ? { ...b, status: 'void' as const, void_reason: reason } : b));
+  const left = bids.filter((b) => b.auction_id === bid.auction_id && b.status === 'active');
+  const top = left.reduce((m, b) => Math.max(m, b.amount), 0);
+  return {
+    ...db,
+    auctionBids: bids,
+    auctions: db.auctions.map((a) => (a.id === bid.auction_id ? { ...a, current_price: top, bid_count: left.length } : a)),
+  };
+};
+
+/** ผู้ชนะไม่จ่ายใน 24 ชม. → สิทธิ์ตกไปอันดับ 2 ที่ "ราคาที่เขาบิดไว้" (กติกาที่ประกาศแต่แรก). */
+export const awardRunnerUp = (auctionId: string) => (db: Database): Database => ({
+  ...db,
+  auctions: db.auctions.map((a) => {
+    if (a.id !== auctionId || !a.runner_up_user_id) return a;
+    return {
+      ...a,
+      winner_user_id: a.runner_up_user_id,
+      winning_amount: a.runner_up_amount,
+      runner_up_user_id: undefined,
+      runner_up_amount: undefined,
+      status: 'ended' as const,
+      pay_due_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
+    };
+  }),
+});
+
+/** ผู้ชนะจ่ายแล้ว (แอดมินยืนยันหลังตรวจสลิป). */
+export const markAuctionPaid = (auctionId: string) => (db: Database): Database => ({
+  ...db,
+  auctions: db.auctions.map((a) => (a.id === auctionId ? { ...a, status: 'paid' as const } : a)),
+});
+
+// ── ค่าเข้าสนาม ฿300 (คนที่ยังไม่มีใบพรี) ───────────────────────────────────
+/** ลูกค้าส่งสลิป 300 → รอแอดมินตรวจ. */
+export const submitAuctionEntry = (userId: string, slipUrl?: string, amount = 300) => (db: Database): Database => ({
+  ...db,
+  auctionEntries: [
+    { id: id('ae'), user_id: userId, amount, kind: 'slip' as const, slip_url: slipUrl, status: 'pending' as const, created_at: new Date().toISOString() },
+    ...db.auctionEntries,
+  ],
+});
+
+/** แอดมินอนุมัติ = ปลดสิทธิ์บิด + จดโน้ต "มัดจำไว้เพื่อประมูล / รอพรี"
+ *  (เงินก้อนนี้ยังไม่ใช่รายได้ — จะกลายเป็นรายได้ตอนถูกใช้เป็นมัดจำออเดอร์ = status 'used'). */
+export const approveAuctionEntry = (entryId: string, note = 'มัดจำไว้เพื่อประมูล / รอพรี') => (db: Database): Database => ({
+  ...db,
+  auctionEntries: db.auctionEntries.map((e) => (e.id === entryId && e.status === 'pending'
+    ? { ...e, status: 'approved' as const, note, approved_at: new Date().toISOString() } : e)),
+});
+
+export const rejectAuctionEntry = (entryId: string, note?: string) => (db: Database): Database => ({
+  ...db,
+  auctionEntries: db.auctionEntries.map((e) => (e.id === entryId && e.status === 'pending'
+    ? { ...e, status: 'rejected' as const, note } : e)),
+});
+
+/** ลูกค้าเอาเงินก้อนนี้ไปใช้เป็นมัดจำพรีแล้ว — ผูกกับออเดอร์เพื่อไม่ให้ยอดถูกนับสองรอบ. */
+export const useAuctionEntry = (entryId: string, orderId: string) => (db: Database): Database => ({
+  ...db,
+  auctionEntries: db.auctionEntries.map((e) => (e.id === entryId && e.status === 'approved'
+    ? { ...e, status: 'used' as const, order_id: orderId, used_at: new Date().toISOString() } : e)),
+});
+
+/** แอดมินปลดล็อกสิทธิ์บิดให้รายคน (ลูกค้าชั้นดีที่ของถึงมือครบแล้ว จึงไม่มีใบพรีค้าง). */
+export const unlockAuctionFor = (userId: string, note = 'แอดมินปลดล็อกให้') => (db: Database): Database => ({
+  ...db,
+  auctionEntries: [
+    { id: id('ae'), user_id: userId, amount: 0, kind: 'admin' as const, status: 'approved' as const, note, created_at: new Date().toISOString(), approved_at: new Date().toISOString() },
+    ...db.auctionEntries,
+  ],
+});
+
+/** สวิตช์เปิดห้องประมูลให้ลูกค้าเห็น (app_config 'auction_public') — default ปิด. */
+export const setAuctionPublic = (enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: 'auction_public', value: { enabled } }, ...db.appConfig.filter((c) => c.key !== 'auction_public')],
+});
+
+// ── โหมดทดลอง (ยังไม่รัน v60) ───────────────────────────────────────────────
+/** บิดแบบ local — ใช้ตอนยังไม่มี RPC เท่านั้น (สูตรต้องตรงกับ migration v60). */
+export const placeBidLocal = (auctionId: string, userId: string, amount: number) => (db: Database): Database => {
+  const a = db.auctions.find((x) => x.id === auctionId);
+  if (!a || a.status !== 'live') return db;
+  const now = new Date();
+  if (now.getTime() >= new Date(a.ends_at).getTime()) return db;
+  if (amount % 10 !== 0 || amount < minNextBid(a, stepBands(db))) return db;
+  const ext = extendedEnd(a, now);
+  return {
+    ...db,
+    auctionBids: [
+      { id: id('ab'), auction_id: auctionId, user_id: userId, amount, status: 'active' as const, created_at: now.toISOString() },
+      ...db.auctionBids,
+    ],
+    auctions: db.auctions.map((x) => (x.id === auctionId
+      ? { ...x, current_price: amount, bid_count: x.bid_count + 1, ends_at: ext.ends_at, extend_count: x.extend_count + (ext.extended ? 1 : 0) }
+      : x)),
+  };
+};
+
+/** ปิด + สรุปผลแบบ local (โหมดทดลอง) — ผู้ชนะ + อันดับ 2 ที่เป็นคนละคน. */
+export const closeAuctionLocal = (auctionId: string) => (db: Database): Database => {
+  const a = db.auctions.find((x) => x.id === auctionId);
+  if (!a || a.status !== 'live') return db;
+  const now = new Date().toISOString();
+  const active = db.auctionBids.filter((b) => b.auction_id === auctionId && b.status === 'active')
+    .sort((x, y) => y.amount - x.amount || (x.created_at < y.created_at ? -1 : 1));
+  const win = active[0];
+  if (!win) return { ...db, auctions: db.auctions.map((x) => (x.id === auctionId ? { ...x, status: 'ended' as const, closed_at: now } : x)) };
+  const runner = active.find((b) => b.user_id !== win.user_id);
+  return {
+    ...db,
+    auctions: db.auctions.map((x) => (x.id === auctionId ? {
+      ...x, status: 'ended' as const, closed_at: now,
+      winner_user_id: win.user_id, winning_amount: win.amount,
+      runner_up_user_id: runner?.user_id, runner_up_amount: runner?.amount,
+      pay_due_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
+    } : x)),
+  };
+};
+
+/** ซื้อเลยแบบ local (โหมดทดลอง) — บิดที่ราคาซื้อเลยแล้วปิดห้องทันที. */
+export const buyNowLocal = (auctionId: string, userId: string) => (db: Database): Database => {
+  const a = db.auctions.find((x) => x.id === auctionId);
+  if (!a || a.status !== 'live' || !a.buy_now_price || a.current_price >= a.buy_now_price) return db;
+  const withBid: Database = {
+    ...db,
+    auctionBids: [
+      { id: id('ab'), auction_id: auctionId, user_id: userId, amount: a.buy_now_price, status: 'active' as const, created_at: new Date().toISOString() },
+      ...db.auctionBids,
+    ],
+    auctions: db.auctions.map((x) => (x.id === auctionId ? { ...x, current_price: a.buy_now_price!, bid_count: x.bid_count + 1 } : x)),
+  };
+  return closeAuctionLocal(auctionId)(withBid);
 };
