@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { ProductBatch } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { baht } from '@/lib/theme';
 import { metaLine } from '@/domain/services/catalog';
 import { batchAvailable, batchGoneState } from '@/domain/services/reservations';
+import { useLiveStock } from '@/lib/useLiveStock';
 import { ProductThumb, cx } from './ui';
 
 /** A special pre-order round (สต๊อกใบพรี) shown on the shop — same figure, its own lot/price.
@@ -15,15 +17,18 @@ import { ProductThumb, cx } from './ui';
  *  nature); exactly 1 left → "เหลือ 1 ชิ้นสุดท้าย"; 0 → สินค้าหมด, greyed + unclickable. */
 export function BatchCard({ batch }: { batch: ProductBatch }) {
   const db = useDatabase();
+  const router = useRouter();
+  const { checking, ensure } = useLiveStock();
   const product = db.products.find((p) => p.id === batch.product_id);
   if (!product) return null;
   const avail = batchAvailable(db, batch);
   const soldOut = avail <= 0;
   const lastOne = avail === 1;
   const fullPay = batch.deposit_amount >= batch.price_total;
-  // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ — อาจหลุดกลับมา (ยังกดเข้าไปเฝ้าได้)
-  // · 'gone' = ตั๋วออกครบจริง — กดเข้าไม่ได้แล้ว
+  // ป้ายบอกว่าหมดแบบไหน: 'temp' = มีคนถือ hold/สลิปรอตรวจ (อาจหลุดกลับมา) · 'gone' = ตั๋วออกครบจริง
+  // ⚠ ทั้งสองแบบ "กดเข้าไม่ได้" เหมือนกัน (เจ้าของ 2026-07-30) — ป้ายมีไว้บอกว่ารอได้ไหมเท่านั้น
   const gone = batchGoneState(db, batch);
+  const href = `/shop/${product.id}?batch=${batch.id}`;
 
   const inner = (
     <div className={cx('block overflow-hidden rounded-card border bg-surface-2', soldOut ? 'border-subtle opacity-60' : 'border-accent-soft')}>
@@ -35,6 +40,12 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
             <span className={cx('rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-bold', gone === 'temp' ? 'animate-blink text-[#fbbf24]' : 'text-white')}>
               {gone === 'temp' ? '⏳ หมดชั่วคราว · รอหลุด' : 'สินค้าหมด'}
             </span>
+          </div>
+        )}
+        {/* กำลังถามของกับ server ตอนกด — กันกดรัว + บอกว่าไม่ได้ค้าง */}
+        {checking && !soldOut && (
+          <div className="absolute inset-0 grid place-items-center bg-black/45">
+            <span className="animate-pulse rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-bold text-white">กำลังเช็คของ…</span>
           </div>
         )}
       </div>
@@ -67,6 +78,12 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
     </div>
   );
 
-  // หมดจริง (gone) = กดเข้าไม่ได้แล้ว (เจ้าของ 2026-07-30) · หมดชั่วคราว (temp) ยังกดเข้าไปเฝ้ารอหลุดได้
-  return gone === 'gone' ? inner : <Link href={`/shop/${product.id}?batch=${batch.id}`}>{inner}</Link>;
+  // ของหมด (ทั้ง temp และ gone) = กดเข้าไม่ได้เลย — ลูกค้าจะได้ไม่งงว่าตกลงเหลือหรือไม่เหลือ
+  if (soldOut) return inner;
+  // ยังมีของ: กดแล้วถาม server ก่อนพาเข้า (เครื่องที่เปิดกริดค้างไว้อาจถือเลขเก่า)
+  return (
+    <Link href={href} onClick={(e) => { e.preventDefault(); void ensure(product.id, batch.id).then((ok) => { if (ok) router.push(href); }); }}>
+      {inner}
+    </Link>
+  );
 }

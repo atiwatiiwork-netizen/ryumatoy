@@ -84,7 +84,10 @@ function ShopInner() {
     if (seriesId && p.series_id !== seriesId) return false;
     if (query && !`${p.series_name}`.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
-  });
+  })
+    // ของที่ยังซื้อได้ขึ้นก่อนเสมอ ของหมดไปท้ายสุด (เจ้าของ 2026-07-30: ของหมดกดไม่ได้แล้ว
+    // ถ้าปนอยู่กลางกริดจะกดโดนแล้วงงว่าทำไมไม่เข้า)
+    .sort((x, y) => (batchAvailable(db, y) > 0 ? 1 : 0) - (batchAvailable(db, x) > 0 ? 1 : 0));
 
   // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
   const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
@@ -170,7 +173,17 @@ function ShopInner() {
         <div>
           <div className="mb-3 text-[12.5px] text-ink-faint lg:mb-4 lg:text-lg lg:font-extrabold lg:text-ink">
             {category === 'instock' ? 'พร้อมส่ง' : category === 'preorder' ? 'พรีออเดอร์' : category === 'special' ? 'พรีรอบพิเศษ' : 'สินค้าทั้งหมด'}
-            <span className="font-normal text-ink-faint lg:text-sm"> · {results.length + openBatches.length} รายการ</span>
+            {/* นับ "ที่ซื้อได้จริง" ให้ตรงกับตัวเลขบนแท็บด้านบน แล้วบอกของหมดแยก (เดิมนับรวมของหมด
+                → หัวบอก 4 แต่แท็บบอก 3 อ่านแล้วงง) */}
+            {(() => {
+              const goneN = openBatches.filter((b) => batchAvailable(db, b) <= 0).length;
+              return (
+                <span className="font-normal text-ink-faint lg:text-sm">
+                  {' '}· {results.length + openBatches.length - goneN} รายการ
+                  {goneN > 0 && <span className="text-ink-faint"> · หมดแล้ว {goneN}</span>}
+                </span>
+              );
+            })()}
           </div>
           {openBatches.length > 0 && (
             <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">

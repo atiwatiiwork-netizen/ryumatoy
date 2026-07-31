@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { Product } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
@@ -10,6 +11,7 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine, variantsOf } from '@/domain/services/catalog';
 import { availableFor, stockGoneState } from '@/domain/services/reservations';
+import { useLiveStock } from '@/lib/useLiveStock';
 import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
@@ -25,6 +27,8 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
+  const router = useRouter();
+  const { checking, ensure } = useLiveStock();
 
   const variants = product.has_variants ? variantsOf(db, product.id) : [];
   const withImg = variants.filter((v) => v.image_url); // variants that carry their own photo
@@ -53,13 +57,15 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   // pick in the product page (customer feedback: ปุ่มแดงทุกตัว ยกเว้น variants)
   const canQuickAdd = quickAdd && !product.has_variants && !(stockLeft != null && stockLeft <= 0);
 
-  const doAdd = (e: React.MouseEvent) => {
+  const doAdd = async (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
     // in-stock: never let the cart hold more than what's really left (reservation-aware)
     if (stockLeft != null) {
       const inCart = cart.lines.filter((l) => l.productId === product.id).reduce((s, l) => s + l.qty, 0);
       // กฎร้าน: ไม่บอกจำนวนสต๊อกจริงแม้ตอนเต็ม — บอกแค่ว่าหยิบครบที่มีแล้ว
       if (inCart + 1 > stockLeft) { flash('หยิบครบจำนวนที่เหลือแล้ว (อยู่ในตะกร้าครบ)'); return; }
+      // ของจำกัดจำนวน: ถาม server ก่อนหยิบ (เครื่องที่เปิดค้างอาจถือเลขเก่า) — หมดแล้วไม่ให้เข้าตะกร้า
+      if (!(await ensure(product.id))) return;
     }
     // in-stock pays in full (DNA: full-pay deposit invariant) — guards legacy rows where deposit < price
     const dep = product.is_stock ? product.price_total : product.deposit_amount;
@@ -73,12 +79,22 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   };
 
   const soldOut = stockLeft != null && stockLeft <= 0;
-  // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ อาจหลุดกลับมา · 'gone' = หมดจริง
+  // ป้ายบอกว่าหมดแบบไหน: 'temp' = มีคนถือ hold/สลิปรอตรวจ อาจหลุดกลับมา · 'gone' = หมดจริง
   const goneKind = soldOut ? stockGoneState(db, product) ?? 'gone' : null;
-  // หมดจริงเท่านั้นที่กดเข้าไม่ได้ (กติกาเดียวกับ BatchCard) — หมดชั่วคราวยังเข้าไปเฝ้ารอหลุดได้
-  const Wrap = goneKind === 'gone'
+  // ⚠ ของหมด = กดเข้าไม่ได้ทุกกรณี (เจ้าของ 2026-07-30) — เดิมหมดชั่วคราวยังกดเข้าได้ ลูกค้างงว่า
+  // ตกลงเหลือหรือไม่เหลือ. ของจำกัดจำนวนที่ยังมี → กดแล้วถาม server ก่อนพาเข้า (กันข้อมูลเครื่องเก่า)
+  const href = `/shop/${product.id}`;
+  const Wrap = soldOut
     ? ({ className, children }: { className?: string; children: React.ReactNode }) => <div className={className}>{children}</div>
-    : ({ className, children }: { className?: string; children: React.ReactNode }) => <Link href={`/shop/${product.id}`} className={className}>{children}</Link>;
+    : ({ className, children }: { className?: string; children: React.ReactNode }) => (
+        <Link
+          href={href}
+          className={className}
+          onClick={stockLeft == null ? undefined : (e) => { e.preventDefault(); void ensure(product.id).then((ok) => { if (ok) router.push(href); }); }}
+        >
+          {children}
+        </Link>
+      );
   return (
     <Wrap className={cx('block overflow-hidden rounded-card border border-subtle bg-surface-2', soldOut && 'opacity-60')}>
       <div className="relative">
@@ -90,6 +106,9 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
           <span className={cx('absolute inset-0 grid place-items-center bg-black/45 text-[13px] font-extrabold', goneKind === 'temp' ? 'animate-blink text-[#fbbf24]' : 'text-white')}>
             {goneKind === 'temp' ? '⏳ หมดชั่วคราว · รอหลุด' : 'สินค้าหมด'}
           </span>
+        )}
+        {checking && !soldOut && (
+          <span className="absolute inset-0 grid place-items-center bg-black/45 text-[12px] font-bold text-white"><span className="animate-pulse">กำลังเช็คของ…</span></span>
         )}
         <StatusBadge status={(product.is_stock ? 'open' : product.status) as StatusKey} className="absolute bottom-2 right-2" />
       </div>
