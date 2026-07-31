@@ -5,6 +5,7 @@ import { warehouseQueue } from './warehouse';
 import { canConvertToInStock, stockRemaining } from './catalog';
 import { orphanUsedGrants } from './coupons';
 import { unmatchedApprovedItems } from './tickets';
+import { needsClose, payOverdue } from './auctions';
 
 /**
  * "งานค้างของฉันวันนี้" — รวมงานที่ต้องลงมือ จากทุกโมดูล มาไว้ที่เดียว (2026-07-25).
@@ -86,6 +87,20 @@ export function worklist(db: Database): WorkItem[] {
 
   const drafts = db.batches.filter((b) => b.status === 'open' && b.published === false);
   add({ key: 'draft', urgency: 'soon', icon: '📝', title: 'รอบพิเศษยังเป็นร่าง', detail: 'ยังไม่ขึ้นหน้าร้าน — กดเปิดขายเมื่อพร้อม', count: drafts.length, href: '/admin/stock' });
+
+  // ── ประมูล (v60/v61) — ไม่มี scheduler: ถ้าไม่มีคนกด ห้องจะค้างและผู้ชนะไม่ได้รับแจ้ง ──
+  const nowD = new Date();
+  const toClose = db.auctions.filter((a) => needsClose(a, nowD));
+  add({ key: 'auc_close', urgency: 'now', icon: '🔨', title: 'ประมูลหมดเวลา รอสรุปผล', detail: 'กดปิด + สรุปผลเพื่อประกาศผู้ชนะ', count: toClose.length, href: '/admin/auctions', money: toClose.reduce((s, a) => s + a.current_price, 0) });
+
+  const unpaidWins = db.auctions.filter((a) => a.status === 'ended' && payOverdue(a, nowD));
+  add({ key: 'auc_unpaid', urgency: 'now', icon: '⏳', title: 'ผู้ชนะประมูลเลยกำหนดจ่าย', detail: 'ทวง หรือยกสิทธิ์ให้อันดับ 2 ตามกติกา', count: unpaidWins.length, href: '/admin/auctions', money: unpaidWins.reduce((s, a) => s + (a.winning_amount ?? 0), 0) });
+
+  const entries = db.auctionEntries.filter((e) => e.status === 'pending');
+  add({ key: 'auc_entry', urgency: 'today', icon: '🎟️', title: 'ค่าเข้าสนามประมูลรอตรวจ', detail: 'อนุมัติแล้วลูกค้าบิดได้ทันที', count: entries.length, href: '/admin/auctions', money: entries.reduce((s, e) => s + e.amount, 0) });
+
+  const cancelReqs = db.auctionBids.filter((b) => b.status === 'active' && !!b.cancel_requested_at);
+  add({ key: 'auc_cancel', urgency: 'today', icon: '↩️', title: 'คำขอยกเลิกบิด', detail: 'ลูกค้าบิดผิด — ตรวจแล้วกดยกเลิกให้', count: cancelReqs.length, href: '/admin/auctions' });
 
   // ── สมาชิก / หาของ / กิจกรรม ──
   add({ key: 'members', urgency: 'now', icon: '👤', title: 'สมาชิกใหม่รออนุมัติ', detail: 'อนุมัติแล้วลูกค้าเริ่มสั่งได้', count: db.users.filter((u) => u.approved === false && !u.is_admin).length, href: '/admin/members' });

@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId, useAuth } from '@/state/AuthProvider';
 import { store } from '@/data/store';
@@ -10,6 +12,7 @@ import {
   placeBidLocal, buyNowLocal, toggleAuctionWatch, submitAuctionEntry,
 } from '@/data/mutations';
 import * as rpc from '@/lib/auction';
+import { pushEnabled, sendAuctionPush } from '@/lib/push';
 import {
   AUCTION_STATUS_TH, BID_REJECT_TH, bidRight, checkBid, extendCapped, inSnipeWindow, isLive,
   minNextBid, pendingEntry, stepBands, stepFor, timeLeftLabel,
@@ -40,6 +43,8 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   const { flash } = useToast();
   const uid = useCurrentUserId();
   const { isAdmin } = useAuth();
+  const cart = useCart();
+  const router = useRouter();
 
   const auction = db.auctions.find((a) => a.id === auctionId);
   const bands = stepBands(db);
@@ -118,6 +123,10 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
         flash(`บิด ${baht(amount)} แล้ว (โหมดทดลอง)`);
       } else if (res.ok) {
         flash(res.extended ? `บิด ${baht(amount)} · ต่อเวลาอีก ${view.extend_min} นาที` : `บิด ${baht(amount)} แล้ว`);
+        // แจ้งคนที่โดนแซง (ทันที) + คนกดกระดิ่ง (เซิร์ฟเวอร์หรี่ให้ไม่ถี่กว่า 5 นาที)
+        // fire-and-forget: push ล้มเหลวห้ามทำให้การบิดที่สำเร็จแล้วดูเหมือนพัง
+        if (pushEnabled(db, 'auction_outbid')) void sendAuctionPush(auctionId, 'outbid');
+        if (pushEnabled(db, 'auction_price')) void sendAuctionPush(auctionId, 'price');
         await pull();
       } else {
         const key = (res.error ?? '') as keyof typeof BID_REJECT_TH;
@@ -138,6 +147,30 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
       else if (res.ok) { flash('ซื้อเลยสำเร็จ — รอแอดมินแจ้งยอดชำระ'); await pull(); }
       else flash(BID_REJECT_TH[(res.error ?? '') as keyof typeof BID_REJECT_TH] ?? `ไม่สำเร็จ (${res.error})`);
     } finally { setBusy(false); }
+  }
+
+  // ── ผู้ชนะกดจ่าย: โหลดเข้าตะกร้าแล้วไป /checkout ตัวเดิม (สลิป→อนุมัติ→ตั๋ว→จัดส่ง ใช้ท่อเดิมหมด)
+  const iWon = !!uid && auction.winner_user_id === uid && ['ended', 'awarded', 'paid'].includes(auction.status);
+  function payNow() {
+    const pid = view.product_id;
+    if (!pid) { flash('รายการนี้ไม่ได้ผูกกับสินค้าในระบบ — ทักแอดมินเพื่อชำระเงินครับ'); return; }
+    if (!db.products.some((p) => p.id === pid)) { flash('สินค้าถูกนำออกจากระบบแล้ว — ทักแอดมินได้เลยครับ'); return; }
+    if (cart.lines.length > 0 && !confirm('ตะกร้ามีสินค้าอยู่ — จะแทนที่ด้วยรายการที่ชนะประมูล?')) return;
+    cart.clear();
+    cart.add({
+      productId: pid, auctionId: view.id, qty: 1,
+      priceEach: view.winning_amount ?? 0, depositEach: view.winning_amount ?? 0,
+    });
+    router.push('/checkout');
+  }
+
+  async function askCancel(bidId: string) {
+    const reason = prompt('บอกเหตุผลสั้นๆ ให้แอดมินหน่อยครับ (เช่น พิมพ์ยอดผิด)');
+    if (!reason) return;
+    const res = await rpc.requestBidCancel(bidId, reason);
+    if (rpc.isNoServer(res)) { flash('โหมดทดลอง — ยังส่งคำขอจริงไม่ได้'); return; }
+    flash(res.ok ? 'ส่งคำขอให้แอดมินแล้ว — รอแอดมินตรวจสอบ' : 'ส่งคำขอไม่สำเร็จ');
+    if (res.ok) await pull();
   }
 
   const watching = !!uid && db.auctionWatch.some((w) => w.auction_id === auctionId && w.user_id === uid);
@@ -265,13 +298,13 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
           )}
 
           {!running && view.status !== 'draft' && (
-            <div className="rounded-lg bg-surface-3 px-3 py-2.5 text-[12.5px] text-ink-muted">
-              {view.winner_user_id
-                ? (view.winner_user_id === uid
-                    ? <span className="font-bold text-[#4ade80]">คุณชนะการประมูลนี้ที่ {baht(view.winning_amount ?? 0)} — ชำระภายใน 24 ชม.</span>
-                    : 'ปิดประมูลแล้ว — มีผู้ชนะแล้ว')
-                : 'ปิดประมูลแล้ว — ไม่มีผู้บิด'}
-            </div>
+            iWon
+              ? <WinnerPay a={auction} onPay={payNow} />
+              : (
+                <div className="rounded-lg bg-surface-3 px-3 py-2.5 text-[12.5px] text-ink-muted">
+                  {view.winner_user_id ? 'ปิดประมูลแล้ว — มีผู้ชนะแล้ว' : 'ปิดประมูลแล้ว — ไม่มีผู้บิด'}
+                </div>
+              )
           )}
 
           <button
@@ -305,10 +338,16 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
           </div>
           {historyRows.length === 0 && <div className="text-[12.5px] text-ink-faint">ยังไม่มีใครบิด — เป็นคนแรกได้เลย</div>}
           {historyRows.map((r) => (
-            <div key={r.key} className={cx('flex items-center justify-between rounded-lg px-2.5 py-1.5 text-[12.5px]',
+            <div key={r.key} className={cx('flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px]',
               r.mine ? 'bg-primary/12' : 'bg-surface-3', r.void && 'opacity-45 line-through')}>
               <span className={cx('font-semibold', r.mine ? 'text-primary-bright' : 'text-ink-muted')}>
                 {r.mine ? 'คุณ' : r.label}
+                {/* บิดผิดถอนเองไม่ได้ (กติกา) — ส่งเรื่องให้แอดมินตัดสิน */}
+                {r.mine && !r.void && running && (
+                  <button onClick={() => void askCancel(r.key)} className="ml-2 rounded border border-subtle px-1.5 py-0.5 text-[10.5px] font-normal text-ink-faint">
+                    ขอยกเลิก
+                  </button>
+                )}
               </span>
               <span className="flex items-center gap-2">
                 <span className="font-extrabold tabular-nums">{baht(r.amount)}</span>
@@ -322,6 +361,39 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
       </Card>
 
       <AuctionRules a={auction} />
+    </div>
+  );
+}
+
+/** ผู้ชนะ — กล่องชำระเงิน (24 ชม.) พร้อมนาฬิกานับถอยหลัง */
+function WinnerPay({ a, onPay }: { a: Auction; onPay: () => void }) {
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  if (a.status === 'paid') {
+    return (
+      <div className="rounded-lg bg-[#16a34a]/15 px-3 py-2.5 text-[12.5px] font-bold text-[#4ade80]">
+        ชำระเรียบร้อยแล้ว — ดูตั๋วและเลือกวิธีรับของได้ที่ “กระเป๋าตั๋ว”
+      </div>
+    );
+  }
+  if (a.status === 'awarded') {
+    return (
+      <div className="rounded-lg bg-surface-3 px-3 py-2.5 text-[12.5px] text-ink-muted">
+        ส่งสลิปแล้ว — รอแอดมินตรวจสอบ พออนุมัติจะได้ตั๋วทันที
+      </div>
+    );
+  }
+  const left = a.pay_due_at ? new Date(a.pay_due_at).getTime() - Date.now() : 0;
+  const late = left <= 0;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-[#16a34a]/40 bg-[#16a34a]/[0.1] p-3">
+      <div className="text-[13.5px] font-extrabold text-[#4ade80]">คุณชนะการประมูลนี้ที่ {baht(a.winning_amount ?? 0)}</div>
+      <div className="text-[12px] leading-relaxed text-ink-muted">
+        {late
+          ? 'เลยกำหนดชำระ 24 ชม. แล้ว — ยังกดจ่ายได้ แต่สิทธิ์อาจถูกยกให้ผู้บิดอันดับ 2 ตามกติกา รีบทักแอดมินครับ'
+          : <>ชำระเต็มจำนวนภายใน <b className="text-ink">{timeLeftLabel(left)}</b> · ราคานี้รวมค่าส่งแล้ว</>}
+      </div>
+      <Button onClick={onPay}>ชำระเงิน {baht(a.winning_amount ?? 0)}</Button>
     </div>
   );
 }

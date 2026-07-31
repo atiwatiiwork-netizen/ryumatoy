@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
+import { pushEnabled, sendPush, subsAll, subsForUsers } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { baht } from '@/lib/theme';
 import * as rpc from '@/lib/auction';
@@ -132,11 +133,50 @@ export default function AdminAuctionsPage() {
 function AuctionList({ db, dispatch, flash, list, now, onPreview }: {
   db: Database; dispatch: Dispatch; flash: Flash; list: Auction[]; now: Date; onPreview: (id: string) => void;
 }) {
+  /** คนที่ควรได้ยินข่าวห้องนี้: กดกระดิ่ง + เคยบิด (ไม่ซ้ำ) */
+  const audienceOf = (a: Auction) => [...new Set([
+    ...db.auctionWatch.filter((w) => w.auction_id === a.id).map((w) => w.user_id),
+    ...db.auctionBids.filter((b) => b.auction_id === a.id && b.status === 'active').map((b) => b.user_id),
+  ])];
+
   async function close(a: Auction) {
     const res = await rpc.closeAuction(a.id);
-    if (rpc.isNoServer(res)) { dispatch(closeAuctionLocal(a.id)); flash('ปิด + สรุปผลแล้ว (โหมดทดลอง)'); return; }
-    if (res.ok) { flash(res.winner ? `ปิดแล้ว — ผู้ชนะที่ ${baht(res.amount ?? 0)}` : 'ปิดแล้ว — ไม่มีผู้บิด'); reloadDb(); }
-    else flash(`ปิดไม่สำเร็จ (${res.error})`);
+    const local = rpc.isNoServer(res);
+    if (local) { dispatch(closeAuctionLocal(a.id)); flash('ปิด + สรุปผลแล้ว (โหมดทดลอง)'); }
+    else if (res.ok) { flash(res.winner ? `ปิดแล้ว — ผู้ชนะที่ ${baht(res.amount ?? 0)}` : 'ปิดแล้ว — ไม่มีผู้บิด'); reloadDb(); }
+    else { flash(`ปิดไม่สำเร็จ (${res.error})`); return; }
+
+    // ประกาศผล: ผู้ชนะได้ข้อความส่วนตัว (มีกำหนดจ่าย) · คนที่ร่วมบิดได้ข้อความสั้นๆ
+    if (!pushEnabled(db, 'auction_result')) return;
+    const winnerId = local ? undefined : (res.winner ?? undefined);
+    const amount = local ? undefined : res.amount;
+    if (winnerId) {
+      void sendPush(subsForUsers(db, [winnerId]),
+        { title: '🏆 คุณชนะการประมูล!', body: `${a.title} — ${baht(amount ?? 0)} · ชำระภายใน 24 ชม.`, url: `/auctions/${a.id}` },
+        dispatch).catch(() => {});
+    }
+    const others = audienceOf(a).filter((u) => u !== winnerId);
+    if (others.length) {
+      void sendPush(subsForUsers(db, others),
+        { title: 'ปิดประมูลแล้ว', body: `${a.title} — จบที่ ${baht(amount ?? a.current_price)} บาท ไว้เจอกันรอบหน้าครับ`, url: `/auctions/${a.id}` },
+        dispatch).catch(() => {});
+    }
+  }
+
+  function announceOpen(a: Auction) {
+    if (!pushEnabled(db, 'auction_open')) { flash('สวิตช์ push "เปิดประมูลรอบใหม่" ปิดอยู่'); return; }
+    void sendPush(subsAll(db),
+      { title: '🔨 เปิดประมูลแล้ว', body: `${a.title} — เริ่มที่ ${baht(a.start_price)} บาท ปิด ${fmt(a.ends_at)}`, url: `/auctions/${a.id}` },
+      dispatch).then((r) => flash(`ส่งแจ้งเตือน ${r.sent} เครื่อง`)).catch(() => flash('ส่งแจ้งเตือนไม่สำเร็จ'));
+  }
+
+  function remindSoon(a: Auction) {
+    if (!pushEnabled(db, 'auction_soon')) { flash('สวิตช์ push "ใกล้ปิดประมูล" ปิดอยู่'); return; }
+    const ids = audienceOf(a);
+    if (!ids.length) { flash('ยังไม่มีคนกดกระดิ่งหรือบิดในห้องนี้'); return; }
+    void sendPush(subsForUsers(db, ids),
+      { title: '⏰ ใกล้ปิดประมูลแล้ว', body: `${a.title} — ตอนนี้ ${baht(a.current_price || a.start_price)} บาท ปิด ${fmt(a.ends_at)}`, url: `/auctions/${a.id}` },
+      dispatch).then((r) => flash(`เตือน ${r.sent} เครื่องแล้ว`)).catch(() => flash('ส่งแจ้งเตือนไม่สำเร็จ'));
   }
 
   if (list.length === 0) {
@@ -185,6 +225,8 @@ function AuctionList({ db, dispatch, flash, list, now, onPreview }: {
               <button onClick={() => onPreview(a.id)} className={btnCls}>👀 ดูห้อง</button>
               {a.status === 'draft' && <button onClick={() => { dispatch(openAuction(a.id)); flash('เปิดประมูลแล้ว'); }} className={btnPrimary}>เปิดประมูล</button>}
               {a.status === 'draft' && <button onClick={() => { if (confirm('ลบห้องนี้?')) dispatch(removeAuction(a.id)); }} className={btnCls}>ลบ</button>}
+              {a.status === 'live' && <button onClick={() => announceOpen(a)} className={btnCls}>📣 ประกาศเปิดประมูล</button>}
+              {a.status === 'live' && <button onClick={() => remindSoon(a)} className={btnCls}>⏰ เตือนใกล้ปิด</button>}
               {a.status === 'live' && <button onClick={() => void close(a)} className={btnPrimary}>ปิด + สรุปผล</button>}
               {a.status === 'live' && <button onClick={() => { if (confirm('ยกเลิกการประมูลนี้? บิดทั้งหมดจะเป็นโมฆะ')) { dispatch(cancelAuction(a.id, 'แอดมินยกเลิก')); flash('ยกเลิกแล้ว'); } }} className={btnCls}>ยกเลิก</button>}
               {a.status === 'ended' && a.winner_user_id && (
@@ -205,14 +247,26 @@ function AuctionList({ db, dispatch, flash, list, now, onPreview }: {
                   {[...bids].sort((x, y) => (x.created_at < y.created_at ? 1 : -1)).map((b) => {
                     const u = db.users.find((x) => x.id === b.user_id);
                     return (
-                      <div key={b.id} className={cx('flex items-center justify-between rounded-lg bg-surface-3 px-2.5 py-1.5 text-[12px]', b.status === 'void' && 'opacity-45 line-through')}>
-                        <span>{u?.display_name ?? b.user_id} {u?.member_code ? `(${u.member_code})` : ''}</span>
-                        <span className="flex items-center gap-2.5">
+                      <div key={b.id} className={cx('flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[12px]',
+                        b.cancel_requested_at && b.status === 'active' ? 'bg-[#fbbf24]/[0.12]' : 'bg-surface-3',
+                        b.status === 'void' && 'opacity-45 line-through')}>
+                        <span>
+                          {u?.display_name ?? b.user_id} {u?.member_code ? `(${u.member_code})` : ''}
+                          {b.cancel_requested_at && b.status === 'active' && (
+                            <span className="ml-2 rounded bg-[#fbbf24]/20 px-1.5 py-0.5 text-[11px] font-bold text-[#fbbf24]">
+                              ขอยกเลิก{b.cancel_reason ? `: ${b.cancel_reason}` : ''}
+                            </span>
+                          )}
+                          {b.status === 'void' && b.void_reason && <span className="ml-2 text-[11px] text-ink-faint">({b.void_reason})</span>}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-2.5">
                           <b className="tabular-nums">{baht(b.amount)}</b>
                           <span className="text-ink-faint">{fmt(b.created_at)}</span>
                           {b.status === 'active' && (
-                            <button onClick={() => { const r = prompt('เหตุผลที่ยกเลิกบิดนี้ (ลูกค้าขอมา / พิมพ์ผิด)'); if (r) { dispatch(voidAuctionBid(b.id, r)); flash('ยกเลิกบิดแล้ว'); } }}
-                              className="rounded border border-subtle px-1.5 py-0.5 text-[11px] text-ink-muted">ยกเลิก</button>
+                            <button onClick={() => {
+                              const r = prompt('เหตุผลที่ยกเลิกบิดนี้', b.cancel_reason ?? 'ลูกค้าแจ้งว่าพิมพ์ยอดผิด');
+                              if (r) { dispatch(voidAuctionBid(b.id, r)); flash('ยกเลิกบิดแล้ว — ราคากลับไปที่บิดก่อนหน้า'); }
+                            }} className="rounded border border-subtle px-1.5 py-0.5 text-[11px] text-ink-muted">ยกเลิกบิด</button>
                           )}
                         </span>
                       </div>

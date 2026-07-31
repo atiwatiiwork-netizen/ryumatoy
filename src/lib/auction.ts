@@ -65,6 +65,10 @@ export const buyNow = (auctionId: string) =>
 export const closeAuction = (auctionId: string) =>
   call('ryuma_auction_close', { p_auction_id: auctionId });
 
+/** ลูกค้าขอให้แอดมินยกเลิกบิดที่พิมพ์ผิด (ถอนเองไม่ได้ตามกติกา) — แตะได้แค่ 2 ช่องผ่าน RPC. */
+export const requestBidCancel = (bidId: string, reason: string) =>
+  call('ryuma_request_bid_cancel', { p_bid_id: bidId, p_reason: reason });
+
 /** สถานะสด — หน้าห้องเรียกทุกไม่กี่วินาที (ถูกกว่าโหลดทั้งฐานข้อมูลใหม่). */
 export const auctionState = (auctionId: string) =>
   call('ryuma_auction_state', { p_auction_id: auctionId });

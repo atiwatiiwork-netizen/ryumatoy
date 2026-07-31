@@ -81,6 +81,15 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
       return p.is_stock || p.status === 'open';
     });
     if (!sellable) return db;
+    // บรรทัดประมูล (v61): ต้องเป็นผู้ชนะของห้องนั้นจริง · ห้องปิดแล้ว · ยังไม่เคยมีออเดอร์จ่าย · ชิ้นเดียว
+    // ด่านนี้คือของจริง (UI กันชั้นนอกแล้ว) — กันคนยิงตรง/ตะกร้าค้างข้ามเครื่อง/กดจ่ายสองแท็บ
+    const auctionLinesOk = lines.every((l) => {
+      if (!l.auctionId) return true;
+      const a = db.auctions.find((x) => x.id === l.auctionId);
+      return !!a && a.winner_user_id === userId && a.status === 'ended'
+        && !a.pay_order_id && !!a.winning_amount && l.qty === 1 && l.productId === a.product_id;
+    });
+    if (!auctionLinesOk) return db;
     // เพดานต่อคนต่อรอบพิเศษ (เจ้าของ 2026-07-30 — ของ hot คนแย่งกัน): ตั๋วที่มีแล้ว (รวมแอดมินมอบ)
     // + hold ค้างของตัวเอง (ออเดอร์ก่อนที่สลิปยังรอตรวจ — ไม่นับ hold ที่หนุนออเดอร์นี้เอง)
     // + ที่ซื้อครั้งนี้ ต้องไม่เกิน BATCH_MAX_PER_USER. ปัดตกทั้งออเดอร์แบบเดียวกับ gate —
@@ -161,7 +170,13 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     const couponGrants = validGrant
       ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, order_id: orderId, discount_amount: discount } : g))
       : db.couponGrants;
-    const withOrder = { ...db, orders: [order, ...db.orders], couponGrants };
+    // ผูกออเดอร์กับห้องประมูลที่ผู้ชนะกำลังจ่าย (v61) → 'awarded' = จ่ายแล้วรอตรวจสลิป
+    // กันจ่ายซ้ำด้วย pay_order_id (ด่านจริงอยู่ที่ auctionLinesOk ข้างบนอีกชั้น)
+    const paidAuctionIds = new Set(lines.map((l) => l.auctionId).filter(Boolean) as string[]);
+    const auctions = paidAuctionIds.size
+      ? db.auctions.map((a) => (paidAuctionIds.has(a.id) ? { ...a, pay_order_id: orderId, status: 'awarded' as const } : a))
+      : db.auctions;
+    const withOrder = { ...db, orders: [order, ...db.orders], couponGrants, auctions };
     // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step.
     // mintRewards:false — this runs in the CUSTOMER session, which RLS forbids from minting event
     // coupons/awards; minting here would abort the whole flush and lose the tickets. Their rewards
@@ -294,6 +309,10 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
         o.id === orderId ? { ...o, status: 'approved', approved_at: new Date().toISOString() } : o,
       ),
       tickets: [...newTickets, ...db.tickets],
+      // ห้องประมูลที่ออเดอร์นี้เป็นตัวจ่าย → ปิดเป็น 'paid' (v61) ผู้ชนะได้ตั๋วแล้ว จบเส้นเงิน
+      auctions: db.auctions.some((a) => a.pay_order_id === orderId)
+        ? db.auctions.map((a) => (a.pay_order_id === orderId ? { ...a, status: 'paid' as const } : a))
+        : db.auctions,
     };
 
     // Event/กิจกรรม: this approval may have pushed the buyer over a threshold → auto-mint any reward
@@ -331,6 +350,11 @@ export const rejectOrder = (orderId: string) => (db: Database): Database => {
     paymentPlans: db.paymentPlans.map((p) => (p.order_id === orderId && p.status === 'done'
       ? { ...p, status: 'open' as const, order_id: null as unknown as undefined, closed_at: null as unknown as undefined, reminded_at: null as unknown as undefined }
       : p)),
+    // สลิปประมูลไม่ผ่าน → คืนห้องเป็น 'ended' + ปลดล็อกให้ผู้ชนะส่งสลิปใหม่ได้
+    // (null ไม่ใช่ undefined — ดูเหตุผลด้านบน: upsert ตัดคีย์ undefined ทิ้ง คอลัมน์เดิมจะไม่ถูกล้าง)
+    auctions: db.auctions.map((a) => (a.pay_order_id === orderId
+      ? { ...a, status: 'ended' as const, pay_order_id: null as unknown as undefined }
+      : a)),
   };
 };
 

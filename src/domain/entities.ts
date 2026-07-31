@@ -689,6 +689,8 @@ export interface Auction {
   runner_up_user_id?: string; // กติกา "2 อันดับแรกมีสิทธิ์" — #1 ไม่จ่ายใน 24 ชม. ตกมาที่คนนี้
   runner_up_amount?: number;
   pay_due_at?: string;
+  pay_order_id?: string;       // ออเดอร์ที่ผู้ชนะกดจ่าย (v61) — กันจ่ายซ้ำ + ปิดห้องเป็น paid ตอนอนุมัติสลิป
+  last_price_push_at?: string; // กัน push "ราคาขยับ" ยิงรัวทุกบิด (v61)
   created_at: string;
   closed_at?: string;
 }
@@ -703,6 +705,8 @@ export interface AuctionBid {
   amount: number;
   status: AuctionBidStatus;
   void_reason?: string;
+  cancel_requested_at?: string; // ลูกค้าขอยกเลิก (ถอนเองไม่ได้ — แอดมินเป็นคนกด) v61
+  cancel_reason?: string;
   created_at: string;
 }
 

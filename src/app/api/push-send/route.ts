@@ -55,10 +55,41 @@ export async function POST(req: Request) {
   const uid = await callerUid(req);
   if (!uid) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  let body: { subs?: { endpoint: string; p256dh: string; auth: string }[]; payload?: { title?: string; body?: string; url?: string } };
+  let body: {
+    subs?: { endpoint: string; p256dh: string; auth: string }[];
+    payload?: { title?: string; body?: string; url?: string };
+    auction?: { id?: string; kind?: string };
+  };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'bad json' }, { status: 400 }); }
-  const subs = (body.subs ?? []).filter((s) => s?.endpoint && s?.p256dh && s?.auth).slice(0, 500);
-  const payload = body.payload ?? {};
+
+  // ── โหมด "ประมูล": ปลายทาง + ข้อความถูกตัดสินที่ฝั่งเซิร์ฟเวอร์ทั้งหมด ──────────────
+  // ทำไม: RLS ให้ลูกค้าเห็น push_subscriptions แค่ของตัวเอง → เบราว์เซอร์คนที่บิดส่งหาคนที่โดนแซงไม่ได้
+  // และถ้าเปิดให้อ่าน endpoint คนอื่นก็จะกลายเป็นช่องยิง spam ทันที. RPC (security definer) จึงคืน
+  // ปลายทาง+ข้อความมาที่นี่เท่านั้น โดยตรวจเองว่าผู้เรียกเป็น "ผู้นำราคาปัจจุบัน" จริง
+  type Sub = { endpoint: string; p256dh: string; auth: string };
+  let auctionMode: { subs: Sub[]; payload: { title: string; body: string; url: string } } | null = null;
+  if (body.auction?.id && body.auction?.kind) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const token = (req.headers.get('authorization') ?? '').slice(7).trim();
+    if (!url || !anon) return NextResponse.json({ error: 'supabase env missing' }, { status: 503 });
+    try {
+      const r = await fetch(`${url}/rest/v1/rpc/ryuma_auction_push_targets`, {
+        method: 'POST',
+        headers: { apikey: anon, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_auction_id: body.auction.id, p_kind: body.auction.kind }),
+        cache: 'no-store',
+      });
+      if (!r.ok) return NextResponse.json({ sent: 0, gone: [] });
+      const d = (await r.json()) as { targets?: { endpoint: string; p256dh: string; auth: string }[]; title?: string; body?: string; url?: string };
+      const targets = (d.targets ?? []).filter((s) => s?.endpoint && s?.p256dh && s?.auth).slice(0, 500);
+      if (targets.length === 0 || !d.title) return NextResponse.json({ sent: 0, gone: [] }); // ถูกจำกัดความถี่/ไม่มีปลายทาง = เงียบ ไม่ใช่ error
+      auctionMode = { subs: targets, payload: { title: d.title, body: d.body ?? '', url: d.url ?? '/' } };
+    } catch { return NextResponse.json({ sent: 0, gone: [] }); }
+  }
+
+  const subs = auctionMode ? auctionMode.subs : (body.subs ?? []).filter((s) => s?.endpoint && s?.p256dh && s?.auth).slice(0, 500);
+  const payload = auctionMode ? auctionMode.payload : (body.payload ?? {});
   if (subs.length === 0 || !payload.title) return NextResponse.json({ error: 'subs + payload.title required' }, { status: 400 });
   if (rateLimited(uid, subs.length)) return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
 

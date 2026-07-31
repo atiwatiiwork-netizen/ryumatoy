@@ -156,12 +156,20 @@ export interface ProductFilter {
   query?: string;
 }
 
+/** สินค้าชิ้นนี้ถูกผูกกับห้องประมูลที่ยัง "ไม่จบเรื่อง" อยู่ไหม (v61).
+ *  live = กำลังประมูล · ended/awarded = ปิดแล้วแต่ผู้ชนะยังจ่ายไม่เสร็จ — ทั้งสามสถานะห้ามขายหน้าร้าน
+ *  ไม่งั้นคนกดซื้อที่ "ราคาป้าย" ตัดหน้าคนที่กำลังบิด = ขายของชิ้นเดียวกันสองรอบ */
+export function inLiveAuction(db: Database, productId: string): boolean {
+  return db.auctions.some((a) => a.product_id === productId && ['live', 'ended', 'awarded'].includes(a.status));
+}
+
 export function filterProducts(db: Database, f: ProductFilter): Product[] {
   return db.products.filter((p) => {
     // pre-orders leave the shop once the round closes (→ผลิต/เดินทาง/…); wallet still tracks them
     if (!p.is_stock && p.status !== 'open') return false;
     // a closed board ends its round → its products leave the shop even though still 'open'
     if (inClosedBoard(db, p)) return false;
+    if (inLiveAuction(db, p.id)) return false;
     // NOTE: sold-out in-stock (available ≤ 0) stays in the shop — shown greyed as "สินค้าหมด" (not removed)
     if (f.category === 'preorder' && p.is_stock) return false;
     if (f.category === 'instock' && !p.is_stock) return false;

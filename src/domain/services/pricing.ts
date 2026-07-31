@@ -23,7 +23,14 @@ export function depositFor(settings: ShopSettings, wcfType?: WcfType): number {
  * an admin re-pricing (e.g. a yuan-formula change) can't leave a cart billing a stale price. Falls back to
  * 0 only if the source is gone (callers skip lines whose product no longer exists).
  */
-export function livePrice(db: Database, line: { productId: string; variantId?: string; batchId?: string }): { price: number; deposit: number } {
+export function livePrice(db: Database, line: { productId: string; variantId?: string; batchId?: string; auctionId?: string }): { price: number; deposit: number } {
+  // ประมูล (v61) มาก่อนทุกอย่าง: ราคาคือ "ยอดที่ชนะ" ของห้องนั้น และเก็บเต็มจำนวน (มัดจำ = ราคา)
+  // ที่ต้องอยู่ตรงนี้เพราะ submitOrder ล็อกราคาจาก livePrice เสมอ — ถ้าไม่ดัก ผู้ชนะจะถูกคิด
+  // "ราคาป้าย" ของสินค้าแทนยอดที่ประมูลได้
+  if (line.auctionId) {
+    const a = db.auctions.find((x) => x.id === line.auctionId);
+    if (a?.winning_amount) return { price: a.winning_amount, deposit: a.winning_amount };
+  }
   if (line.batchId) { const b = db.batches.find((x) => x.id === line.batchId); if (b) return { price: b.price_total, deposit: b.deposit_amount }; }
   if (line.variantId) { const v = db.variants.find((x) => x.id === line.variantId); if (v) return { price: v.price_total, deposit: v.deposit_amount }; }
   const p = db.products.find((x) => x.id === line.productId);

@@ -95,6 +95,29 @@ export function subsForNewProduct(db: Database, product: { manufacturer_id: stri
   });
 }
 
+/**
+ * push ของประมูลที่ "ลูกค้าเป็นคนจุดชนวน" (โดนแซง / ราคาขยับ) — ฝั่งนี้ส่งแค่ id ห้อง + ชนิด
+ * ปลายทางและข้อความถูกตัดสินที่เซิร์ฟเวอร์ (RPC ryuma_auction_push_targets) เพราะ RLS
+ * ไม่ให้ลูกค้าเห็นเครื่องของคนอื่น และการเปิดให้เห็นก็จะกลายเป็นช่องยิง spam ทันที
+ * best-effort เสมอ: ล้มเหลว/ถูกจำกัดความถี่ = เงียบ ห้ามกระทบการบิด
+ */
+export async function sendAuctionPush(auctionId: string, kind: 'outbid' | 'price'): Promise<void> {
+  try {
+    const token = supabase
+      ? await Promise.race([
+          supabase.auth.getSession().then((r) => r.data.session?.access_token),
+          new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+        ])
+      : undefined;
+    if (!token) return;
+    await fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ auction: { id: auctionId, kind } }),
+    });
+  } catch { /* push ห้ามทำให้การบิดพัง */ }
+}
+
 /** Send a notification to a set of devices, then prune endpoints the browser has revoked.
  *  Fire-and-forget from admin flows — a push must never block or fail the actual save. */
 export async function sendPush(subs: PushRow[], payload: PushPayload, dispatch?: Dispatch): Promise<{ sent: number; gone: string[] }> {

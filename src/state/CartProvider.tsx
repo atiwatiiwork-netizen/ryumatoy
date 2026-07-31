@@ -20,6 +20,9 @@ export interface CartLine {
   productId: string;
   variantId?: string;
   batchId?: string; // reopened stock batch, if bought from one
+  /** ห้องประมูลที่ชนะ (v61) — ราคาบรรทัดนี้มาจาก "ยอดที่ชนะ" ไม่ใช่ราคาป้ายของสินค้า
+   *  และ submitOrder ตรวจซ้ำว่าคนกดคือผู้ชนะจริง + ยังไม่เคยจ่าย */
+  auctionId?: string;
   qty: number;
   depositEach: number;
   priceEach: number;
