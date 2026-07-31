@@ -15,7 +15,7 @@ import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, rema
 import { depositForRank } from '@/domain/services/ranks';
 import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { useSmartBack } from '@/lib/nav';
-import { availableFor, batchAvailable, batchGoneState, stockGoneState, userBatchQuota, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
+import { availableFor, batchAvailable, batchGoneState, stockGoneState, userBatchQuota, myPendingHold, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { downloadBranded } from '@/lib/watermark';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { RANK } from '@/lib/theme';
@@ -111,10 +111,14 @@ export default function ProductDetailPage() {
     : [];
   // live availability for limited-qty items (in-stock / batch) — reservation-aware
   const limited = batch ? true : product.is_stock;
-  const localAvail = batch ? batchAvailable(db, batch) : product.is_stock ? availableFor(db, product) : null;
+  // ของที่ "ตัวเราเองถือค้างอยู่" (กำลังจ่าย/สลิปรอตรวจ) ต้องบวกกลับตอนโชว์ — ทั้ง batchAvailable และ
+  // ryuma_available หัก hold ทุกใบรวมของเจ้าตัว ถ้าไม่บวกคืน คนที่เพิ่งจองแล้วกดกลับมาดูจะเห็น
+  // "สินค้าหมด" ทั้งที่ของอยู่ในมือเขาเอง แล้วตกใจ (audit 2026-07-30)
+  const mine = limited ? myPendingHold(db, CURRENT_USER_ID, product.id, batch?.id) : 0;
+  const localAvail = batch ? batchAvailable(db, batch) + mine : product.is_stock ? availableFor(db, product) + mine : null;
   // เลขจริง = ค่าที่ "น้อยกว่า" ระหว่าง local กับ server (server ชนะฝั่งหมด — เครื่องเก่าห้ามเห็นของผี;
   // ฝั่ง "server บอกมีแต่ local บอกหมด" ใช้ local เพราะ local เห็น hold ตัวเองที่ยังไม่ถึง server)
-  const avail = limited && liveAvail != null ? Math.min(localAvail ?? Infinity, liveAvail) : localAvail;
+  const avail = limited && liveAvail != null ? Math.min(localAvail ?? Infinity, liveAvail + mine) : localAvail;
   const soldOut = limited && (avail ?? 1) <= 0;
   // หมดแบบไหน (เจ้าของ 2026-07-30): 'temp' = มีคนถือ hold/สลิปรอตรวจ — ไม่ผ่าน/หมดเวลาแล้วของหลุดคืน
   // · 'gone' = ตั๋วออกครบจริง ไม่มีทางหลุด · server บอกหมดแต่ local ยังไม่รู้ = 'temp' ไว้ก่อน

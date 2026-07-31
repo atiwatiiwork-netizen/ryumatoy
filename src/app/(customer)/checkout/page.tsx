@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useReady } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
@@ -32,6 +32,7 @@ export default function CheckoutPage() {
   // มาจากหน้า "นัดชำระ" (v57): จ่ายจบแล้วต้องปิดนัดใบนั้นให้ ไม่งั้นแอดมินยังเห็นค้างในคิวทวง
   const planId = useSearchParams().get('plan') ?? '';
   const db = useDatabase();
+  const ready = useReady(); // ข้อมูลจริงมาถึงหรือยัง (ก่อนหน้านั้น db คือชุด seed — ห้ามใช้ตัดสินของหมด)
   const dispatch = useDispatch();
   const cart = useCart();
   const { flash } = useToast();
@@ -119,6 +120,11 @@ export default function CheckoutPage() {
   // เฉพาะตอนยังไม่เริ่มจอง (started=false) — ถ้าของหมดกลางทางระหว่างถือ hold อยู่ ให้แผงเดิมในหน้าจัดการ
   const bounced = useRef(false);
   useEffect(() => {
+    // ⚠ ห้ามตัดสินก่อนข้อมูลจริงมาถึง (audit 2026-07-30): ตอนรีเฟรชหน้านี้ db ยังเป็นชุด seed อยู่
+    //   → สินค้าในตะกร้า "ไม่มีอยู่จริง" ในชุด seed → allGone = true → ลูกค้าโดนเด้งออกกลางจ่ายเงิน
+    //   พร้อมข้อความ "สินค้าถูกนำออกจากร้านแล้ว" ทั้งที่ทุกอย่างปกติ (bounced เป็น ref = ยิงครั้งเดียว
+    //   ไม่แก้ตัวเองเหมือน panel เดิม). auth เสร็จก่อน store.init ได้ง่ายๆ เพราะ init โหลดสามสิบตาราง
+    if (!ready) return;
     if (!clientSoldOut || bounced.current || started.current || mustLogin || needsApproval) return;
     bounced.current = true;
     const anyTemp = deadLines.some((l) => {
@@ -132,9 +138,10 @@ export default function CheckoutPage() {
       : 'สินค้าหมดแล้ว — ถูกจองครบทั้งรอบ 🙏');
     router.replace('/cart');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientSoldOut, mustLogin, needsApproval]);
+  }, [ready, clientSoldOut, mustLogin, needsApproval]);
 
   useEffect(() => {
+    if (!ready) return; // เหตุผลเดียวกับ effect ด้านบน — seed ยังไม่ใช่ของจริง
     if (started.current || mustLogin || needsApproval || !needsReserve) return;
     if (clientSoldOut) return; // ของหมดตั้งแต่ยังไม่เริ่ม — ไม่ต้อง hold (ลูกค้าต้องเอาของหมดออกก่อน)
     started.current = true;
@@ -143,9 +150,18 @@ export default function CheckoutPage() {
       // = จองใหม่ทุกครั้ง ถือของซ้ำหลายใบพร้อมกัน กินสต๊อกคนอื่นฟรีคนละ 15 นาที ทั้งที่จะซื้อใบเดียว)
       try {
         const saved = JSON.parse(readStore('session', 'ryuma_hold:' + stockKey) ?? 'null') as { ids: string[]; until: number } | null;
-        if (saved && Array.isArray(saved.ids) && saved.ids.length > 0 && saved.until > Date.now() + 10_000) {
+        // ⚠ ต้องเช็คว่าใบจองเดิม "ยังมีชีวิต" ด้วย (audit 2026-07-30): แอดมินกดปล่อยของค้างได้จาก
+        //   /admin/today หรือ /admin/members → ใบจองกลายเป็น released ทั้งที่แท็บลูกค้ายังจำ id ไว้
+        //   → เอามาใช้ต่อ = คิดว่าตัวเองถือของอยู่ทั้งที่ไม่มีแล้ว. ถ้าในฐานข้อมูลไม่มีแถวนั้นเลย
+        //   (เพิ่งจองยังไม่ sync) ให้ถือว่ายังใช้ได้ตามเดิม
+        const stillAlive = saved?.ids?.every((rid) => {
+          const r = db.stockReservations.find((x) => x.id === rid);
+          return r == null || isPendingHold(r);
+        });
+        if (saved && Array.isArray(saved.ids) && saved.ids.length > 0 && saved.until > Date.now() + 10_000 && stillAlive) {
           setResIds(saved.ids); setResUntil(saved.until); return;
         }
+        if (saved && !stillAlive) removeStore('session', 'ryuma_hold:' + stockKey);
       } catch { /* ร่างเสีย — จองใหม่ตามปกติ */ }
       const ids: string[] = []; let earliest = Infinity;
       for (const l of stockLines) {
@@ -166,7 +182,7 @@ export default function CheckoutPage() {
     //   ถือ hold อยู่ → effect ออกก่อนโดยไม่ตั้ง started → พอ hold หมดอายุ หน้าจอปลดบล็อกเอง
     //   แต่ถ้าไม่มี dep นี้ effect จะไม่กลับมาจองให้ = จ่ายเงินได้โดย "ไม่มีการกันของเลย" (ขายเกิน)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mustLogin, needsApproval, needsReserve, stockKey, currentUserId, clientSoldOut]);
+  }, [ready, mustLogin, needsApproval, needsReserve, stockKey, currentUserId, clientSoldOut]);
 
   useEffect(() => {
     if (!resUntil) return;

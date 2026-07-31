@@ -10,8 +10,9 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { metaLine, variantsOf } from '@/domain/services/catalog';
-import { availableFor, stockGoneState } from '@/domain/services/reservations';
+import { availableFor, stockGoneState, myPendingHold } from '@/domain/services/reservations';
 import { useLiveStock } from '@/lib/useLiveStock';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, StatusBadge, cx } from './ui';
 
 /** Product card used on Home grid + Shop grid. Links to the product route.
@@ -29,6 +30,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const { flash } = useToast();
   const router = useRouter();
   const { checking, ensure } = useLiveStock();
+  const meId = useCurrentUserId();
 
   const variants = product.has_variants ? variantsOf(db, product.id) : [];
   const withImg = variants.filter((v) => v.image_url); // variants that carry their own photo
@@ -65,7 +67,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
       // กฎร้าน: ไม่บอกจำนวนสต๊อกจริงแม้ตอนเต็ม — บอกแค่ว่าหยิบครบที่มีแล้ว
       if (inCart + 1 > stockLeft) { flash('หยิบครบจำนวนที่เหลือแล้ว (อยู่ในตะกร้าครบ)'); return; }
       // ของจำกัดจำนวน: ถาม server ก่อนหยิบ (เครื่องที่เปิดค้างอาจถือเลขเก่า) — หมดแล้วไม่ให้เข้าตะกร้า
-      if (!(await ensure(product.id))) return;
+      if (!(await ensure(product.id, undefined, myPendingHold(db, meId, product.id)))) return;
     }
     // in-stock pays in full (DNA: full-pay deposit invariant) — guards legacy rows where deposit < price
     const dep = product.is_stock ? product.price_total : product.deposit_amount;
@@ -90,7 +92,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
         <Link
           href={href}
           className={className}
-          onClick={stockLeft == null ? undefined : (e) => { e.preventDefault(); void ensure(product.id).then((ok) => { if (ok) router.push(href); }); }}
+          onClick={stockLeft == null ? undefined : (e) => { e.preventDefault(); void ensure(product.id, undefined, myPendingHold(db, meId, product.id)).then((ok) => { if (ok) router.push(href); }); }}
         >
           {children}
         </Link>

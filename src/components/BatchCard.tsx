@@ -6,8 +6,9 @@ import type { ProductBatch } from '@/domain/entities';
 import { useDatabase } from '@/state/DataProvider';
 import { baht } from '@/lib/theme';
 import { metaLine } from '@/domain/services/catalog';
-import { batchAvailable, batchGoneState } from '@/domain/services/reservations';
+import { batchAvailable, batchGoneState, myPendingHold } from '@/domain/services/reservations';
 import { useLiveStock } from '@/lib/useLiveStock';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { ProductThumb, cx } from './ui';
 
 /** A special pre-order round (สต๊อกใบพรี) shown on the shop — same figure, its own lot/price.
@@ -19,6 +20,7 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
   const db = useDatabase();
   const router = useRouter();
   const { checking, ensure } = useLiveStock();
+  const meId = useCurrentUserId();
   const product = db.products.find((p) => p.id === batch.product_id);
   if (!product) return null;
   const avail = batchAvailable(db, batch);
@@ -82,7 +84,7 @@ export function BatchCard({ batch }: { batch: ProductBatch }) {
   if (soldOut) return inner;
   // ยังมีของ: กดแล้วถาม server ก่อนพาเข้า (เครื่องที่เปิดกริดค้างไว้อาจถือเลขเก่า)
   return (
-    <Link href={href} onClick={(e) => { e.preventDefault(); void ensure(product.id, batch.id).then((ok) => { if (ok) router.push(href); }); }}>
+    <Link href={href} onClick={(e) => { e.preventDefault(); void ensure(product.id, batch.id, myPendingHold(db, meId, product.id, batch.id)).then((ok) => { if (ok) router.push(href); }); }}>
       {inner}
     </Link>
   );

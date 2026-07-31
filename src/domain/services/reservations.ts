@@ -79,6 +79,15 @@ export function userTakenInBatch(db: Database, userId: string, batchId: string, 
   return fromTickets + fromHolds;
 }
 
+/** จำนวนที่ "คนนี้ถือค้างอยู่เอง" ตอนนี้ (กำลังจ่าย/สลิปรอตรวจ) ของ batch หรือ product (in-stock).
+ *  ใช้บวกกลับตอนเทียบกับ ryuma_available ซึ่งหัก hold ทุกใบรวมของเจ้าตัวไปแล้ว. */
+export function myPendingHold(db: Database, userId: string, productId: string, batchId?: string): number {
+  return db.stockReservations
+    .filter((r) => r.user_id === userId && (batchId ? r.batch_id === batchId : r.product_id === productId && !r.batch_id))
+    .filter(isPendingHold)
+    .reduce((s, r) => s + r.qty, 0);
+}
+
 /** โควตาที่ยังซื้อได้ในรอบนี้ตามเพดานต่อคน (ยังไม่หักว่าสต๊อกเหลือจริงเท่าไหร่). */
 export function userBatchQuota(db: Database, userId: string, batchId: string): number {
   return Math.max(0, BATCH_MAX_PER_USER - userTakenInBatch(db, userId, batchId));

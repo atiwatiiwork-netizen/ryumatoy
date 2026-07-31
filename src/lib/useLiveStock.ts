@@ -19,13 +19,16 @@ export function useLiveStock() {
   const { flash } = useToast();
   const [checking, setChecking] = useState(false);
 
-  /** true = ไปต่อได้ · false = หมดแล้ว (แจ้งลูกค้า + สั่งรีเฟรชให้เรียบร้อยแล้ว) */
-  const ensure = async (productId: string, batchId?: string): Promise<boolean> => {
+  /** true = ไปต่อได้ · false = หมดแล้ว (แจ้งลูกค้า + สั่งรีเฟรชให้เรียบร้อยแล้ว)
+   *  ownHeld = จำนวนที่ "ลูกค้าคนนี้ถือค้างอยู่เอง" (กำลังจ่าย/สลิปรอตรวจ) — ต้องบวกกลับก่อนตัดสิน
+   *  เพราะ ryuma_available หัก hold ทุกใบรวมของเขาเองไปแล้ว ไม่งั้นคนที่จองไว้แล้วกดกลับมาดูของตัวเอง
+   *  จะโดนบอกว่า "หมดแล้ว มีคนตัดหน้า" ทั้งที่คนถือคือตัวเขาเอง (audit 2026-07-30) */
+  const ensure = async (productId: string, batchId?: string, ownHeld = 0): Promise<boolean> => {
     if (checking) return false; // กดรัว = รอรอบแรกก่อน
     setChecking(true);
     const n = await checkAvailable(productId, batchId);
     setChecking(false);
-    if (n == null || n > 0) return true;
+    if (n == null || n + ownHeld > 0) return true;
     void store.reloadIfIdle(); // ให้การ์ด/ป้ายบนหน้าจอกลายเป็นสถานะจริงทันที
     flash('สินค้าหมดแล้ว — มีคนกดตัดหน้าไปพอดี 🙏 กำลังอัปเดตหน้าจอให้');
     return false;
