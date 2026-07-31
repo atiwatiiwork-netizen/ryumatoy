@@ -10,6 +10,7 @@ import { BatchCard } from '@/components/BatchCard';
 import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
 import { batchAvailable } from '@/domain/services/reservations';
 import { store } from '@/data/store';
+import { useLiveStockMap, liveKey, type LiveItem } from '@/lib/liveStockMap';
 import type { ProductStatus } from '@/domain/entities';
 
 const STATUS_FILTERS: { key: ProductStatus; label: string }[] = [
@@ -88,6 +89,15 @@ function ShopInner() {
     // ของที่ยังซื้อได้ขึ้นก่อนเสมอ ของหมดไปท้ายสุด (เจ้าของ 2026-07-30: ของหมดกดไม่ได้แล้ว
     // ถ้าปนอยู่กลางกริดจะกดโดนแล้วงงว่าทำไมไม่เข้า)
     .sort((x, y) => (batchAvailable(db, y) > 0 ? 1 : 0) - (batchAvailable(db, x) > 0 ? 1 : 0));
+
+  // ── ของเหลือจริงจาก server สำหรับการ์ดที่โชว์อยู่ (audit 2026-07-30) ──
+  // RLS ของ preorder_tickets ให้ลูกค้าเห็นเฉพาะตั๋วตัวเอง → สูตร local นับ "ขายไปแล้ว" ไม่ครบ
+  // → รอบที่ขายหมดโชว์ว่ายังมีของตลอดกาล. ryuma_available เป็น SECURITY DEFINER จึงเป็นเลขจริง
+  const liveItems: LiveItem[] = [
+    ...openBatches.map((b) => ({ key: liveKey(b.product_id, b.id), productId: b.product_id, batchId: b.id })),
+    ...filtered.filter((p) => p.is_stock).slice(0, 12).map((p) => ({ key: liveKey(p.id), productId: p.id })),
+  ];
+  const liveMap = useLiveStockMap(liveItems);
 
   // only count pre-orders still OPEN for booking (production/shipping/arrived aren't orderable)
   const preorderCount = db.products.filter((p) => !p.is_stock && p.status === 'open').length;
@@ -187,7 +197,7 @@ function ShopInner() {
           </div>
           {openBatches.length > 0 && (
             <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-              {openBatches.map((b) => <BatchCard key={b.id} batch={b} />)}
+              {openBatches.map((b) => <BatchCard key={b.id} batch={b} liveAvail={liveMap[liveKey(b.product_id, b.id)]} />)}
             </div>
           )}
           {/* grouped by ค่าย → ซีรีย์, newest-first within each group — capped at `limit` items
@@ -213,7 +223,7 @@ function ShopInner() {
                   <div key={g.seriesId ?? '__none'} className="mb-4">
                     {g.seriesName && <div className="mb-2 text-[12.5px] font-bold text-ink-muted2">🏷️ {g.seriesName}</div>}
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-                      {g.products.map((p) => <ProductCard key={p.id} product={p} quickAdd />)}
+                      {g.products.map((p) => <ProductCard key={p.id} product={p} quickAdd liveAvail={liveMap[liveKey(p.id)]} />)}
                     </div>
                   </div>
                 ))}

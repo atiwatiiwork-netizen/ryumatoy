@@ -1631,7 +1631,14 @@ export const convertToInStock = (productId: string, price: number) => (db: Datab
   if (!p) return db;
   // only the UNSOLD leftover becomes in-stock — surplus already sold via a special round is now
   // customer tickets, so using surplus_qty (raw) would double-count and oversell. (found by test T6)
-  const surplus = stockRemaining(db, p);
+  // ⚠ ต้องหัก hold ที่ยังค้างด้วย (audit 2026-07-30 · critical): ลูกค้าที่กำลังจ่าย/สลิปรอตรวจ
+  //   ยังไม่มีตั๋ว → stockRemaining ยังนับของเขาเป็น "เหลือ" → แปลงเข้า In-Stock แล้วขายซ้ำ
+  //   พอสลิปผ่าน ตั๋วเกิดขึ้นมาอีกใบ = ของกองเดียวขายสองคน
+  const held = db.stockReservations
+    .filter((r) => r.product_id === productId || db.batches.some((b) => b.id === r.batch_id && b.product_id === productId))
+    .filter(isPendingHold)
+    .reduce((s, r) => s + r.qty, 0);
+  const surplus = Math.max(0, stockRemaining(db, p) - held);
   const now = new Date().toISOString();
   // ⚠ ต้องปิดรอบพิเศษที่ยังเปิดของ SKU นี้ด้วย — ไม่งั้น "ของกองเดียวกัน" ขายได้ 2 ทาง
   //   (ในรอบพิเศษราคาเก่า + ในหน้า In-Stock ราคาใหม่) = ขายเกินเท่าตัว (audit money #2)

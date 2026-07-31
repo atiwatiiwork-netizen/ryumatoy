@@ -51,9 +51,14 @@ export default function ProductDetailPage() {
   // และดึงข้อมูลทั้งก้อนตามมา (reloadIfIdle) ให้ป้าย/สถานะอื่นตรงด้วย. hook นี้ต้องอยู่ก่อน
   // early-return ด้านล่าง (กฎ hooks) — ข้างในเช็ค product เองแล้ว
   const wantedBatchParam = params.get('batch');
-  const [liveAvail, setLiveAvail] = useState<number | null>(null);
+  // เก็บ "เวลาที่ได้เลขมา" ด้วย — เลขจาก server มีอายุ ไม่งั้นค่า 0 จะแช่ถาวร (audit 2026-07-30):
+  // ของหลุดกลับมาแล้ว (hold หมดอายุ) local รู้เองทันทีตอน poll แต่ liveAvail ยังเป็น 0 →
+  // Math.min ทำให้ค่าเก่าชนะตลอด → หน้าบอก "หมดชั่วคราว รอหลุด" ค้างจนกว่าจะรีเฟรช
+  // ซึ่งขัดกับข้อความที่ชวนให้ "รออยู่หน้านี้" เอง
+  const [live, setLive] = useState<{ n: number; at: number } | null>(null);
+  const liveAvail = live && Date.now() - live.at < 60_000 ? live.n : null;
   useEffect(() => {
-    setLiveAvail(null); // เปลี่ยนสินค้า/รอบ = เริ่มเช็คใหม่ อย่าถือเลขของตัวเก่า
+    setLive(null); // เปลี่ยนสินค้า/รอบ = เริ่มเช็คใหม่ อย่าถือเลขของตัวเก่า
     if (!product) return;
     // หา "รอบที่หน้าจะขายจริง" แบบเดียวกับ logic ด้านล่าง (linked ?? auto)
     const linked = db.batches.find((b) => b.id === wantedBatchParam && b.product_id === product.id && b.status === 'open' && b.published !== false);
@@ -65,13 +70,22 @@ export default function ProductDetailPage() {
     let dead = false;
     const ask = async () => {
       const n = await checkAvailable(product.id, target?.id);
-      if (!dead && n != null) setLiveAvail(n);
+      if (!dead && n != null) setLive({ n, at: Date.now() });
     };
     void ask();
     void store.reloadIfIdle();
-    const onFocus = () => void ask(); // reloadIfIdle ตอน focus มีอยู่แล้วใน DataProvider
-    window.addEventListener('focus', onFocus);
-    return () => { dead = true; window.removeEventListener('focus', onFocus); };
+    // ถามซ้ำเป็นจังหวะระหว่างเปิดหน้าค้างไว้ (คนที่ "รอของหลุด" คือกลุ่มที่เปิดค้าง ไม่ได้สลับแท็บ)
+    // คาบเท่ากับ poll ของ DataProvider จะได้ไม่มีจังหวะที่ป้ายกับตัวเลขเถียงกัน · ถามเฉพาะตอนแท็บ visible
+    const tick = setInterval(() => { if (document.visibilityState === 'visible') void ask(); }, 40_000);
+    const onWake = () => { if (document.visibilityState === 'visible') void ask(); };
+    window.addEventListener('focus', onWake);
+    document.addEventListener('visibilitychange', onWake);
+    return () => {
+      dead = true;
+      clearInterval(tick);
+      window.removeEventListener('focus', onWake);
+      document.removeEventListener('visibilitychange', onWake);
+    };
     // db ใน deps จะทำให้ยิงถามทุก poll — ผูกกับ id พอ (รอบไม่เปลี่ยน id กลางอากาศ)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id, wantedBatchParam]);

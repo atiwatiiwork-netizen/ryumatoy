@@ -16,7 +16,7 @@ import { submitOrder, markPlanPaid } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel } from '@/domain/services/catalog';
-import { batchAvailable, availableFor, isPendingHold, pendingHeld } from '@/domain/services/reservations';
+import { batchAvailable, availableFor, isPendingHold, pendingHeld, myPendingHold, userTakenInBatch, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
@@ -40,6 +40,8 @@ export default function CheckoutPage() {
   const mustLogin = canLogin && !isLoggedIn; // login required to place an order (live only)
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // เซฟไม่ผ่านแต่ออเดอร์เกิดในเครื่องแล้ว — store retry ให้เอง ห้ามให้กดส่งซ้ำ (กันออเดอร์ 2 ใบ)
+  const [saveStuck, setSaveStuck] = useState(false);
 
   const myRank = db.users.find((u) => u.id === currentUserId)?.rank ?? 'bronze';
   // pre-orders get the member's rank deposit perk (Gold 50%) — same as submitOrder writes.
@@ -87,9 +89,12 @@ export default function CheckoutPage() {
   // hold "ของออเดอร์นี้เอง" ต้องไม่ถูกนับเป็นของคนอื่น (บั๊กแฝง 2026-07-30): หลัง poll ดึง
   // reservation ของเราเข้ามาใน db แล้ว available จะเหลือ 0 ทั้งที่คนถือคือเราเอง —
   // ไม่หักออกจะโดนบล็อก "ถูกจองครบแล้ว" ทั้งที่กำลังถือของอยู่ (สูตรเดียวกับ submitOrder)
-  const ownHeldHere = (batchId: string | undefined, productId: string) => db.stockReservations
-    .filter((r) => (batchId ? r.batch_id === batchId : r.product_id === productId && !r.batch_id) && resIds.includes(r.id))
-    .filter(isPendingHold).reduce((s, r) => s + r.qty, 0);
+  // ⚠ ต้องนับ hold "ทุกใบของลูกค้าคนนี้" ไม่ใช่เฉพาะที่อยู่ใน resIds (audit 2026-07-30):
+  //   ตอน mount ครั้งแรก resIds ยังว่าง (ยังไม่ได้จอง/กำลังกู้จาก sessionStorage) → hold ของตัวเอง
+  //   ถูกนับเป็นของคนอื่น → clientSoldOut → effect เด้งออกก่อนที่โค้ดกู้ hold จะได้ทำงานเลย
+  //   = คนที่ถือชิ้นสุดท้ายอยู่ กลับเข้าหน้าจ่ายไม่ได้อีกตลอดกาล (ส่งสลิปไม่ได้ = เงินค้างในมือลูกค้า)
+  const ownHeldHere = (batchId: string | undefined, productId: string) =>
+    myPendingHold(db, currentUserId, productId, batchId);
   const deadLines = validLines.filter((l) => {
     const p = db.products.find((pp) => pp.id === l.productId);
     if (!p) return true;
@@ -105,6 +110,13 @@ export default function CheckoutPage() {
   // (เดิมหลุดทุกด่าน: validLines ว่าง → ยอด 0 → เข้าโหมด "ไม่ต้องโอน" → กดยืนยันได้ตั๋วเปล่า) audit ลูกค้า #3
   const allGone = cart.lines.length > 0 && validLines.length === 0;
   const clientSoldOut = deadLines.length > 0 || allGone;
+  // ── เพดาน 2 ตัว/คน/รอบ ต้องเช็คที่ "หน้าจ่ายเงิน" ด้วย (audit 2026-07-30 · critical) ──
+  // เดิมเช็คแค่ใน submitOrder ซึ่งทำงาน "หลังลูกค้าโอนเงินแล้ว" → ตะกร้าที่ค้างมาก่อนได้ตั๋วเพิ่ม
+  // (แอดมินมอบให้ / ซื้อจากอีกเครื่อง) จะเห็นเลขบัญชี โอนจริง แล้วออเดอร์ถูกปัดตกเงียบ = โอนฟรี
+  // กด "ส่งใหม่" กี่ครั้งก็ไม่ผ่าน เพราะเพดานไม่ได้ขยับ
+  const capLines = validLines.filter((l) => l.batchId
+    && userTakenInBatch(db, currentUserId, l.batchId, resIds) + l.qty > BATCH_MAX_PER_USER);
+  const capBlocked = capLines.length > 0;
   const [resUntil, setResUntil] = useState<number | null>(null);
   const [soldOut, setSoldOut] = useState(false);
   const [expired, setExpired] = useState(false);
@@ -193,7 +205,7 @@ export default function CheckoutPage() {
   const secsLeft = resUntil ? Math.max(0, Math.floor((resUntil - nowTs) / 1000)) : 0;
   const mmss = `${String(Math.floor(secsLeft / 60)).padStart(2, '0')}:${String(secsLeft % 60).padStart(2, '0')}`;
   // hard-block ทั้งหน้า: ของหมด (เช็ค client ทันที หรือ server ปฏิเสธ) / หมดเวลาจอง — ห้ามเห็นช่องทางโอน
-  const blockedByStock = clientSoldOut || (needsReserve && (soldOut || expired));
+  const blockedByStock = clientSoldOut || capBlocked || (needsReserve && (soldOut || expired));
 
   const onSlip = async (file?: File) => {
     if (!file) return;
@@ -229,7 +241,14 @@ export default function CheckoutPage() {
     // ถ้าไม่ผ่าน: hold ยังเป็น active มีนาฬิกา 15 นาที → คืนของเองอัตโนมัติ
     if (!submitted) { setBusy(false); return flash('ส่งออเดอร์ไม่สำเร็จ — ตรวจสิทธิ์รอบพิเศษ/รีเฟรชหน้าแล้วลองใหม่'); }
     // ออเดอร์เกิดแล้ว → หยุดนาฬิกา hold (กันของจนแอดมินตรวจ)
-    await Promise.all(resIds.map((rid) => payReservation(rid)));
+    // ⚠ ต้องหยุดนาฬิกาฝั่งจอด้วย (audit 2026-07-30): ไม่งั้นครบ 15 นาทีจอจะขึ้น "หมดเวลาชำระ ·
+    //   การจองถูกคืนแล้ว" ทั้งที่ hold เป็น paid ถาวรและออเดอร์เข้าคิวตรวจไปแล้ว → ลูกค้าตกใจโอนซ้ำ
+    setResUntil(null);
+    setExpired(false);
+    const payResults = await Promise.all(resIds.map((rid) => payReservation(rid)));
+    // ผลลัพธ์ payReservation ต้องไม่ถูกทิ้ง: ถ้าล้ม (timeout/เน็ต) hold ยังเป็น active มีนาฬิกาเดินอยู่
+    // ฝั่ง server → อาจหลุดก่อนแอดมินตรวจ. บอกลูกค้าตามจริงว่าให้รีบแจ้ง ไม่ใช่เงียบ
+    const payFailed = payResults.filter((r) => r && r.error).length;
     // coupon fully covered an in-stock order → we auto-approve here with no admin step, so the stock
     // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
     // stay 'paid' and the stock would be held forever.
@@ -241,8 +260,15 @@ export default function CheckoutPage() {
     //   ถ้าเซฟไม่ผ่าน ลูกค้าโอนเงินไปแล้ว แต่ไม่มีทั้งออเดอร์และตะกร้าให้กดใหม่ (audit persist #1/#12)
     const failed = await store.flush();
     if (failed) {
+      // ⚠ ห้ามบอกให้ "กดส่งใหม่" (audit 2026-07-30 · high): ออเดอร์ถูกสร้างใน store ไปแล้ว และ
+      //   store จะ retry เซฟให้เองอัตโนมัติทุก 5 วิ — ถ้าลูกค้ากดส่งซ้ำจะได้ออเดอร์ 2 ใบจากเงินก้อนเดียว
+      //   (ด่านกันขายเกิน/เพดานปล่อยผ่านทั้งคู่ เพราะใบแรกยังไม่ได้อนุมัติเป็นตั๋ว)
+      //   ตะกร้าถูกเคลียร์ตรงนี้ด้วย เพื่อไม่ให้กดส่งซ้ำได้ — ออเดอร์ที่ค้างจะขึ้นเองเมื่อเน็ตกลับมา
+      cart.clear();
+      removeStore('session', 'ryuma_hold:' + stockKey);
       setBusy(false);
-      return flash('บันทึกออเดอร์ไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (ตะกร้ายังอยู่ครบ)');
+      setSaveStuck(true);
+      return flash('เน็ตมีปัญหาระหว่างบันทึก — ระบบกำลังลองส่งให้อัตโนมัติ อย่าเพิ่งปิดหน้านี้ (ห้ามกดส่งซ้ำ จะกลายเป็น 2 ออเดอร์)');
     }
     cart.clear();
     // ออเดอร์เกิดจริงแล้ว → hold ชุดนี้ถูกใช้ไปแล้ว (paid) — ล้างที่จำไว้ กันรอบซื้อหน้าเอา id เก่ามาใช้ซ้ำ
@@ -253,7 +279,9 @@ export default function CheckoutPage() {
       ? `🎫 ออเดอร์อนุมัติอัตโนมัติ: ${buyerName} · ${validLines.length} รายการ (ไม่ต้องโอน)`
       : `🧾 สลิปใหม่รอตรวจ: ${buyerName} · ${validLines.length} รายการ · ยอด ${payNow.toLocaleString()} บาท`);
     setBusy(false);
-    flash(noPayment ? 'ยืนยันแล้ว · ได้ตั๋วเลย 🎉' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
+    flash(payFailed > 0
+      ? 'ส่งคำขอแล้ว ✓ แต่การกันของสะดุด (เน็ต) — ถ้าแอดมินยังไม่ตรวจภายใน 15 นาที รบกวนทักแจ้งด้วยนะครับ'
+      : noPayment ? 'ยืนยันแล้ว · ได้ตั๋วเลย 🎉' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
   };
 
@@ -313,14 +341,19 @@ export default function CheckoutPage() {
           <Icon name="warning" size={26} className="mx-auto mb-2 text-primary-soft" />
           <div className="text-[15px] font-extrabold text-primary-soft">
             {allGone ? 'สินค้าในตะกร้าถูกนำออกจากร้านแล้ว'
+              : capBlocked && !clientSoldOut ? `เกินเพดาน ${BATCH_MAX_PER_USER} ตัว/คน/รอบ`
               : !clientSoldOut && !soldOut && expired ? 'หมดเวลาชำระ · การจองถูกคืนแล้ว'
               : 'สินค้าถูกจองครบแล้ว · สั่งไม่ได้ในรอบนี้'}
           </div>
           <div className="mt-1.5 text-[12.5px] text-ink-muted2">
             {allGone ? 'ล้างตะกร้าแล้วเลือกใหม่ได้เลย — หรือทักแอดมินถ้ายังอยากได้ตัวนี้'
+              : capBlocked && !clientSoldOut ? 'รอบพิเศษจำกัดคนละไม่เกินนี้ (นับรวมตั๋วที่มีอยู่ + สลิปที่รอตรวจ) — ลดจำนวนในตะกร้าก่อนนะครับ 🙏'
               : !clientSoldOut && !soldOut && expired ? 'กรุณากลับไปเริ่มสั่งใหม่อีกครั้ง'
               : 'ระบบปิดช่องทางโอนเงินไว้ — จะได้ไม่โอนแล้วไม่ได้ของ 🙏'}
           </div>
+          {capBlocked && !clientSoldOut && (
+            <button onClick={() => router.push('/cart')} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">← กลับไปแก้จำนวนในตะกร้า</button>
+          )}
           {allGone && (
             <button onClick={() => { cart.clear(); flash('ล้างตะกร้าแล้ว'); }} className="mt-3.5 w-full rounded-btn bg-cta py-3 text-sm font-bold text-white">ล้างตะกร้า</button>
           )}
@@ -411,7 +444,14 @@ export default function CheckoutPage() {
               แต่ยังมองเห็น ลูกค้าเข้าใจว่ากดได้) */}
           {!blockedByStock && (
             <>
-              <Button disabled={(!slip && !noPayment) || busy} onClick={submit}>{noPayment ? 'ยืนยัน · รับตั๋วเลย' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}</Button>
+              <Button disabled={(!slip && !noPayment) || busy || saveStuck} onClick={submit}>
+                {saveStuck ? '⏳ กำลังบันทึกอัตโนมัติ… (ห้ามกดซ้ำ)' : noPayment ? 'ยืนยัน · รับตั๋วเลย' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}
+              </Button>
+              {saveStuck && (
+                <div className="mt-2 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-2.5 text-[12px] text-[#fbbf24]">
+                  ออเดอร์ถูกบันทึกไว้ในเครื่องแล้ว ระบบกำลังส่งให้อัตโนมัติเมื่อเน็ตกลับมา — เปิดหน้านี้ค้างไว้สักครู่ ถ้าไม่ขึ้นในประวัติภายใน 5 นาที ทักแอดมินพร้อมสลิปได้เลยครับ
+                </div>
+              )}
               <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">{noPayment ? 'ยืนยันแล้วได้ตั๋วทันที · จ่ายเต็มจำนวนตอนของถึงไทย' : 'เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ'}</div>
             </>
           )}

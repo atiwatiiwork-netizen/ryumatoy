@@ -24,7 +24,7 @@ import { ProductThumb, StatusBadge, cx } from './ui';
  *  of truth for both price and image). With no variant picked yet it shows a diagonal
  *  split of the first two variant images as a teaser + a "เริ่ม" (from) price; picking a
  *  swatch swaps the card image and price to that exact variant. */
-export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?: boolean }) {
+export function ProductCard({ product, quickAdd, liveAvail }: { product: Product; quickAdd?: boolean; liveAvail?: number }) {
   const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
@@ -53,7 +53,11 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
   const splitSrc = teaser ? withImg[1].image_url : undefined;
 
   const inClosingBoard = !!product.board_id && db.boards.some((b) => b.id === product.board_id && b.status === 'open');
-  const stockLeft = product.is_stock ? availableFor(db, product) : null; // reservation-aware "เหลือ N"
+  // ⚠ RLS: ลูกค้าเห็นเฉพาะตั๋วตัวเอง → availableFor นับ "ขายแล้ว" ไม่ครบ (audit 2026-07-30)
+  //    liveAvail = เลขจริงจาก ryuma_available (ข้าม RLS); บวก hold ตัวเองคืนแล้วเอาค่าที่น้อยกว่า
+  const myHold = product.is_stock ? myPendingHold(db, meId, product.id) : 0;
+  const localLeft = product.is_stock ? availableFor(db, product) : null;
+  const stockLeft = localLeft == null ? null : (liveAvail != null ? Math.min(localLeft, liveAvail + myHold) : localLeft);
   const nVariants = variants.length;
   // simple products (pre-order AND in-stock) add straight to the cart; variant ones still need a
   // pick in the product page (customer feedback: ปุ่มแดงทุกตัว ยกเว้น variants)
@@ -82,7 +86,7 @@ export function ProductCard({ product, quickAdd }: { product: Product; quickAdd?
 
   const soldOut = stockLeft != null && stockLeft <= 0;
   // ป้ายบอกว่าหมดแบบไหน: 'temp' = มีคนถือ hold/สลิปรอตรวจ อาจหลุดกลับมา · 'gone' = หมดจริง
-  const goneKind = soldOut ? stockGoneState(db, product) ?? 'gone' : null;
+  const goneKind = soldOut ? stockGoneState(db, product) ?? 'gone' : null; // server บอกหมดแต่ local ไม่รู้ = ตั๋วออกจริง → gone
   // ⚠ ของหมด = กดเข้าไม่ได้ทุกกรณี (เจ้าของ 2026-07-30) — เดิมหมดชั่วคราวยังกดเข้าได้ ลูกค้างงว่า
   // ตกลงเหลือหรือไม่เหลือ. ของจำกัดจำนวนที่ยังมี → กดแล้วถาม server ก่อนพาเข้า (กันข้อมูลเครื่องเก่า)
   const href = `/shop/${product.id}`;

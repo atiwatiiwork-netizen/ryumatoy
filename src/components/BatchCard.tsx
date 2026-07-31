@@ -16,20 +16,27 @@ import { ProductThumb, cx } from './ui';
  *  stage already holds their unit, so a round pulled to 0 shows สินค้าหมด before any slip is approved.
  *  Scarcity labels (owner spec): every buyable state blinks "สินค้าเหลือน้อย" (rounds are limited by
  *  nature); exactly 1 left → "เหลือ 1 ชิ้นสุดท้าย"; 0 → สินค้าหมด, greyed + unclickable. */
-export function BatchCard({ batch }: { batch: ProductBatch }) {
+export function BatchCard({ batch, liveAvail }: { batch: ProductBatch; liveAvail?: number }) {
   const db = useDatabase();
   const router = useRouter();
   const { checking, ensure } = useLiveStock();
   const meId = useCurrentUserId();
   const product = db.products.find((p) => p.id === batch.product_id);
   if (!product) return null;
-  const avail = batchAvailable(db, batch);
+  // ⚠ สูตร local เชื่อไม่ได้ฝั่งลูกค้า (audit 2026-07-30): RLS ให้เห็นเฉพาะตั๋วตัวเอง → "ขายไปแล้ว"
+  // นับไม่ครบ → รอบที่หมดแล้วโชว์ว่ายังมีของ. liveAvail = เลขจาก ryuma_available (ข้าม RLS) เมื่อถามได้
+  // บวก hold ของตัวเองคืน (server หักไปแล้ว) แล้วเอาค่าที่ "น้อยกว่า" — server ชนะฝั่งหมดเสมอ
+  const mine = myPendingHold(db, meId, product.id, batch.id);
+  const localAvail = batchAvailable(db, batch);
+  const avail = liveAvail != null ? Math.min(localAvail, liveAvail + mine) : localAvail;
   const soldOut = avail <= 0;
   const lastOne = avail === 1;
   const fullPay = batch.deposit_amount >= batch.price_total;
   // ป้ายบอกว่าหมดแบบไหน: 'temp' = มีคนถือ hold/สลิปรอตรวจ (อาจหลุดกลับมา) · 'gone' = ตั๋วออกครบจริง
   // ⚠ ทั้งสองแบบ "กดเข้าไม่ได้" เหมือนกัน (เจ้าของ 2026-07-30) — ป้ายมีไว้บอกว่ารอได้ไหมเท่านั้น
-  const gone = batchGoneState(db, batch);
+  // ป้าย temp/gone อ่านจาก local (เห็น hold ครบเพราะ sr_read เปิดให้ทุกคน) — แต่ถ้า server บอกหมด
+  // ทั้งที่ local ยังไม่รู้ (ตั๋วคนอื่นที่มองไม่เห็น) ให้ถือเป็น 'gone' เพราะตั๋วออกจริงแล้ว ไม่ได้แค่ถูกจอง
+  const gone = soldOut ? (batchGoneState(db, batch) ?? 'gone') : null;
   const href = `/shop/${product.id}?batch=${batch.id}`;
 
   const inner = (
