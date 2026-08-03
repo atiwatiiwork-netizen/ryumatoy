@@ -12,10 +12,10 @@ import {
   placeBidLocal, buyNowLocal, toggleAuctionWatch, submitAuctionEntry,
 } from '@/data/mutations';
 import * as rpc from '@/lib/auction';
-import { pushEnabled, sendAuctionPush } from '@/lib/push';
+import { pushEnabled, sendAuctionPush, pushSupported, currentPushSubscription, enablePush } from '@/lib/push';
 import {
   AUCTION_STATUS_TH, BID_REJECT_TH, bidRight, checkBid, extendCapped, inSnipeWindow, isLive,
-  isRoundAmount, minNextBid, pendingEntry, stepBands, stepFor, timeLeftLabel,
+  isRoundAmount, minNextBid, pendingEntry, stepBands, timeLeftLabel,
 } from '@/domain/services/auctions';
 import { productLabel } from '@/domain/services/catalog';
 import { baht } from '@/lib/theme';
@@ -58,9 +58,15 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   const [, setTick] = useState(0); // เดินนาฬิกาถอยหลังทุกวินาที (ค่าไม่ได้ใช้ ใช้แค่ให้ re-render)
   const [custom, setCustom] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pullSeq = useRef(0);
 
   const pull = useCallback(async () => {
+    // ตัวกันคำตอบสลับลำดับ: บนเน็ตช้า คำขอที่ยิงก่อนอาจกลับมาทีหลัง แล้วเขียนราคาเก่าทับราคาใหม่
+    // (เห็นชัดช่วงท้ายที่ราคาขยับทุกไม่กี่วินาที) — รับเฉพาะคำตอบของคำขอล่าสุดเท่านั้น
+    const seq = ++pullSeq.current;
+    const mine = auctionId;
     const s = await rpc.auctionState(auctionId);
+    if (seq !== pullSeq.current || mine !== auctionId) return;
     if (rpc.isNoServer(s)) { setTestMode(true); return; }
     if (!s.ok) return;
     setTestMode(false);
@@ -71,13 +77,23 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
       skewMs: s.server_now ? new Date(s.server_now).getTime() - Date.now() : 0,
     });
     const list = await rpc.auctionBids(auctionId);
+    if (seq !== pullSeq.current) return;
     if (list) setBids(list);
   }, [auctionId]);
+
+  // เปลี่ยนห้อง = ล้างข้อมูลห้องเก่าทิ้งทันที ไม่งั้นราคา/นาฬิกา/ประวัติของห้องก่อนหน้าค้างทับห้องใหม่
+  useEffect(() => { setLive(null); setBids(null); setCustom(''); }, [auctionId]);
 
   useEffect(() => {
     void pull();
     pollRef.current = setInterval(() => { if (document.visibilityState === 'visible') void pull(); }, POLL_MS);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // กลับมาที่แท็บ = ดึงทันที ไม่ต้องรอครบรอบ (ราคาช่วงท้ายขยับเร็วกว่านั้นมาก)
+    const onVisible = () => { if (document.visibilityState === 'visible') void pull(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [pull]);
 
   // ตัวนับถอยหลังเดินทุกวินาที (คนละเรื่องกับการดึงข้อมูล)
@@ -92,12 +108,31 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   const now = new Date(Date.now() + (live?.skewMs ?? 0));
   const msLeft = new Date(view.ends_at).getTime() - now.getTime();
   const running = isLive(view, now);
+  /** หมดเวลาแล้วแต่สถานะยังเป็น live = ยังไม่มีใครกดสรุปผล (ระบบไม่มีตัวปิดอัตโนมัติ) */
+  const awaitingResult = view.status === 'live' && !running;
   const nextMin = live?.nextMin || minNextBid(view, bands);
-  const step = stepFor(view.current_price || view.start_price, bands);
+  // ปุ่มบวกสำเร็จรูป +20/+50/+100 (เจ้าของ 2026-08-03) — ปัดขึ้นให้ลงท้าย 0 และไม่ต่ำกว่าขั้นต่ำจริง
+  // ยุบตัวซ้ำทิ้ง: บิดแรก (ขั้นต่ำ = ราคาเปิด) หรือราคาสูงจนขั้นบันได > 100 จะเหลือปุ่มเดียว
+  const ceil10 = (n: number) => Math.ceil(n / 10) * 10;
+  const quickBids = (() => {
+    const seen = new Set<number>();
+    const out: { label: string; amount: number }[] = [];
+    for (const plus of [20, 50, 100]) {
+      const amount = Math.max(nextMin, ceil10(view.current_price + plus));
+      if (seen.has(amount)) continue;
+      seen.add(amount);
+      out.push({ label: amount === nextMin && view.bid_count === 0 ? 'ราคาเปิด' : `+${plus}`, amount });
+    }
+    // เหลือใบเดียว = ไม่ต้องบอก "+20" ให้งง บอกตรงๆ ว่านี่คือขั้นต่ำ
+    if (out.length === 1 && out[0].label !== 'ราคาเปิด') out[0] = { label: 'ขั้นต่ำ', amount: out[0].amount };
+    return out;
+  })();
+  /** ใส่เองต้องอย่างน้อย +100 (เจ้าของสั่ง) — ต่ำกว่านั้นใช้ปุ่มด้านบนแทน */
+  const customMin = Math.max(nextMin, ceil10(view.current_price + 100));
   // ตรวจยอดที่พิมพ์เองตั้งแต่ยังพิมพ์ไม่เสร็จ (ไม่ต้องรอให้กดแล้วเด้ง toast)
   const customErr: 'too_low' | 'not_round' | null = !custom ? null
     : !isRoundAmount(Number(custom)) ? 'not_round'
-    : Number(custom) < nextMin ? 'too_low' : null;
+    : Number(custom) < customMin ? 'too_low' : null;
 
   const product = auction.product_id ? db.products.find((p) => p.id === auction.product_id) : undefined;
   const maker = product ? db.manufacturers.find((m) => m.id === product.manufacturer_id) : undefined;
@@ -179,6 +214,25 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   }
 
   const watching = !!uid && db.auctionWatch.some((w) => w.auction_id === auctionId && w.user_id === uid);
+
+  /** เปิดกระดิ่ง = ติดตามห้องนี้ + เปิดสิทธิ์แจ้งเตือนของเครื่อง (ถ้ายังไม่เคยเปิด)
+   *  ต้องเรียก enablePush จากปุ่มโดยตรง เพราะเบราว์เซอร์ยอมขอสิทธิ์เฉพาะตอนผู้ใช้กดเท่านั้น */
+  async function turnOnBell() {
+    if (!uid) { flash('เข้าสู่ระบบก่อนถึงจะกดกระดิ่งได้'); return; }
+    dispatch(toggleAuctionWatch(auctionId, uid));
+    try {
+      if (pushSupported() && !(await currentPushSubscription())) {
+        await enablePush(uid, dispatch);
+        flash('เปิดกระดิ่งแล้ว — จะเด้งเตือนเมื่อราคาขยับ');
+        return;
+      }
+    } catch {
+      // ปฏิเสธสิทธิ์/ยังไม่ได้ลงจอ (iOS) — ยังติดตามห้องไว้ได้ แต่ต้องบอกความจริงว่าเครื่องจะไม่เด้ง
+      flash('ติดตามห้องนี้แล้ว — แต่เครื่องยังไม่อนุญาตแจ้งเตือน เปิดได้ที่หน้าโปรไฟล์');
+      return;
+    }
+    flash('เปิดกระดิ่งแล้ว — จะแจ้งเตือนเมื่อราคาขยับ');
+  }
   const historyRows: { key: string; amount: number; at: string; label: string; mine: boolean; void: boolean }[] =
     bids
       ? bids.map((b) => ({ key: b.id, amount: b.amount, at: b.created_at, mine: b.mine, void: b.status === 'void',
@@ -208,8 +262,8 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
             : <div className="grid h-full place-items-center text-sm text-ink-faint">ยังไม่มีรูป</div>}
           <div className="absolute left-3 top-3 flex gap-1.5">
             <span className={cx('rounded-full px-2.5 py-1 text-[11px] font-extrabold',
-              running ? 'bg-primary text-white' : 'bg-surface-4 text-ink-muted')}>
-              {running ? 'กำลังประมูล' : AUCTION_STATUS_TH[view.status]}
+              running ? 'bg-primary text-white' : awaitingResult ? 'bg-[#fbbf24] text-black' : 'bg-surface-4 text-ink-muted')}>
+              {running ? 'กำลังประมูล' : awaitingResult ? 'หมดเวลา · รอประกาศผล' : AUCTION_STATUS_TH[view.status]}
             </span>
             {running && inSnipeWindow(view, now) && (
               <span className="rounded-full bg-[#fbbf24] px-2.5 py-1 text-[11px] font-extrabold text-black">
@@ -270,20 +324,26 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
             <>
               {right.ok ? (
                 <div className="flex flex-col gap-2">
+                  {/* ปุ่มบวกสำเร็จรูป (เจ้าของ 2026-08-03): +20 / +50 / +100 จากราคาปัจจุบัน
+                      ทุกปุ่มถูกดันขึ้นให้ถึงขั้นต่ำจริงเสมอ — ที่ราคาสูงขั้นบันไดโตกว่า 100 ปุ่มจะยุบเหลือใบเดียว
+                      (บิดแรกของห้องก็ยุบเหลือใบเดียว = ราคาเปิดพอดี) กดแล้วบิดทันที ไม่ต้องพิมพ์ */}
                   <div className="flex gap-2">
-                    <Button className="flex-1" disabled={busy} onClick={() => void bid(nextMin)}>
-                      บิด {baht(nextMin)}
-                    </Button>
-                    {!!auction.buy_now_price && view.current_price < auction.buy_now_price && (
-                      <Button variant="ghost" disabled={busy} onClick={() => void doBuyNow()}>
-                        ซื้อเลย {baht(auction.buy_now_price)}
+                    {quickBids.map((q) => (
+                      <Button key={q.amount} className="flex-1 flex-col !gap-0 !py-2.5" disabled={busy} onClick={() => void bid(q.amount)}>
+                        <span className="text-[11px] font-bold opacity-80">{q.label}</span>
+                        <span className="text-[15px] font-extrabold leading-tight">{baht(q.amount)}</span>
                       </Button>
-                    )}
+                    ))}
                   </div>
+                  {!!auction.buy_now_price && view.current_price < auction.buy_now_price && (
+                    <Button variant="ghost" disabled={busy} onClick={() => void doBuyNow()}>
+                      ซื้อเลย {baht(auction.buy_now_price)}
+                    </Button>
+                  )}
                   <div className="flex gap-2">
                     <input
                       value={custom} onChange={(e) => setCustom(e.target.value.replace(/[^\d]/g, ''))}
-                      inputMode="numeric" placeholder={`บิดเองมากกว่านี้ (ขั้นละ ${step} · ลงท้าย 0)`}
+                      inputMode="numeric" placeholder={`ใส่เอง (ขั้นต่ำ ${baht(customMin)})`}
                       className={cx('flex-1 rounded-lg border bg-surface-3 px-3 py-2 text-sm text-ink placeholder:text-ink-faint',
                         customErr ? 'border-[#dc2626]' : 'border-subtle')}
                     />
@@ -292,9 +352,9 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
                   {/* บอกเหตุผลตรงใต้ช่องกรอกตั้งแต่ยังพิมพ์อยู่ + ปิดปุ่มไว้เลย — เดิมต้องกดก่อน
                       แล้วค่อยเด้ง toast แดงทับการ์ดข้างล่าง ทำให้ดูเหมือนหน้าจอพัง */}
                   <div className={cx('text-[11.5px]', customErr ? 'font-bold text-[#f87171]' : 'text-ink-faint')}>
-                    {customErr === 'too_low' ? `ต่ำกว่าขั้นต่ำ — ต้องบิดอย่างน้อย ${baht(nextMin)}`
-                      : customErr === 'not_round' ? 'ยอดบิดต้องลงท้ายด้วย 0 (เช่น 1,020 / 1,500)'
-                      : `ขั้นต่ำตอนนี้ ${baht(nextMin)} · บิดข้ามขั้นได้ ขอแค่ลงท้ายด้วย 0`}
+                    {customErr === 'too_low' ? `ใส่เองต้องอย่างน้อย ${baht(customMin)} (ต่ำกว่านี้ใช้ปุ่มด้านบน)`
+                      : customErr === 'not_round' ? 'ยอดบิดต้องลงท้ายด้วย 0 (เช่น 1,100 / 1,500)'
+                      : `ขั้นต่ำตอนนี้ ${baht(nextMin)} · ใส่เองได้ตั้งแต่ ${baht(customMin)} ขึ้นไป ลงท้ายด้วย 0`}
                   </div>
                 </div>
               ) : (
@@ -312,18 +372,30 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
               ? <WinnerPay a={auction} onPay={payNow} />
               : (
                 <div className="rounded-lg bg-surface-3 px-3 py-2.5 text-[12.5px] text-ink-muted">
-                  {view.winner_user_id ? 'ปิดประมูลแล้ว — มีผู้ชนะแล้ว' : 'ปิดประมูลแล้ว — ไม่มีผู้บิด'}
+                  {/* หมดเวลาแล้วแต่ยังไม่มีใครกดสรุปผล ≠ ไม่มีคนบิด — เดิมบอก "ไม่มีผู้บิด" ทั้งที่บิดกันเป็นสิบครั้ง */}
+                  {awaitingResult ? 'หมดเวลาแล้ว — กำลังรอประกาศผล'
+                    : view.winner_user_id ? 'ปิดประมูลแล้ว — มีผู้ชนะแล้ว'
+                    : view.bid_count > 0 ? 'ปิดประมูลแล้ว'
+                    : 'ปิดประมูลแล้ว — ไม่มีผู้บิด'}
                 </div>
               )
           )}
 
-          <button
-            onClick={() => { if (uid) { dispatch(toggleAuctionWatch(auctionId, uid)); flash(watching ? 'ปิดกระดิ่งแล้ว' : 'เปิดกระดิ่งแล้ว — จะแจ้งเตือนเมื่อราคาขยับ'); } }}
-            className={cx('flex items-center justify-center gap-1.5 rounded-lg border py-2 text-[13px] font-bold',
-              watching ? 'border-primary/50 bg-primary/15 text-primary-bright' : 'border-subtle bg-surface-3 text-ink-muted')}>
-            <Icon name="bell" size={16} />
-            {watching ? 'เปิดกระดิ่งอยู่' : 'กดกระดิ่งรับแจ้งเตือนราคา'}
-          </button>
+          {/* กระดิ่ง (เจ้าของ 2026-08-03): เปิดแล้วปุ่มหายไปเลย ไม่ต้องมีปุ่มปิด
+              + กดแล้วขอสิทธิ์แจ้งเตือนของเครื่องด้วย (ต้องอยู่ใน user gesture) ไม่งั้นบอกว่าจะเตือนแต่ไม่เคยเตือน */}
+          {!watching && (
+            <button onClick={() => void turnOnBell()}
+              className="flex items-center justify-center gap-1.5 rounded-lg border border-subtle bg-surface-3 py-2 text-[13px] font-bold text-ink-muted">
+              <Icon name="bell" size={16} />
+              กดกระดิ่งรับแจ้งเตือนราคา
+            </button>
+          )}
+          {watching && (
+            <div className="flex items-center justify-center gap-1.5 py-1 text-[12px] font-bold text-primary-bright">
+              <Icon name="bell" size={14} />
+              เปิดกระดิ่งแล้ว — จะแจ้งเตือนเมื่อราคาขยับ
+            </div>
+          )}
         </div>
       </Card>
 
@@ -477,25 +549,38 @@ export function AuctionCard({ a, href }: { a: Auction; href: string }) {
   const now = new Date();
   const running = isLive(a, now);
   const msLeft = new Date(a.ends_at).getTime() - now.getTime();
+  // จบแล้ว = ไม่โชว์ราคาปิด (เจ้าของ 2026-08-03) — ขึ้นข้อความกระพริบแทน
+  // รวมห้องที่หมดเวลาแล้วแต่ยังไม่ประกาศผลด้วย: ราคาตอนนั้นคือราคาที่ชนะอยู่ดี ไม่ควรโชว์
+  const cancelled = a.status === 'cancelled';
+  const awaitingResult = a.status === 'live' && !running;
+  const finished = awaitingResult || ['ended', 'awarded', 'paid'].includes(a.status);
   return (
     <Link href={href}>
       <Card className="overflow-hidden">
         <div className="relative aspect-square w-full bg-surface-3">
-          {img ? <img src={img} alt={a.title} className="h-full w-full object-cover" />
+          {img ? <img src={img} alt={a.title} className={cx('h-full w-full object-cover', (finished || cancelled) && 'opacity-55')} />
                : <div className="grid h-full place-items-center text-xs text-ink-faint">ไม่มีรูป</div>}
           <span className={cx('absolute left-2 top-2 rounded-full px-2 py-0.5 text-[10.5px] font-extrabold',
-            running ? 'bg-primary text-white' : 'bg-surface-4 text-ink-muted')}>
-            {running ? timeLeftLabel(msLeft) : AUCTION_STATUS_TH[a.status]}
+            running ? 'bg-primary text-white' : awaitingResult ? 'bg-[#fbbf24] text-black' : 'bg-surface-4 text-ink-muted')}>
+            {running ? timeLeftLabel(msLeft) : awaitingResult ? 'หมดเวลา' : AUCTION_STATUS_TH[a.status]}
           </span>
         </div>
         <div className="flex flex-col gap-0.5 p-2.5">
           <div className="line-clamp-2 text-[12.5px] font-bold leading-snug">{a.title}</div>
-          <div className="text-[15px] font-extrabold text-primary-bright">
-            {a.bid_count === 0 ? baht(a.start_price) : baht(a.current_price)}
-          </div>
-          <div className="text-[10.5px] text-ink-faint">
-            {a.bid_count === 0 ? 'ราคาเปิด' : `บิดแล้ว ${a.bid_count} ครั้ง`}
-          </div>
+          {finished ? (
+            <div className="animate-pulse text-[15px] font-extrabold text-primary-bright">ประมูลจบแล้ว</div>
+          ) : cancelled ? (
+            <div className="text-[15px] font-extrabold text-ink-faint">ยกเลิกแล้ว</div>
+          ) : (
+            <>
+              <div className="text-[15px] font-extrabold text-primary-bright">
+                {a.bid_count === 0 ? baht(a.start_price) : baht(a.current_price)}
+              </div>
+              <div className="text-[10.5px] text-ink-faint">
+                {a.bid_count === 0 ? 'ราคาเปิด' : `บิดแล้ว ${a.bid_count} ครั้ง`}
+              </div>
+            </>
+          )}
         </div>
       </Card>
     </Link>

@@ -300,7 +300,8 @@ function PreviewTab({ list, value, onChange }: { list: Auction[]; value: string;
         นี่คือหน้าจอเดียวกับที่ลูกค้าเห็นเป๊ะๆ — กดบิด/กดกระดิ่ง/ซื้อเลยได้จริงในนามบัญชีคุณ (ใช้ทดลองก่อนเปิดให้ลูกค้า)
       </div>
       <div className="rounded-[26px] border border-subtle bg-base p-3">
-        <AuctionRoom auctionId={pick} embedded />
+        {/* key = สลับห้องแล้วสร้างใหม่ทั้งก้อน กันราคา/นาฬิกาของห้องก่อนหน้าค้างทับ */}
+        <AuctionRoom key={pick} auctionId={pick} embedded />
       </div>
     </div>
   );
