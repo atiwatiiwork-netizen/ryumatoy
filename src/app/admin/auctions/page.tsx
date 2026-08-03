@@ -69,7 +69,7 @@ export default function AdminAuctionsPage() {
   // ยังไม่ได้รัน v60 = ไม่มีทั้งตารางและ RPC → ห้องที่สร้างจะเซฟขึ้นคลาวด์ไม่ได้
   // ต้องบอกตรงนี้ ไม่ใช่ปล่อยให้เจอ error "บันทึกไม่สำเร็จ" ตอนกดสร้างแล้วงงว่าอะไรพัง
   const [needMigration, setNeedMigration] = useState(false);
-  useEffect(() => { void rpc.auctionState('probe').then((r) => setNeedMigration(rpc.isNoServer(r))); }, []);
+  useEffect(() => { void rpc.auctionState('probe').then((r) => setNeedMigration(rpc.isMissingRpc(r) || rpc.isNoServer(r))); }, []);
 
   const now = new Date();
   const list = sortedAuctions(db, now);
@@ -143,6 +143,8 @@ function AuctionList({ db, dispatch, flash, list, now, onPreview }: {
 
   async function close(a: Auction) {
     const res = await rpc.closeAuction(a.id);
+    // ต่อฐานข้อมูลได้แต่ RPC หาย = ห้ามปิดในเครื่อง (ผลจะไม่ตรงกับ server แล้วถูกเซฟทับ)
+    if (rpc.isMissingRpc(res)) { flash('ปิดไม่ได้ — ระบบประมูลฝั่งเซิร์ฟเวอร์ยังไม่พร้อม (ยังไม่ได้รัน migration)'); return; }
     const local = rpc.isNoServer(res);
     if (local) { dispatch(closeAuctionLocal(a.id)); flash('ปิด + สรุปผลแล้ว (โหมดทดลอง)'); }
     else if (res.ok) { flash(res.winner ? `ปิดแล้ว — ผู้ชนะที่ ${baht(res.amount ?? 0)}` : 'ปิดแล้ว — ไม่มีผู้บิด'); reloadDb(); }

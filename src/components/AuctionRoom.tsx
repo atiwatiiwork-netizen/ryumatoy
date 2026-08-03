@@ -53,6 +53,8 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
   // ── สถานะสดจาก server (ถ้ามี) ────────────────────────────────────────────
   const [live, setLive] = useState<Live | null>(null);
   const [testMode, setTestMode] = useState(false);
+  /** ต่อฐานข้อมูลได้ แต่ RPC ประมูลหาย — ห้ามบิด ห้าม fallback (ราคาปลอมจะทับของจริง) */
+  const [broken, setBroken] = useState(false);
   const [bids, setBids] = useState<AuctionBidRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0); // เดินนาฬิกาถอยหลังทุกวินาที (ค่าไม่ได้ใช้ ใช้แค่ให้ re-render)
@@ -67,9 +69,13 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
     const mine = auctionId;
     const s = await rpc.auctionState(auctionId);
     if (seq !== pullSeq.current || mine !== auctionId) return;
-    if (rpc.isNoServer(s)) { setTestMode(true); return; }
+    if (rpc.isNoServer(s)) { setTestMode(true); setBroken(false); return; }
+    // ต่อฐานข้อมูลได้แต่ฟังก์ชันหาย = ยังไม่ได้รัน migration หรือฟังก์ชันถูกลบ
+    // ห้ามตกไปคิดในเครื่องเด็ดขาด (จะเขียนราคาปลอมทับของจริง) — ปิดการบิดแล้วบอกตรงๆ
+    if (rpc.isMissingRpc(s)) { setBroken(true); setTestMode(false); return; }
     if (!s.ok) return;
     setTestMode(false);
+    setBroken(false);
     setLive({
       price: s.price ?? 0, bidCount: s.bid_count ?? 0, endsAt: s.ends_at ?? '',
       status: s.status ?? 'live', nextMin: s.next_min ?? 0, leading: !!s.leading,
@@ -157,8 +163,12 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
     setBusy(true);
     try {
       const res = await rpc.placeBid(auctionId, amount);
-      if (rpc.isNoServer(res)) {
-        // โหมดทดลอง: ยังไม่ได้รัน v60 — คิดในเครื่องเพื่อให้ลองเล่นได้
+      if (rpc.isMissingRpc(res)) {
+        // ⚠ ห้ามคิดในเครื่องเมื่อฐานข้อมูลยังต่อได้ — ราคาที่คิดเองจะถูกเซฟทับราคาจริงของทุกคน
+        setBroken(true);
+        flash('ระบบประมูลฝั่งเซิร์ฟเวอร์ยังไม่พร้อม — ยังบิดไม่ได้ (ยังไม่ได้รัน migration)');
+      } else if (rpc.isNoServer(res)) {
+        // โหมดทดลองจริงๆ (ไม่มีฐานข้อมูลให้ต่อเลย เช่น seed preview) — คิดในเครื่องเพื่อลองเล่นหน้าตา
         dispatch(placeBidLocal(auctionId, uid, amount));
         flash(`บิด ${baht(amount)} แล้ว (โหมดทดลอง)`);
       } else if (res.ok) {
@@ -183,7 +193,8 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
     setBusy(true);
     try {
       const res = await rpc.buyNow(auctionId);
-      if (rpc.isNoServer(res)) { dispatch(buyNowLocal(auctionId, uid)); flash('ซื้อเลยสำเร็จ (โหมดทดลอง)'); }
+      if (rpc.isMissingRpc(res)) { setBroken(true); flash('ระบบประมูลฝั่งเซิร์ฟเวอร์ยังไม่พร้อม — ยังซื้อเลยไม่ได้'); }
+      else if (rpc.isNoServer(res)) { dispatch(buyNowLocal(auctionId, uid)); flash('ซื้อเลยสำเร็จ (โหมดทดลอง)'); }
       else if (res.ok) { flash('ซื้อเลยสำเร็จ — รอแอดมินแจ้งยอดชำระ'); await pull(); }
       else flash(BID_REJECT_TH[(res.error ?? '') as keyof typeof BID_REJECT_TH] ?? `ไม่สำเร็จ (${res.error})`);
     } finally { setBusy(false); }
@@ -208,7 +219,7 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
     const reason = prompt('บอกเหตุผลสั้นๆ ให้แอดมินหน่อยครับ (เช่น พิมพ์ยอดผิด)');
     if (!reason) return;
     const res = await rpc.requestBidCancel(bidId, reason);
-    if (rpc.isNoServer(res)) { flash('โหมดทดลอง — ยังส่งคำขอจริงไม่ได้'); return; }
+    if (rpc.isNoServer(res) || rpc.isMissingRpc(res)) { flash('ยังส่งคำขอจริงไม่ได้ — ทักแอดมินโดยตรงได้เลยครับ'); return; }
     flash(res.ok ? 'ส่งคำขอให้แอดมินแล้ว — รอแอดมินตรวจสอบ' : 'ส่งคำขอไม่สำเร็จ');
     if (res.ok) await pull();
   }
@@ -250,7 +261,12 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
     <div className={cx('flex flex-col gap-3', embedded && 'mx-auto max-w-[430px]')}>
       {testMode && (
         <div className="rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-2 text-[12px] font-semibold text-[#fbbf24]">
-          โหมดทดลอง — ยังไม่ได้รัน <code>migration_auction_v60.sql</code> ราคาที่บิดยังคิดในเครื่อง ยังไม่ใช่ของจริง
+          โหมดทดลอง (ไม่ได้ต่อฐานข้อมูล) — ราคาที่บิดคิดในเครื่องนี้เท่านั้น ไม่ใช่ของจริง
+        </div>
+      )}
+      {broken && (
+        <div className="rounded-xl border border-[#dc2626]/50 bg-[#dc2626]/[0.14] px-3 py-2 text-[12px] font-semibold text-[#f87171]">
+          ระบบประมูลฝั่งเซิร์ฟเวอร์ยังไม่พร้อม (ยังไม่ได้รัน migration) — ยังบิดไม่ได้ · ราคาที่เห็นอาจไม่อัปเดต
         </div>
       )}
 

@@ -29,8 +29,18 @@ export type AuctionRes = {
   server_now?: string;
 };
 
-/** true = ยังไม่ได้รัน migration v60 (หรือยังไม่ได้ตั้ง Supabase) → หน้าจอสลับไป "โหมดทดลอง" */
-export const isNoServer = (r: AuctionRes) => r.error === 'no_server' || r.error === 'no_rpc';
+/**
+ * true = **ไม่มีฐานข้อมูลให้ต่อเลย** (seed preview / ยังไม่ตั้ง Supabase) → ใช้โหมดทดลองคิดในเครื่องได้
+ *
+ * ⚠ เดิมรวม `no_rpc` (ฟังก์ชันหาย) ไว้ด้วย ซึ่งอันตรายมาก: บนเครื่องจริงที่ต่อฐานข้อมูลได้
+ * แต่ RPC หายชั่วคราว (schema cache ยังไม่รีเฟรชหลังรัน migration / ฟังก์ชันถูกลบ) แอปจะเงียบๆ
+ * ตกไปคิดราคาในเครื่องแล้ว **เขียนราคาปลอมทับราคาจริงบน server** — ห้ามเด็ดขาด
+ * กรณีนั้นต้องแจ้ง error ตรงๆ ให้คนเห็น (ดู isMissingRpc)
+ */
+export const isNoServer = (r: AuctionRes) => r.error === 'no_server';
+
+/** ต่อฐานข้อมูลได้ แต่ยังไม่มีฟังก์ชันตัวนั้น = ยังไม่ได้รัน migration → ต้องเตือน ห้าม fallback เงียบ */
+export const isMissingRpc = (r: AuctionRes) => r.error === 'no_rpc';
 
 async function call(fn: string, args: Record<string, unknown>): Promise<AuctionRes> {
   if (!supabase) return { error: 'no_server' };
