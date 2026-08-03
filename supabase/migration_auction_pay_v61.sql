@@ -10,6 +10,11 @@ alter table auctions add column if not exists pay_order_id text;
 -- กัน push "ราคาขยับ" ยิงรัวทุกบิด (ช่วงท้ายบิดกันนาทีละหลายครั้ง = คนปิดกระดิ่งถาวร)
 alter table auctions add column if not exists last_price_push_at timestamptz;
 
+-- เช็คลิสต์สภาพของ (เจ้าของ 2026-08-03 "รายละเอียดตำหนิ ทำเป็น Checklist")
+-- jsonb: กล่องน้ำตาลเดิม/ใส่กล่องอื่นแทน · กล่องสี · การ์ด · ตำหนิ+รายละเอียด · มือ1/2
+-- เพิ่มช่องใหม่ทีหลังได้โดยไม่ต้อง migration อีก
+alter table auctions add column if not exists cond jsonb;
+
 -- ลูกค้าถอนบิดเองไม่ได้ (กติกาเจ้าของข้อ 19) — ส่งคำขอมาให้แอดมินอนุมัติ
 alter table auction_bids add column if not exists cancel_requested_at timestamptz;
 alter table auction_bids add column if not exists cancel_reason text;
@@ -111,10 +116,10 @@ end $$;
 
 grant execute on function ryuma_auction_push_targets(text, text) to anon, authenticated;
 
--- ── ตรวจหลังรัน: ต้องได้ 4 แถว ──────────────────────────────────────────────
+-- ── ตรวจหลังรัน: ต้องได้ 5 แถว ──────────────────────────────────────────────
 select table_name, column_name from information_schema.columns
  where table_schema = 'public'
    and (table_name, column_name) in
-       (('auctions','pay_order_id'), ('auctions','last_price_push_at'),
+       (('auctions','pay_order_id'), ('auctions','last_price_push_at'), ('auctions','cond'),
         ('auction_bids','cancel_requested_at'), ('auction_bids','cancel_reason'))
  order by table_name, column_name;

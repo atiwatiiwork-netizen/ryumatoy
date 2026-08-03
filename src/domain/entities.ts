@@ -664,6 +664,23 @@ export interface PaymentPlan {
 }
 
 // ── ประมูล (v60, เจ้าของเคาะสเปก 2026-07-31) ─────────────────────────────────
+/** เช็คลิสต์สภาพของชิ้นที่ประมูล (เจ้าของ 2026-08-03: "รายละเอียดตำหนิ ทำเป็น Checklist").
+ *  เก็บเป็น jsonb ในคอลัมน์ `auctions.cond` — เพิ่มช่องใหม่ทีหลังได้โดยไม่ต้อง migration
+ *  ลำดับตามที่เจ้าของสั่ง: กล่องน้ำตาลเดิม (ไม่มี → ใส่กล่องอื่นให้) · กล่องสี · การ์ด · ตำหนิ (มี → แนบรูป) */
+export interface AuctionCond {
+  hand: 1 | 2;              // มือ 1 / มือ 2
+  box_brown: boolean;       // 1. กล่องน้ำตาลเดิม
+  box_brown_alt: boolean;   // 1.1 ไม่มีกล่องเดิม แต่ใส่กล่องน้ำตาลอื่นให้
+  box_color: boolean;       // 2. กล่องสี
+  card: boolean;            // 3. การ์ด
+  has_defect: boolean;      // 4. มีตำหนิ
+  defect_note?: string;     // 4. ตำหนิตรงไหน (โชว์เมื่อ has_defect)
+}
+/** ค่าเริ่มต้นของห้องใหม่: มือ 1 ของครบ ไม่มีตำหนิ (แอดมินติ๊กออกเองถ้าไม่ครบ) */
+export const NEW_AUCTION_COND: AuctionCond = {
+  hand: 1, box_brown: true, box_brown_alt: false, box_color: true, card: true, has_defect: false,
+};
+
 export type AuctionStatus = 'draft' | 'live' | 'ended' | 'awarded' | 'paid' | 'cancelled';
 /** ห้องประมูล 1 รายการ = ของในมือ 1 ชิ้น (เจ้าของ: MVP ประมูลเฉพาะของในมือ).
  *  ราคา/เวลาปิดเป็นของ **server** เสมอ — ฝั่งแอปแค่แสดงผล ห้ามตัดสินเอง (ดู migration v60). */
@@ -672,7 +689,8 @@ export interface Auction {
   product_id?: string;     // ผูกกับ SKU ในคลัง (ของในมือ) — ใช้รูป/สภาพ/ค่าย จากสินค้าตัวนั้น
   title: string;
   images: string[];        // รูปเพิ่มเฉพาะของชิ้นนี้ (ตำหนิ/ของแถม) — ว่าง = ใช้รูปสินค้า
-  detail?: string;         // รายละเอียด + ตำหนิ
+  cond?: AuctionCond;      // เช็คลิสต์สภาพ (v61) — ไม่มี = ห้องเก่าก่อนมีเช็คลิสต์
+  detail?: string;         // หมายเหตุเพิ่มเติม (ของแถม/เงื่อนไขพิเศษ)
   start_price: number;     // ราคาเปิด (default 1,000)
   buy_now_price?: number;  // ซื้อเลย (ไม่ตั้ง = ไม่มีปุ่ม)
   ends_at: string;         // เวลาปิดปัจจุบัน (ขยับได้เมื่อต่อเวลา)

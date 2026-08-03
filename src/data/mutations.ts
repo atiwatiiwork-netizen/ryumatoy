@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines } from '../domain/services/tickets';
@@ -1916,7 +1916,7 @@ export const reclaimCouponGrantsFor = (userId: string) => (db: Database): Databa
 //   — ห้ามเรียกเมื่อ RPC ใช้ได้ ไม่งั้นสองเครื่องเขียนทับกันเงียบๆ เหมือนเคสขายเกิน
 
 export type NewAuction = {
-  title: string; product_id?: string; images: string[]; detail?: string;
+  title: string; product_id?: string; images: string[]; detail?: string; cond?: AuctionCond;
   start_price: number; buy_now_price?: number; ends_at: string;
   extend_min?: number; window_min?: number; cap_min?: number;
 };
@@ -1930,6 +1930,7 @@ export const createAuction = (data: NewAuction) => (db: Database): Database => (
       product_id: data.product_id,
       title: data.title,
       images: data.images ?? [],
+      cond: data.cond,
       detail: data.detail,
       start_price: data.start_price,
       buy_now_price: data.buy_now_price,

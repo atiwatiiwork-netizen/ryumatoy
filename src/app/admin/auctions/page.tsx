@@ -17,9 +17,11 @@ import {
   AUCTION_STATUS_TH, auctionPublicEnabled, isLive, needsClose, payOverdue, sortedAuctions, timeLeftLabel,
 } from '@/domain/services/auctions';
 import { AuctionRoom, reloadDb } from '@/components/AuctionRoom';
+import { AuctionCondPicker } from '@/components/AuctionCond';
 import { Button, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import type { Auction, Database } from '@/domain/entities';
+import type { Auction, AuctionCond, Database } from '@/domain/entities';
+import { NEW_AUCTION_COND } from '@/domain/entities';
 
 /**
  * แอดมิน › ประมูล (v60).
@@ -353,10 +355,10 @@ function EntriesTab({ db, dispatch, flash }: { db: Database; dispatch: Dispatch;
 
 // ── แท็บ: สร้างห้อง ─────────────────────────────────────────────────────────
 const DRAFT_KEY = 'ryuma_auction_draft';
-type Draft = { productId: string; title: string; detail: string; startPrice: string; buyNow: string; date: string; time: string; images: string[] };
+type Draft = { productId: string; title: string; detail: string; startPrice: string; buyNow: string; date: string; time: string; images: string[]; cond: AuctionCond };
 const freshDraft = (): Draft => {
   const d = todayAt21();
-  return { productId: '', title: '', detail: '', startPrice: '1000', buyNow: '', date: d.date, time: d.time, images: [] };
+  return { productId: '', title: '', detail: '', startPrice: '1000', buyNow: '', date: d.date, time: d.time, images: [], cond: { ...NEW_AUCTION_COND } };
 };
 
 function NewAuctionForm({ db, dispatch, flash, onDone }: { db: Database; dispatch: Dispatch; flash: Flash; onDone: () => void }) {
@@ -395,8 +397,11 @@ function NewAuctionForm({ db, dispatch, flash, onDone }: { db: Database; dispatc
     if (sp % 10 !== 0) { flash('ราคาเปิดต้องลงท้ายด้วย 0'); return; }
     const bn = d.buyNow ? Number(d.buyNow) : undefined;
     if (bn != null && bn <= sp) { flash('ราคาซื้อเลยต้องมากกว่าราคาเปิด'); return; }
+    // ติ๊กว่ามีตำหนิแล้วต้องบอกให้ครบ — ของประมูลคืนยาก ปล่อยผ่านไม่ได้
+    if (d.cond.has_defect && !(d.cond.defect_note ?? '').trim()) { flash('ติ๊ก "มีตำหนิ" ไว้ — เขียนด้วยว่าตำหนิตรงไหน'); return; }
+    if (d.cond.has_defect && d.images.length === 0) { flash('ติ๊ก "มีตำหนิ" ไว้ — แนบรูปตำหนิอย่างน้อย 1 รูป'); return; }
     dispatch(createAuction({
-      title: t, product_id: d.productId || undefined, images: d.images,
+      title: t, product_id: d.productId || undefined, images: d.images, cond: d.cond,
       detail: d.detail.trim() || undefined, start_price: sp, buy_now_price: bn,
       ends_at: ends.toISOString(),
     }));
@@ -412,7 +417,12 @@ function NewAuctionForm({ db, dispatch, flash, onDone }: { db: Database; dispatc
           <select value={d.productId} className={inputCls}
             onChange={(e) => setD((p) => {
               const prod = db.products.find((x) => x.id === e.target.value);
-              return { ...p, productId: e.target.value, title: p.title || prod?.series_name || '' };
+              // ถ้าสินค้าตัวนั้นเคยระบุสภาพไว้แล้ว (in-stock) ตั้งเช็คลิสต์ให้ตรงกันไว้ก่อน แอดมินแก้ต่อได้
+              const sc = prod?.stock_cond;
+              return {
+                ...p, productId: e.target.value, title: p.title || prod?.series_name || '',
+                cond: sc ? { hand: sc.hand, box_brown: sc.box_brown, box_brown_alt: false, box_color: sc.box_color, card: sc.card, has_defect: !sc.intact } : p.cond,
+              };
             })}>
             <option value="">— ไม่ผูกกับสินค้า —</option>
             {inHand.map((p) => <option key={p.id} value={p.id}>{p.series_name}</option>)}
@@ -435,13 +445,25 @@ function NewAuctionForm({ db, dispatch, flash, onDone }: { db: Database; dispatc
         </Field>
 
         <div className="lg:col-span-2">
-          <Field label="รายละเอียด / ตำหนิ" hint="เขียนตรงๆ ว่ามีตำหนิตรงไหน — ของประมูลคืนยาก ต้องบอกก่อน">
-            <textarea value={d.detail} onChange={(e) => set('detail', e.target.value)} rows={3} className={inputCls} placeholder="เช่น กล่องมีรอยยุบมุมล่างซ้าย · ตัวฟิกไม่มีตำหนิ · มีการ์ดครบ" />
+          <Field label="สภาพสินค้า (ติ๊กตามจริง)" hint="ลูกค้าเห็นเช็คลิสต์นี้ในห้องประมูล — ของประมูลคืนยาก ต้องบอกให้ครบก่อน">
+            <AuctionCondPicker value={d.cond} onChange={(c) => set('cond', c)} />
           </Field>
         </div>
 
         <div className="lg:col-span-2">
-          <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">รูปเพิ่ม (รูปตำหนิ/ของแถม){busy && <span className="ml-2 text-[11.5px] font-normal text-ink-faint">กำลังอัปโหลด…</span>}</div>
+          <Field label="หมายเหตุเพิ่มเติม (ไม่บังคับ)" hint="เช่น ของแถม / เงื่อนไขพิเศษของชิ้นนี้">
+            <input value={d.detail} onChange={(e) => set('detail', e.target.value)} className={inputCls} placeholder="เช่น แถมฐานอะคริลิค" />
+          </Field>
+        </div>
+
+        <div className="lg:col-span-2">
+          <div className="mb-1 text-[12.5px] font-semibold text-ink-muted">
+            {d.cond?.has_defect ? 'รูปตำหนิ (แนบให้ครบทุกจุด)' : 'รูปเพิ่ม (ของแถม/มุมอื่น)'}
+            {busy && <span className="ml-2 text-[11.5px] font-normal text-ink-faint">กำลังอัปโหลด…</span>}
+          </div>
+          {d.cond?.has_defect && d.images.length === 0 && (
+            <div className="mb-1.5 text-[11.5px] font-semibold text-[#fbbf24]">ติ๊ก “มีตำหนิ” ไว้แล้ว — แนบรูปตำหนิอย่างน้อย 1 รูปก่อนสร้างห้อง</div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             {d.images.map((src) => (
               <div key={src} className="relative h-20 w-20 overflow-hidden rounded-lg border border-subtle">

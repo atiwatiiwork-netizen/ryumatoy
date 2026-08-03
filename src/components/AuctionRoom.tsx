@@ -21,6 +21,7 @@ import { productLabel } from '@/domain/services/catalog';
 import { baht } from '@/lib/theme';
 import type { Auction, AuctionBidRow } from '@/domain/entities';
 import { StockCondCard } from './StockCond';
+import { AuctionCondCard } from './AuctionCond';
 import { Button, Card, cx } from './ui';
 import { Icon } from './Icon';
 
@@ -327,12 +328,14 @@ export function AuctionRoom({ auctionId, embedded }: { auctionId: string; embedd
       </Card>
 
       {/* สภาพสินค้า + ตำหนิ */}
-      {/* StockCondCard มีหัวข้อ "สภาพสินค้า" ในตัวเองแล้ว — ห้ามใส่ซ้ำ */}
-      {product && <div className="-mb-3"><StockCondCard cond={product.stock_cond} /></div>}
+      {/* เช็คลิสต์สภาพของห้องนี้มาก่อนเสมอ (ระบุรายชิ้น) — ห้องเก่าที่ยังไม่มี ค่อยถอยไปใช้สภาพของ SKU */}
+      {auction.cond
+        ? <Card><AuctionCondCard cond={auction.cond} /></Card>
+        : product && <div className="-mb-3"><StockCondCard cond={product.stock_cond} /></div>}
       {auction.detail && (
         <Card>
           <div className="flex flex-col gap-1.5 p-3.5">
-            <div className="text-[13.5px] font-extrabold">รายละเอียด / ตำหนิ</div>
+            <div className="text-[13.5px] font-extrabold">หมายเหตุ</div>
             <div className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink-muted">{auction.detail}</div>
           </div>
         </Card>
