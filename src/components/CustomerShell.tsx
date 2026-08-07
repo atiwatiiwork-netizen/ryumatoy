@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCart } from '@/state/CartProvider';
 import { useToast } from '@/state/ToastProvider';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useReady } from '@/state/DataProvider';
 import { fillMissingTicketsFor, reclaimOrphanCouponGrants, markInstalled } from '@/data/mutations';
 import { isStandalone } from '@/lib/pwa';
 import { unmatchedApprovedItems, ticketPrefixCounts } from '@/domain/services/tickets';
@@ -51,13 +51,17 @@ export function CustomerShell({ children }: { children: ReactNode }) {
     return () => { store.onPersistError = undefined; };
   }, [flash]);
   const db = useDatabase();
+  const ready = useReady(); // ข้อมูลจริงมาถึงแล้วหรือยัง (ก่อนหน้านั้นคือชุด seed)
   const CURRENT_USER_ID = useCurrentUserId();
   // SELF-HEAL "จ่ายแล้วตั๋วหาย": a split flush (mobile backgrounding mid-save on a Diamond
   // auto-approve) can persist the order without its tickets. Re-issue MY missing tickets once per
   // session as soon as the data shows a gap — the customer gets them back without contacting admin.
+  // ⚠ ตัวตรวจ (unmatchedApprovedItems) มีช่วง "รอให้นิ่ง" 3 นาทีในตัวแล้ว — ออเดอร์ที่แอดมินเพิ่ง
+  //   อนุมัติจะไม่ถูกตีว่าตั๋วหาย ระหว่างที่การเซฟข้ามตารางยังไม่จบ (เคสตั๋วซ้ำ Mongkol 2026-08-07)
+  //   บวกกับต้องรอ ready ก่อน — ห้ามตัดสินจากชุด seed ตอนแอปยังโหลดข้อมูลจริงไม่เสร็จ
   const healed = useRef(false);
   useEffect(() => {
-    if (healed.current || !CURRENT_USER_ID) return;
+    if (healed.current || !CURRENT_USER_ID || !ready) return;
     const missingItems = unmatchedApprovedItems(db, CURRENT_USER_ID);
     if (missingItems.length === 0) return;
     healed.current = true;
@@ -68,7 +72,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
       dispatch(fillMissingTicketsFor(CURRENT_USER_ID, startNos));
       flash(`กู้คืนใบพรีที่หายไป ${missingItems.length} ใบแล้ว ✓`);
     })();
-  }, [db, CURRENT_USER_ID, dispatch, flash]);
+  }, [db, ready, CURRENT_USER_ID, dispatch, flash]);
   // ⚠ SELF-HEAL #2 (คืนคูปองที่ถูกเผาโดยเซฟไม่สมบูรณ์) — ปิดจากฝั่งลูกค้าถาวร (audit 2026-07-25):
   // RLS trigger ryuma_guard_coupon_grant (v39) ห้าม non-admin ตั้ง status='active' → การเขียนนี้
   // ถูกปฏิเสธเสมอ และ (ก่อนแก้ persist วันนี้) ทำให้ทุกตารางหลัง coupon_grants — orders, order_items,

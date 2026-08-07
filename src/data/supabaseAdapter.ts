@@ -245,6 +245,16 @@ export const supabaseAdapter: PersistenceAdapter = {
     // auction_bids: **ไม่ sync โดยตั้งใจ** — บิดเกิดจาก RPC ฝั่ง server เท่านั้น
     // (บิดที่ client เขียนเองได้ = ปั่นราคาได้ และบิดที่เก็บไว้ local ตอนโหมดทดลองต้องไม่ไหลขึ้นจริง)
 
+    // ⚠ ลำดับสำคัญ: ตั๋วต้องลงก่อนออเดอร์ (เคสตั๋วซ้ำ Mongkol 2026-08-07)
+    //   การเซฟไม่ atomic ข้ามตาราง — ระหว่างเซฟมีช่วงที่เซิร์ฟเวอร์เห็นสถานะครึ่งทาง แล้วเครื่อง
+    //   *เครื่องอื่น* (ลูกค้าที่เปิดแอปรออยู่) poll เจอพอดี
+    //   เดิม orders ลงก่อน → ช่วงกลางคัน = "ออเดอร์ approved แต่ยังไม่มีตั๋ว" ซึ่งเป็นสัญญาณที่
+    //   self-heal (CustomerShell → fillMissingTicketsFor) ใช้ตัดสินว่า "ตั๋วหาย" แล้วมินต์ใบใหม่ให้
+    //   → พอตั๋วจริงของแอดมินลงตามมา กลายเป็น 2 ใบสำหรับรายการเดียว (NR-2026-08-0025/0026)
+    //   สลับเป็นตั๋วก่อน → ช่วงกลางคันกลายเป็น "มีตั๋วแต่ออเดอร์ยัง pending" ซึ่งไม่มีตัวไหน heal
+    //   (ไม่มี FK ระหว่างสองตารางนี้ — ตั๋วไม่ได้อ้าง order_id — สลับได้ปลอดภัย)
+    await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
+
     await step('orders', () => syncTable(sb, 'orders', next.orders.map(stripItems as never), base.orders.map(stripItems as never)));
     await step('order_items', () => syncTable(
       sb,
@@ -253,7 +263,6 @@ export const supabaseAdapter: PersistenceAdapter = {
       base.orders.flatMap((o) => o.items) as unknown as Row[],
     ));
 
-    await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
     await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
     await step('ticket_transfers', () => syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]));

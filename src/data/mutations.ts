@@ -1,7 +1,7 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
-import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines } from '../domain/services/tickets';
+import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
 
 /** Build a ticket_no allocator for ONE mutation run. If a prefix has a server-reserved start number,
@@ -220,8 +220,14 @@ export const repairTickets = () => (db: Database): Database => {
   const usedIds = new Set<string>();
   const issued: PreorderTicket[] = [];
   const key = (a?: string) => a ?? null;
+  const nowMs = Date.now();
   for (const order of out.orders) {
     if (order.status !== 'approved') continue;
+    // ⚠ ข้ามออเดอร์ที่เพิ่งอนุมัติ "ยังไม่นิ่ง" — สูตรเดียวกับ unmatchedApprovedItems
+    //   (เคสตั๋วซ้ำ 2026-08-07): แอดมินอีกเครื่อง/อีกแท็บกดซ่อมตั๋วระหว่างที่การเซฟข้ามตาราง
+    //   ของเครื่องแรกยังไม่จบ จะเห็น "approved แต่ไม่มีตั๋ว" แล้วมินต์ทับ = ตั๋วซ้ำแบบเดียวกัน
+    const approvedMs = new Date(order.approved_at ?? order.created_at).getTime();
+    if (!Number.isFinite(approvedMs) || nowMs - approvedMs < HEAL_SETTLE_MS) continue;
     for (const item of order.items) {
       const match = out.tickets.find((t) =>
         !usedIds.has(t.id) && t.owner_id === order.user_id && t.product_id === item.product_id &&

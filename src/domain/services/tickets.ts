@@ -76,13 +76,25 @@ export function nextTicketNo(db: Database, franchiseAbbr: string, when = new Dat
  * customer backgrounding the app mid-save on a Diamond auto-approve) can persist the order but not
  * its tickets; this finds those splits. `userId` narrows to one customer (self-heal).
  */
-export function unmatchedApprovedItems(db: Database, userId?: string): { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] {
+export const HEAL_SETTLE_MS = 3 * 60_000;
+
+export function unmatchedApprovedItems(db: Database, userId?: string, settledMs: number = HEAL_SETTLE_MS): { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] {
   const used = new Set<string>();
   const key = (a?: string) => a ?? null;
+  const now = Date.now();
   const out: { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] = [];
   for (const order of db.orders) {
     if (order.status !== 'approved') continue;
     if (userId && order.user_id !== userId) continue;
+    // ⚠ ออเดอร์ที่เพิ่งอนุมัติ "ยังไม่นิ่ง" — ห้ามตัดสินว่าตั๋วหาย (เคสตั๋วซ้ำ Mongkol 2026-08-07)
+    //   การเซฟไม่ atomic ข้ามตาราง → เครื่องอื่นที่ poll เจอตอนเซฟยังไม่จบเห็น "approved แต่ไม่มีตั๋ว"
+    //   ซึ่งไม่ใช่ตั๋วหายจริง แค่ยังเดินทางมาไม่ถึง → self-heal มินต์ทับกลายเป็น 2 ใบ
+    //   ตั๋วที่หายจริงจะยังหายอยู่หลังพ้นช่วงนี้เสมอ จึงไม่เสียความสามารถในการกู้
+    //   นาฬิกาเครื่องเพี้ยนไปข้างหน้า → ค่าติดลบ → ถือว่ายังไม่นิ่ง = ไม่มินต์ (fail-safe ฝั่งไม่ซ้ำ)
+    if (settledMs > 0) {
+      const approvedAt = new Date(order.approved_at ?? order.created_at).getTime();
+      if (!Number.isFinite(approvedAt) || now - approvedAt < settledMs) continue;
+    }
     for (const item of order.items) {
       const match = db.tickets.find((t) =>
         !used.has(t.id) && t.owner_id === order.user_id && t.product_id === item.product_id &&
