@@ -137,7 +137,8 @@ export default function HistoryPage() {
                         <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">
                           {img && <img src={img} alt="" className="h-full w-full object-cover" />}
                         </div>
-                        <span className="min-w-0 flex-1 truncate text-[12.5px]">{productLabel(db, i.product_id, i.variant_id)} ×{i.qty}</span>
+                        {/* qty 0 = รายการถูกยกเลิก (แอดมินลบตั๋ว) — เก็บแถวไว้ให้ประวัติตรงกับยอดที่โอนจริง */}
+                        <span className="min-w-0 flex-1 truncate text-[12.5px]">{productLabel(db, i.product_id, i.variant_id)}{i.qty > 0 ? ` ×${i.qty}` : ' · ยกเลิกแล้ว'}</span>
                         {tk && <Link href={`/wallet/${encodeURIComponent(tk.ticket_no)}`} className="shrink-0 font-mono text-[11px] text-primary-soft underline">{tk.ticket_no}</Link>}
                       </div>
                     );

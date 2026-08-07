@@ -1,7 +1,7 @@
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
-import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS } from '../domain/services/tickets';
+import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS, orderTicketId, isVoidedItem, ticketForItem, pairItemsWithTickets } from '../domain/services/tickets';
 import type { TicketNoStart } from '../lib/ticketno';
 
 /** Build a ticket_no allocator for ONE mutation run. If a prefix has a server-reserved start number,
@@ -201,6 +201,45 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
  *      their prefix) so persistence stops failing on the UNIQUE constraint; existing good tickets keep
  *      their numbers. (2) re-issues a ticket for any APPROVED-order item that has no matching ticket
  *      (lost when the duplicate insert aborted the sync). Run again = no-op. */
+/**
+ * ตั๋ว 1 ใบจาก order_item 1 รายการ — สูตรกลางที่ทุกทางต้องใช้ (approveOrder / repairTickets /
+ * fillMissingTicketsFor). เดิมสามที่เขียนสูตรของตัวเอง แล้วเพี้ยนกัน: self-heal ลอก product.status
+ * ดิบๆ (ตั๋วที่กู้คืนบน SKU ที่ถึงไทยแล้วเกิดมาเป็น 'arrived' ทั้งที่รอบใหม่ยังไม่ผลิต) และ hardcode
+ * status 'active' ทั้งที่จ่ายเต็ม + ไม่มี variant fallback. (ตรวจพบ 2026-08-07)
+ * id ผูกกับ item เสมอ (orderTicketId) ⇒ มินต์ซ้ำจากคนละเครื่องได้ "แถวเดิม" ไม่ใช่ใบใหม่
+ */
+function ticketFromOrderItem(
+  db: Database, order: Order, item: OrderItem, ticketNo: string,
+): PreorderTicket | null {
+  const product = db.products.find((p) => p.id === item.product_id);
+  if (!product) return null;
+  const variant = db.variants.find((v) => v.id === item.variant_id);
+  // ยึด snapshot ตอนสั่งก่อนเสมอ — ราคาปัจจุบันใช้ได้เฉพาะแถวรุ่นเก่าที่ไม่มี snapshot
+  const unitPrice = item.unit_price ?? variant?.price_total ?? product.price_total;
+  const unitDeposit = item.unit_deposit ?? variant?.deposit_amount ?? product.deposit_amount;
+  const perUnitRemaining = Math.max(0, unitPrice - unitDeposit);
+  const when = order.approved_at ?? order.created_at;
+  return {
+    id: orderTicketId(item.id),
+    ticket_no: ticketNo,
+    product_id: product.id,
+    variant_id: item.variant_id,
+    batch_id: item.batch_id,
+    owner_id: order.user_id,
+    original_buyer_id: order.user_id,
+    qty: item.qty,
+    deposit_paid: item.deposit_amount ?? unitDeposit * item.qty, // snapshot รายบรรทัด (รวมสิทธิ์แรงค์)
+    remaining_amount: perUnitRemaining * item.qty,
+    remaining_paid: 0,
+    // จ่ายเต็ม (พร้อมส่ง) = paid_full ตั้งแต่เกิด — field status ตรงกับยอดจริง
+    status: perUnitRemaining <= 0 ? 'paid_full' : 'active',
+    product_status: mirrorStatusFor(product, item.batch_id, perUnitRemaining <= 0),
+    qr_code_url: '',
+    created_at: when,
+    approved_at: when,
+  };
+}
+
 export const repairTickets = () => (db: Database): Database => {
   const pad = (n: number) => String(n).padStart(4, '0');
 
@@ -219,7 +258,6 @@ export const repairTickets = () => (db: Database): Database => {
   const out: Database = { ...db, tickets };
   const usedIds = new Set<string>();
   const issued: PreorderTicket[] = [];
-  const key = (a?: string) => a ?? null;
   const nowMs = Date.now();
   for (const order of out.orders) {
     if (order.status !== 'approved') continue;
@@ -228,27 +266,14 @@ export const repairTickets = () => (db: Database): Database => {
     //   ของเครื่องแรกยังไม่จบ จะเห็น "approved แต่ไม่มีตั๋ว" แล้วมินต์ทับ = ตั๋วซ้ำแบบเดียวกัน
     const approvedMs = new Date(order.approved_at ?? order.created_at).getTime();
     if (!Number.isFinite(approvedMs) || nowMs - approvedMs < HEAL_SETTLE_MS) continue;
-    for (const item of order.items) {
-      const match = out.tickets.find((t) =>
-        !usedIds.has(t.id) && t.owner_id === order.user_id && t.product_id === item.product_id &&
-        key(t.variant_id) === key(item.variant_id) && key(t.batch_id) === key(item.batch_id));
-      if (match) { usedIds.add(match.id); continue; }
+    const live = order.items.filter((i) => !isVoidedItem(i)); // ตั๋วถูกลบไปแล้ว = ตั้งใจให้ไม่มี
+    for (const { item, ticket } of pairItemsWithTickets(out.tickets, order.user_id, live, usedIds)) {
+      if (ticket) continue;
       const product = out.products.find((p) => p.id === item.product_id);
       if (!product) continue;
       const abbr = franchiseOf(out, product)?.abbr ?? 'xx';
-      const unitPrice = item.unit_price ?? product.price_total;
-      const unitDeposit = item.unit_deposit ?? product.deposit_amount;
-      const when = order.approved_at ?? order.created_at;
-      issued.push({
-        id: id('t'), ticket_no: nextTicketNo(out, abbr, new Date(), issued),
-        product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
-        owner_id: order.user_id, original_buyer_id: order.user_id, qty: item.qty,
-        deposit_paid: unitDeposit * item.qty, remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
-        // full-pay (in-stock) = paid_full ตั้งแต่เกิด — ให้ field status ตรงกับยอดจริงเหมือน grantSpecialTickets
-        remaining_paid: 0, status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
-        product_status: mirrorStatusFor(product, item.batch_id, unitPrice - unitDeposit <= 0), qr_code_url: '',
-        created_at: when, approved_at: when,
-      });
+      const fresh = ticketFromOrderItem(out, order, item, nextTicketNo(out, abbr, new Date(), issued));
+      if (fresh) issued.push(fresh);
     }
   }
   return { ...out, tickets: [...issued, ...out.tickets] };
@@ -266,31 +291,14 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
     // build in a loop (not .map) so each ticket's number accounts for its siblings issued in THIS order
     const newTickets: PreorderTicket[] = [];
     for (const item of order.items) {
+      if (isVoidedItem(item)) continue; // รายการที่ถูกยกเลิก (ตั๋วถูกลบ) — ไม่ออกใหม่
+      // ⚠ กดอนุมัติซ้ำหลังเซฟล้มกลางคัน: ตั๋วอาจขึ้นเซิร์ฟเวอร์ไปแล้วแต่ order.status ยังไม่ขึ้น
+      //   → ข้ามรายการที่มีตั๋วของมันอยู่แล้ว เพื่อไม่ให้ออกใบใหม่ทับ (และคง ticket_no เดิมไว้)
+      if (db.tickets.some((t) => t.id === orderTicketId(item.id))) continue;
       const product = db.products.find((p) => p.id === item.product_id)!;
-      const variant = db.variants.find((v) => v.id === item.variant_id);
       const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
-      // derive from the ORDER-TIME snapshot; fall back to current product for old rows
-      const unitPrice = item.unit_price ?? variant?.price_total ?? product.price_total;
-      const unitDeposit = item.unit_deposit ?? variant?.deposit_amount ?? product.deposit_amount;
-      newTickets.push({
-        id: id('t'),
-        ticket_no: allocNo(abbr, newTickets),
-        product_id: product.id,
-        variant_id: item.variant_id,
-        batch_id: item.batch_id,
-        owner_id: order.user_id,
-        original_buyer_id: order.user_id,
-        qty: item.qty,
-        deposit_paid: unitDeposit * item.qty,
-        remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
-        remaining_paid: 0,
-        // full-pay (in-stock) = paid_full ตั้งแต่เกิด — field status ตรงกับยอดจริง (เหมือน grantSpecialTickets)
-        status: unitPrice - unitDeposit <= 0 ? 'paid_full' : 'active',
-        product_status: mirrorStatusFor(product, item.batch_id, unitPrice - unitDeposit <= 0),
-        qr_code_url: '',
-        created_at: now,
-        approved_at: now,
-      });
+      const fresh = ticketFromOrderItem(db, { ...order, approved_at: now }, item, allocNo(abbr, newTickets));
+      if (fresh) newTickets.push(fresh);
     }
 
     // in-stock coupon applied at checkout → knock the discount off the qualifying พร้อมส่ง ticket's
@@ -1288,18 +1296,9 @@ export const fillMissingTicketsFor = (userId: string, startNos?: TicketNoStart) 
     const product = db.products.find((p) => p.id === item.product_id);
     if (!product) continue;
     const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
-    const unitPrice = item.unit_price ?? product.price_total;
-    const unitDeposit = item.unit_deposit ?? product.deposit_amount;
-    const when = order.approved_at ?? order.created_at;
-    issued.push({
-      id: id('t'), ticket_no: allocNo(abbr, issued),
-      product_id: product.id, variant_id: item.variant_id, batch_id: item.batch_id,
-      owner_id: userId, original_buyer_id: userId, qty: item.qty,
-      deposit_paid: item.deposit_amount ?? unitDeposit * item.qty, // line snapshot (rank perk included)
-      remaining_amount: Math.max(0, unitPrice - unitDeposit) * item.qty,
-      remaining_paid: 0, status: 'active', product_status: product.status, qr_code_url: '',
-      created_at: when, approved_at: when,
-    });
+    // สูตรเดียวกับ approveOrder เป๊ะ — ตั๋วที่กู้คืนต้องไม่ต่างจากตั๋วที่ออกตามปกติแม้แต่ฟิลด์เดียว
+    const fresh = ticketFromOrderItem(db, order, item, allocNo(abbr, issued));
+    if (fresh) issued.push(fresh);
   }
   return issued.length ? { ...db, tickets: [...issued, ...db.tickets] } : db;
 };
@@ -1745,13 +1744,40 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
 
 /** Admin deletes a ticket entirely — removes it + any linked remaining-payments and
  *  P2P transfer listings from the DB. (Stock return for in-stock items is handled in the
- *  admin handler via releaseReservation; pre-order counts drop automatically.) */
-export const deleteTicket = (ticketId: string) => (db: Database): Database => ({
-  ...db,
-  tickets: db.tickets.filter((t) => t.id !== ticketId),
-  remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId),
-  transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
-});
+ *  admin handler via releaseReservation; pre-order counts drop automatically.)
+ *
+ *  ⚠ ต้อง "ยกเลิกรายการในออเดอร์" ที่ตั๋วใบนี้เกิดมาด้วย (qty → 0) ไม่งั้นตัวซ่อมตั๋วทั้งสามตัว
+ *  (self-heal ฝั่งลูกค้า, การ์ดบนแดชบอร์ด, ปุ่มซ่อมของแอดมิน) จะเห็นรายการนั้นเป็น "ตั๋วหาย"
+ *  แล้วมินต์คืนให้อัตโนมัติ — ลบเท่าไหร่ก็งอกกลับ (ตรวจพบ 2026-08-07 ตอนจะไปลบใบซ้ำเคส Mongkol).
+ *  เก็บแถวรายการไว้ (ไม่ลบทิ้ง) เพื่อรักษาเส้นเงิน: ยอดโอนของออเดอร์ยังเป็นหลักฐานเดิม. */
+export const deleteTicket = (ticketId: string) => (db: Database): Database => {
+  const gone = db.tickets.find((t) => t.id === ticketId);
+  const rest = db.tickets.filter((t) => t.id !== ticketId);
+  let voided = false;
+  const orders = !gone ? db.orders : db.orders.map((o) => {
+    if (voided || o.user_id !== gone.owner_id || o.status !== 'approved') return o;
+    const items = o.items.map((it) => {
+      if (voided || isVoidedItem(it)) return it;
+      // ตั๋วรุ่นใหม่ผูก id กับรายการอยู่แล้ว; รุ่นเก่าต้องเดา — และต้องไม่ไปยกเลิกรายการ
+      // ที่ยังมีตั๋วใบอื่นถืออยู่ (ลูกค้าซื้อของชิ้นเดิมหลายออเดอร์)
+      const exact = orderTicketId(it.id) === ticketId;
+      const guess = !exact && gone.id.startsWith('t-') && !rest.some((t) => ticketForItem([t], o.user_id, it)) &&
+        it.product_id === gone.product_id && (it.variant_id ?? null) === (gone.variant_id ?? null) &&
+        (it.batch_id ?? null) === (gone.batch_id ?? null);
+      if (!exact && !guess) return it;
+      voided = true;
+      return { ...it, qty: 0 };
+    });
+    return voided ? { ...o, items } : o;
+  });
+  return {
+    ...db,
+    orders,
+    tickets: rest,
+    remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId),
+    transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
+  };
+};
 
 // ── Closing pre-order boards (กระดานปิดพรี) — one board = one maker ──────────
 export const createBoard = (makerId: string, title: string) => (db: Database): Database => ({

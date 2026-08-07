@@ -78,9 +78,60 @@ export function nextTicketNo(db: Database, franchiseAbbr: string, when = new Dat
  */
 export const HEAL_SETTLE_MS = 3 * 60_000;
 
+/**
+ * IDEMPOTENCY KEY ของตั๋วที่เกิดจากออเดอร์ (เคสตั๋วซ้ำ Mongkol 2026-08-07).
+ * ตั๋ว 1 ใบ = order_item 1 รายการเสมอ (qty อยู่บนตั๋ว ไม่ได้แตกเป็นหลายใบ) จึงผูก id ตั๋วกับ id
+ * ของรายการได้ตรงๆ — order_items.id ถูก snapshot ไว้ตั้งแต่ตอนลูกค้าส่งออเดอร์ และ adapter ใช้
+ * upsert บน primary key ⇒ ไม่ว่าเครื่องไหนจะมินต์ก่อน/หลัง/ซ้ำกี่รอบ ก็ลงเป็น "แถวเดิม" เสมอ
+ * ไม่ใช่ใบใหม่. นี่คือชั้นที่กันตั๋วซ้ำได้จริง ส่วนช่วงรอให้นิ่ง/ลำดับการเขียนตารางเป็นแค่การลดโอกาสชน.
+ */
+export function orderTicketId(itemId: string): string {
+  return `t-${itemId}`;
+}
+
+/** รายการที่ถูกยกเลิก (แอดมินลบตั๋วของมันทิ้ง) — ทำเครื่องหมายด้วย qty 0 เพื่อไม่ให้ตัวซ่อมมินต์คืน */
+export function isVoidedItem(item: { qty: number }): boolean {
+  return !(item.qty > 0);
+}
+
+type TicketLike = { id: string; owner_id: string; product_id: string; variant_id?: string; batch_id?: string };
+type ItemLike = Database['orders'][number]['items'][number];
+
+/** ตั๋วใบนี้เป็นของรายการนี้ไหม (ตั๋วรุ่นเก่าที่ id ไม่ได้ผูกกับรายการ ต้องเดาจาก สินค้า/รุ่น/รอบ) */
+export function ticketForItem<T extends TicketLike>(tickets: T[], ownerId: string, item: ItemLike): T | undefined {
+  const key = (a?: string) => a ?? null;
+  return tickets.find((t) => t.id === orderTicketId(item.id)) ??
+    tickets.find((t) => t.owner_id === ownerId && t.product_id === item.product_id &&
+      key(t.variant_id) === key(item.variant_id) && key(t.batch_id) === key(item.batch_id));
+}
+
+/**
+ * จับคู่รายการในออเดอร์กับตั๋วที่มีอยู่ — **สองรอบ**: รอบแรกจับเฉพาะคู่ที่ id ผูกกันตรงๆ
+ * (orderTicketId) รอบสองค่อยเดาให้รายการที่เหลือแบบเดิม. ห้ามรวมเป็นรอบเดียว ไม่งั้นรายการแรก
+ * จะ "เดา" ไปหยิบตั๋วของรายการหลังที่ผูก id กันอยู่แล้ว = ตั๋วใบเดียวถูกนับสองรายการ
+ * แล้วรายการที่ตั๋วหายจริงจะตรวจไม่เจอ. `used` กันตั๋วใบเดิมถูกนับข้ามออเดอร์.
+ */
+export function pairItemsWithTickets<T extends TicketLike>(
+  tickets: T[], ownerId: string, items: ItemLike[], used: Set<string>,
+): { item: ItemLike; ticket?: T }[] {
+  const out = items.map((item) => ({ item, ticket: undefined as T | undefined }));
+  for (const row of out) {
+    const exact = tickets.find((t) => !used.has(t.id) && t.id === orderTicketId(row.item.id));
+    if (exact) { row.ticket = exact; used.add(exact.id); }
+  }
+  const key = (a?: string) => a ?? null;
+  for (const row of out) {
+    if (row.ticket) continue;
+    const guess = tickets.find((t) =>
+      !used.has(t.id) && t.owner_id === ownerId && t.product_id === row.item.product_id &&
+      key(t.variant_id) === key(row.item.variant_id) && key(t.batch_id) === key(row.item.batch_id));
+    if (guess) { row.ticket = guess; used.add(guess.id); }
+  }
+  return out;
+}
+
 export function unmatchedApprovedItems(db: Database, userId?: string, settledMs: number = HEAL_SETTLE_MS): { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] {
   const used = new Set<string>();
-  const key = (a?: string) => a ?? null;
   const now = Date.now();
   const out: { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] = [];
   for (const order of db.orders) {
@@ -95,12 +146,10 @@ export function unmatchedApprovedItems(db: Database, userId?: string, settledMs:
       const approvedAt = new Date(order.approved_at ?? order.created_at).getTime();
       if (!Number.isFinite(approvedAt) || now - approvedAt < settledMs) continue;
     }
-    for (const item of order.items) {
-      const match = db.tickets.find((t) =>
-        !used.has(t.id) && t.owner_id === order.user_id && t.product_id === item.product_id &&
-        key(t.variant_id) === key(item.variant_id) && key(t.batch_id) === key(item.batch_id));
-      if (match) used.add(match.id);
-      else out.push({ order, item });
+    // แอดมินลบตั๋วของรายการไหน = ตั้งใจให้รายการนั้นไม่มีตั๋ว (qty 0) — ห้ามมินต์คืน
+    const live = order.items.filter((i) => !isVoidedItem(i));
+    for (const { item, ticket } of pairItemsWithTickets(db.tickets, order.user_id, live, used)) {
+      if (!ticket) out.push({ order, item });
     }
   }
   return out;

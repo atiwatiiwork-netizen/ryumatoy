@@ -160,7 +160,10 @@ export default function SlipApprovalPage() {
                 <div key={item.id} className="flex items-center justify-between gap-2.5 text-[13px]">
                   <span className="min-w-0 text-ink-muted2">
                     <span className={`mr-1.5 inline-block animate-blink rounded px-1.5 py-0.5 text-[9.5px] font-extrabold align-[1px] ${kind.cls}`}>{kind.label}</span>
-                    {productLabel(db, item.product_id, item.variant_id)} ×{item.qty}
+                    {productLabel(db, item.product_id, item.variant_id)}{item.qty > 0 ? ` ×${item.qty}` : ''}
+                    {/* qty 0 = แอดมินลบตั๋วของรายการนี้ทิ้ง (ยกเลิกรายการ) ไม่ใช่ข้อมูลเพี้ยน —
+                        แถวถูกเก็บไว้เพื่อรักษาเส้นเงิน: ยอดโอนของออเดอร์ยังเป็นหลักฐานเดิม */}
+                    {item.qty > 0 ? null : <span className="ml-1.5 rounded bg-stripe px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">ยกเลิกแล้ว (ตั๋วถูกลบ)</span>}
                   </span>
                   <span className="shrink-0 font-semibold">{baht(item.deposit_amount)}</span>
                 </div>
