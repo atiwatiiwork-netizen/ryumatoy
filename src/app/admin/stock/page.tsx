@@ -11,11 +11,12 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
-import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, setSpecialGate } from '@/data/mutations';
+import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, grantFromSurplus, setSpecialGate, logActivity } from '@/data/mutations';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
-import { ticketSourceOf } from '@/domain/services/ticketSource';
+import { ticketSourceOf, ticketOrigin } from '@/domain/services/ticketSource';
 import { pendingHeld } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
@@ -47,6 +48,7 @@ export default function StockPage() {
       <WarehouseConfirm />
       <OpenRounds />
       <History />
+      <GrantLog />
       <RoundLog />
     </div>
   );
@@ -418,6 +420,7 @@ function SurplusRow({ product: p }: { product: Product }) {
   const [qty, setQty] = useState(String(remaining));
   const [fullPay, setFullPay] = useState(false);
   const [label, setLabel] = useState('รอบพิเศษ');
+  const [grant, setGrant] = useState(false);
   const setQtyClamped = (v: string) => setQty(v === '' ? '' : String(Math.max(0, Math.min(Number(v) || 0, remaining))));
   const open = () => {
     const q = Math.min(Number(qty) || 0, remaining), pr = Number(price) || p.price_total;
@@ -429,15 +432,94 @@ function SurplusRow({ product: p }: { product: Product }) {
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว · แจ้งลูกค้าแล้ว`);
   };
   return (
-    <div className="flex flex-wrap items-center gap-2 px-1 py-3">
-      <span className="min-w-[140px] flex-1">
-        <span className="block text-sm font-semibold">{p.series_name}</span>
-        <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}</span>
-      </span>
-      <input className="w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="ราคา" />
-      <input className="w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={qty} onChange={(e) => setQtyClamped(e.target.value)} />
-      <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={p.deposit_amount} />
-      <button onClick={open} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดรอบ</button>
+    <div className="px-1 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-[140px] flex-1">
+          <span className="block text-sm font-semibold">{p.series_name}</span>
+          <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}</span>
+        </span>
+        <input className="w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="ราคา" />
+        <input className="w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={qty} onChange={(e) => setQtyClamped(e.target.value)} />
+        <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={p.deposit_amount} />
+        {/* มอบตั๋วได้เลยโดยไม่ต้องประกาศขายก่อน (เจ้าของ 2026-08-08) — ระบบเปิด "รอบร่าง" ให้เอง */}
+        <button onClick={() => setGrant((v) => !v)} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', grant ? 'border-[#8b5cf6] bg-[#8b5cf6] text-white' : 'border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] text-[#c4b5fd]')}>🎁 มอบตั๋ว</button>
+        <button onClick={open} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดรอบ</button>
+      </div>
+      {grant && <SurplusGrant product={p} remaining={remaining} defaultPrice={Number(price) || p.price_total} onDone={() => setGrant(false)} />}
+    </div>
+  );
+}
+
+/**
+ * มอบตั๋วจากแถวส่วนเกินโดยตรง (ยังไม่ได้เปิดรอบ) — ระบบเปิด "รอบร่าง" (ไม่ขึ้นหน้าร้าน) ให้เองแล้วออกตั๋ว
+ * ในจังหวะเดียว. ใช้ตอนไล่เก็บใบพรีเก่า/ลูกค้าที่ตกลงราคากันไว้แล้ว — ยังไม่อยากประกาศขายให้คนอื่น
+ * แยกเป็นคอมโพเนนต์ระดับบนสุด (DNA: ห้ามประกาศคอมโพเนนต์ลูกในฟังก์ชันหน้า — ฟอร์มจะถูกล้างทุก re-render)
+ */
+function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product: Product; remaining: number; defaultPrice: number; onDone: () => void }) {
+  const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const adminId = useCurrentUserId();
+  const [user, setUser] = useState('');
+  const [qty, setQty] = useState('1');
+  const [price, setPrice] = useState(String(defaultPrice || p.price_total));
+  const [dep, setDep] = useState(String(p.deposit_amount));
+  const [busy, setBusy] = useState(false);
+  const buyers = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
+
+  const submit = async () => {
+    const u = db.users.find((x) => x.id === user);
+    const q = Number(qty) || 0;
+    const priceEach = Number(price) || 0;
+    const depEach = Math.max(0, Number(dep) || 0);
+    if (!u) return flash('เลือกลูกค้าก่อน');
+    if (q < 1 || q > remaining) return flash(`จำนวนต้อง 1–${remaining} (ส่วนเกินที่เหลือ)`);
+    if (priceEach <= 0) return flash('ใส่ราคาขายก่อน');
+    if (depEach > priceEach) return flash(`มัดจำต่อชิ้นเกินราคา (${baht(priceEach)})`);
+    const due = Math.max(0, priceEach - depEach) * q;
+    if (!confirm(`มอบตั๋ว ${p.series_name} ×${q} ให้ "${u.display_name}"\nราคา ${baht(priceEach)}/ชิ้น · มัดจำรับแล้ว ${baht(depEach)}/ชิ้น · ค้าง ${baht(due)}\n\nระบบจะเปิด "รอบร่าง" ให้อัตโนมัติ (ยังไม่ขึ้นหน้าร้าน) แล้วตัดส่วนเกิน ${q} ชิ้น\nเหลือ ${remaining - q} ชิ้น — กด 🚀 เปิดขาย ทีหลังถ้าจะขายต่อ`)) return;
+    setBusy(true);
+    try {
+      const startNos = await reserveTicketNos(ticketPrefixCounts(db, [p.id]));
+      // อ่านจำนวนตั๋ว "ตอนนี้" หลังรอ RPC — ห้ามใช้ db ที่ผูกไว้ตอน render (poll อาจดึงข้อมูลใหม่เข้ามาระหว่างรอ)
+      let before = 0;
+      dispatch((d) => { before = d.tickets.length; return d; });
+      dispatch(grantFromSurplus(p.id, u.id, { qty: q, priceEach, depEach, label: 'ไล่เก็บใบพรี', startNos }));
+      let made = 0;
+      let no = '';
+      dispatch((d) => {
+        made = d.tickets.length - before;
+        no = d.tickets.find((t) => t.owner_id === u.id && t.product_id === p.id)?.ticket_no ?? '';
+        return d;
+      });
+      // grantFromSurplus คืน db เดิมเมื่อของไม่พอ/ค่าพัง — ห้ามขึ้น ✓ หรือยิง push ถ้าไม่มีตั๋วเกิดจริง
+      if (made <= 0) return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที');
+      if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง');
+      dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${p.series_name} ×${q} ให้ ${u.display_name} (จากส่วนเกิน · เปิดรอบร่างให้อัตโนมัติ)`, { targetId: p.id, targetLabel: no || p.series_name, amount: depEach * q }));
+      // DNA: push ห้ามบอกจำนวนสต๊อก — บอกได้แค่ชื่อของและจำนวนตั๋วที่ "ลูกค้าคนนี้" ได้
+      if (pushEnabled(db, 'order_approved'))
+        sendPush(subsForUsers(db, [u.id]), { title: '🎫 ได้รับใบพรีแล้ว!', body: `${p.series_name} ×${q} — แตะดูตั๋วของคุณ`, url: no ? `/wallet/${encodeURIComponent(no)}` : '/wallet' }, dispatch).catch(() => {});
+      flash(`มอบตั๋ว ${no || ''} ให้ ${u.display_name} แล้ว ✓ (ส่วนเกินเหลือ ${remaining - q})`);
+      onDone();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mt-2.5 rounded-xl border border-[#8b5cf6]/40 bg-[#8b5cf6]/[0.07] p-3">
+      <div className="mb-2 text-[11.5px] font-bold text-[#c4b5fd]">🎁 มอบตั๋วเลย (ไม่ต้องเปิดขายหน้าร้าน) — ส่วนเกินเหลือ {remaining} ชิ้น</div>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="min-w-[190px] flex-1 text-[10.5px] text-ink-faint">ลูกค้า
+          <select className={cx(inputCls, 'mt-0.5 py-2 text-[12.5px]')} value={user} onChange={(e) => setUser(e.target.value)}>
+            <option value="">— เลือกลูกค้า —</option>
+            {buyers.map((u) => <option key={u.id} value={u.id}>{u.display_name}{u.member_code ? ` · ${u.member_code}` : ''}{u.phone ? ` · ${u.phone}` : ''}</option>)}
+          </select>
+        </label>
+        <label className="text-[10.5px] text-ink-faint">จำนวน<input className={cx(inputCls, 'mt-0.5 w-14 py-2 text-center text-[12.5px]')} inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/[^\d]/g, ''))} /></label>
+        <label className="text-[10.5px] text-ink-faint">ราคา/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-20 py-2 text-center text-[12.5px]')} inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} /></label>
+        <label className="text-[10.5px] text-ink-faint">มัดจำรับแล้ว/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-24 py-2 text-center text-[12.5px]')} inputMode="numeric" value={dep} onChange={(e) => setDep(e.target.value.replace(/[^\d]/g, ''))} /></label>
+        <span className="text-[10.5px] text-ink-faint">ค้างรวม<b className="mt-0.5 block text-center text-[12.5px] text-primary-soft">{baht(Math.max(0, (Number(price) || 0) - (Number(dep) || 0)) * (Number(qty) || 0))}</b></span>
+        <button onClick={submit} disabled={busy || !user} className="rounded-lg bg-[#8b5cf6] px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังออกตั๋ว…' : '✓ มอบตั๋ว'}</button>
+      </div>
     </div>
   );
 }
@@ -447,6 +529,7 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
   const [openPanel, setOpenPanel] = useState(false);
   const [userSel, setUserSel] = useState('');
   const [rows, setRows] = useState<Record<string, { on: boolean; qty: string; dep: string; price: string }>>({});
@@ -491,9 +574,21 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
       //   ไม่ได้หัก hold ที่ลูกค้าคนอื่นค้างอยู่ → เคยขึ้น "มอบตั๋วแล้ว ✓" + ยิง push ทั้งที่ไม่มีตั๋วเกิดเลย
       //   (เงินที่เก็บนอกระบบหายไปเฉยๆ) audit money #7
       let issued = 0;
-      dispatch((d) => { issued = d.tickets.length - before; return d; });
+      let issuedNos: string[] = [];
+      dispatch((d) => {
+        issued = d.tickets.length - before;
+        // ตั๋วใหม่ถูกใส่หัวรายการ — เก็บเลขไว้ผูกกับ activity log (ประวัติการมอบตั๋วจะได้รู้ว่าใครมอบ)
+        issuedNos = d.tickets.slice(0, Math.max(0, issued)).map((t) => t.ticket_no);
+        return d;
+      });
       if (issued === 0) { setBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (มีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
       if (await store.flush()) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
+      // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่
+      dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${issued} ใบ (${chosen.length} รายการ) ให้ ${u.display_name}`, {
+        targetId: u.id,
+        targetLabel: issuedNos.join(' '),
+        amount: chosen.reduce((s, b) => s + Math.max(0, Number(row(b).dep) || 0) * (Number(row(b).qty) || 1), 0),
+      }));
       if (issued < want) flash(`⚠ มอบได้ ${issued} จาก ${want} ใบ — บางรายการของไม่พอ`);
       // push ครั้งเดียว บอกว่าได้รายการไหนมาเพิ่ม (DNA: ไม่บอกจำนวนสต๊อก)
       if (pushEnabled(db, 'order_approved')) {
@@ -609,6 +704,87 @@ function History() {
   );
 }
 
+/** ── ประวัติการมอบตั๋ว (เจ้าของ 2026-08-08) ────────────────────────────────
+ *  ตั๋วที่ "แอดมินมอบให้" คือเส้นเงินนอกระบบ (ไม่มีออเดอร์/สลิปให้ย้อนดู) จึงต้องมีที่เดียวที่เห็นครบ:
+ *  ใคร ได้อะไร วันไหน ราคาเท่าไหร่ รับมัดจำมาแล้วเท่าไหร่ ยังค้างเท่าไหร่ และ **ใครเป็นคนมอบ**.
+ *  แหล่งความจริงคือตัวตั๋วเอง (ticketSourceOf = 'granted') ไม่ใช่ activity log — ใบที่มอบก่อนมีระบบ log
+ *  จึงยังโผล่ครบ; ชื่อคนมอบเติมจาก activity log เมื่อจับคู่เลขตั๋วได้ */
+function GrantLog() {
+  const db = useDatabase();
+  const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const rows = db.tickets
+    .filter((t) => ticketSourceOf(db, t) === 'granted')
+    .map((t) => {
+      const o = ticketOrigin(db, t);
+      const u = db.users.find((x) => x.id === t.owner_id);
+      const p = db.products.find((x) => x.id === t.product_id);
+      // ใครมอบ: log ที่ target_label มีเลขตั๋วใบนี้อยู่ (ทั้งมอบใบเดียวและมอบหลายรายการ)
+      const log = db.activityLogs.find((l) => l.action === 'grant_ticket' && !!t.ticket_no && (l.target_label ?? '').includes(t.ticket_no));
+      return { t, o, name: u?.display_name ?? '(ผู้ใช้ถูกลบ)', product: p?.series_name ?? '(สินค้าถูกลบ)', img: p?.images?.[0], by: log?.actor_name };
+    })
+    .filter((r) => {
+      const s = q.trim().toLowerCase();
+      return !s || r.name.toLowerCase().includes(s) || r.product.toLowerCase().includes(s) || r.t.ticket_no.toLowerCase().includes(s);
+    })
+    .sort((a, b) => (a.o.at < b.o.at ? 1 : -1));
+
+  const totalQty = rows.reduce((s, r) => s + r.t.qty, 0);
+  const totalPaid = rows.reduce((s, r) => s + r.o.paid, 0);
+  const totalDue = rows.reduce((s, r) => s + r.o.due, 0);
+
+  return (
+    <div className="mb-6 rounded-2xl border border-[#8b5cf6]/35 bg-[#8b5cf6]/[0.05] p-4">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <span className="text-[15px] font-bold text-[#c4b5fd]">🎁 ประวัติการมอบตั๋ว</span>
+        <span className="text-[11.5px] text-ink-faint">ตั๋วที่แอดมินมอบเอง (เก็บเงินนอกระบบ) — ไม่มีออเดอร์คู่</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ค้นหา ชื่อลูกค้า / สินค้า / เลขตั๋ว"
+          className="ml-auto w-full max-w-[240px] rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px] outline-none placeholder:text-ink-faint" />
+      </div>
+      {rows.length === 0 ? (
+        <div className="py-6 text-center text-[13px] text-ink-faint">{q.trim() ? 'ไม่พบรายการ' : 'ยังไม่เคยมอบตั๋วให้ใคร'}</div>
+      ) : (<>
+        <div className="mb-2 flex flex-wrap gap-1.5 text-[11.5px]">
+          <span className="rounded-md bg-[#8b5cf6]/[0.16] px-2 py-1 text-[#c4b5fd]">{rows.length} ใบ · {totalQty} ชิ้น</span>
+          <span className="rounded-md bg-[#16a34a]/[0.14] px-2 py-1 text-[#4ade80]">รับมาแล้ว {baht(totalPaid)}</span>
+          {totalDue > 0 && <span className="rounded-md bg-[#b91c1c]/[0.16] px-2 py-1 text-[#f87171]">ค้างเก็บ {baht(totalDue)}</span>}
+        </div>
+        <div className="flex flex-col divide-y divide-hair">
+          {rows.map((r) => (
+            <div key={r.t.id} className="py-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+                <span className="w-[92px] shrink-0 text-[11.5px] text-ink-faint">{fmtDate(r.o.at)}</span>
+                <div className="h-8 w-8 shrink-0 overflow-hidden rounded-md border border-subtle bg-stripe">
+                  {r.img && <img src={r.img} alt="" className="h-full w-full object-cover" />}
+                </div>
+                <span className="min-w-[140px] flex-1 truncate font-semibold">
+                  {r.product}
+                  {r.o.batchLabel && <span className="text-[11px] font-normal text-ink-faint"> · {r.o.batchLabel}</span>}
+                </span>
+                <span className="min-w-[100px] truncate text-ink-muted2">{r.name}</span>
+                <span className="shrink-0 font-mono text-[11px] text-ink-faint">{r.t.ticket_no}</span>
+                <span className="w-[38px] shrink-0 text-right text-ink-muted2">×{r.t.qty}</span>
+                <span className="w-[86px] shrink-0 text-right font-bold text-primary-soft">{baht(r.o.paid)}</span>
+                <span className={cx('w-[86px] shrink-0 text-right text-[11.5px]', r.o.due > 0 ? 'text-[#f87171]' : 'text-ink-faint')}>{r.o.due > 0 ? `ค้าง ${baht(r.o.due)}` : 'ครบแล้ว'}</span>
+                <button onClick={() => setOpenId(openId === r.t.id ? null : r.t.id)} className="shrink-0 rounded-lg border border-subtle px-2 py-1 text-[11px] font-bold text-ink-muted2">
+                  {openId === r.t.id ? 'ย่อ ▲' : 'ดู ▼'}
+                </button>
+              </div>
+              {openId === r.t.id && (
+                <div className="ml-[100px] mt-1.5 rounded-lg border border-subtle bg-surface-3/40 px-3 py-2 text-[11.5px] text-ink-muted2">
+                  <div>ราคาเต็ม <b className="text-ink">{baht(r.o.price)}</b> · มัดจำที่รับมา <b className="text-ink">{baht(r.o.deposit)}</b>{r.o.paid > r.o.deposit && <> · จ่ายส่วนต่างเพิ่ม <b className="text-ink">{baht(r.o.paid - r.o.deposit)}</b></>}</div>
+                  <div className="mt-0.5">คนมอบ <b className="text-ink">{r.by ?? '— (มอบก่อนมีระบบบันทึก)'}</b> · สถานะของ <b className="text-ink">{r.t.product_status}</b></div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </>)}
+    </div>
+  );
+}
+
 /** ── History Log (เจ้าของ 2026-07-26) ─────────────────────────────────────
  *  ตารางเดียวเห็นทุกรอบที่เคยเปิด: วันที่ · รายการ · จำนวน (ขาย/ทั้งหมด) · สถานะ
  *  + กางดูรายชื่อคนพรีของรอบนั้นได้เลย. ต่างจากการ์ดด้านบนตรงที่ "ไล่อ่านย้อนหลังได้เร็ว"
@@ -720,6 +896,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
   const p = db.products.find((x) => x.id === b.product_id);
   const sold = batchSoldQty(db, b.id);
   const remaining = batchRemaining(db, b.id, b.stock_qty);
@@ -903,6 +1080,8 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       });
       if (made <= 0) { setGBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
       if (await store.flush()) { setGBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
+      // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่
+      dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${p?.series_name ?? ''} ×${q} ให้ ${u.display_name} (รอบ ${b.label})`, { targetId: b.id, targetLabel: no || p?.series_name, amount: depEach * q }));
       if (pushEnabled(db, 'order_approved'))
         sendPush(subsForUsers(db, [u.id]), { title: '🎫 ได้รับใบพรีแล้ว!', body: `${p?.series_name ?? ''} ×${q} — แตะดูตั๋วของคุณ`, url: no ? `/wallet/${encodeURIComponent(no)}` : '/wallet' }, dispatch).catch(() => {});
       flash(`มอบตั๋ว ${no || ''} ให้ ${u.display_name} แล้ว ✓ (สต๊อกรอบเหลือ ${remaining - q})`);

@@ -566,6 +566,45 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
 export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart, priceEach?: number) =>
   grantSpecialTickets(userId, [{ batchId, qty, depEach, priceEach }], startNos);
 
+/**
+ * มอบตั๋วจาก "ส่วนเกิน" ที่ยังไม่ได้เปิดรอบ (เจ้าของ 2026-08-08) — ไล่เก็บใบพรีเก่าโดยไม่ต้อง
+ * ประกาศขายหน้าร้านก่อน. ทำสองอย่างใน **จังหวะเดียว** (dispatch เดียว = เซฟรอบเดียว ไม่มีสภาพครึ่งทาง):
+ *   1) เปิด "รอบร่าง" (published:false — ไม่ขึ้นหน้าร้าน) ขนาดเท่าที่สั่ง ถ้า SKU นี้ยังไม่มีรอบเปิดอยู่
+ *   2) ออกตั๋วให้ลูกค้าจากรอบนั้น (ตัดสต๊อกรอบทันที เหมือนมอบตั๋วปกติทุกประการ)
+ * ถ้า SKU มีรอบเปิดอยู่แล้ว → มอบจากรอบนั้นเลย (กติกา 1 SKU 1 รอบ ห้ามเปิดซ้อน)
+ * ออกตั๋วไม่สำเร็จ (ของไม่พอ/ค่าพัง) → คืน db เดิม ไม่ทิ้ง "รอบร่างเปล่า" ไว้ให้รก
+ */
+export const grantFromSurplus = (
+  productId: string, userId: string,
+  opts: { qty: number; priceEach: number; depEach: number; roundQty?: number; label?: string; startNos?: TicketNoStart },
+) => (db: Database): Database => {
+  const p = db.products.find((x) => x.id === productId);
+  if (!p || !db.users.some((u) => u.id === userId)) return db;
+  const q = Math.floor(opts.qty);
+  const priceEach = Math.round(opts.priceEach);
+  const depEach = Math.round(opts.depEach);
+  if (!Number.isFinite(q) || q < 1) return db;
+  if (!Number.isFinite(priceEach) || priceEach <= 0) return db;
+  if (!Number.isFinite(depEach) || depEach < 0 || depEach > priceEach) return db;
+
+  const open = db.batches.find((b) => b.product_id === productId && b.status === 'open');
+  let next = db;
+  let batchId = open?.id;
+  if (!batchId) {
+    // รอบร่างต้องไม่ใหญ่กว่าของที่มีจริงในคลัง — ไม่งั้น publishBatch ทีหลังจะไป "งอก" คลังให้เอง
+    const roundQty = Math.max(q, Math.floor(opts.roundQty ?? q));
+    if (roundQty > stockRemaining(db, p)) return db;
+    next = openSpecialRound(productId, {
+      qty: roundQty, price: priceEach, fullPay: false, deposit: depEach,
+      label: opts.label, addSurplus: false, published: false,
+    })(db);
+    batchId = next.batches[0]?.id;
+    if (next === db || !batchId) return db; // เปิดรอบไม่ผ่าน (สินค้าพร้อมส่ง/จำนวนไม่ถูก)
+  }
+  const after = grantSpecialTickets(userId, [{ batchId, qty: q, depEach, priceEach }], opts.startNos)(next);
+  return after === next ? db : after;
+};
+
 /** Create a brand-new legacy SKU (stock we already hold) + open its first special round in one step.
  *  full-pay → status 'arrived' (in hand); deposit → 'shipping' (in transit, so the remaining is payable). */
 export const createLegacyStockProduct = (data: {

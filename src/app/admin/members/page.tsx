@@ -12,7 +12,10 @@ import { cx } from '@/components/ui';
 import { rankPiecesOf } from '@/domain/services/ranks';
 import { dormantNewMembers, suspendedMembers, daysSinceSignup, DORMANT_DAYS } from '@/domain/services/members';
 import { baht } from '@/lib/theme';
-import { updateUser, removeUser, setSuspended, editTicketDeposit, deleteTicket, repairTickets } from '@/data/mutations';
+import { updateUser, removeUser, setSuspended, editTicketDeposit, deleteTicket, repairTickets, logActivity } from '@/data/mutations';
+import { useCurrentUserId } from '@/state/AuthProvider';
+import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { store } from '@/data/store';
 import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
 import type { User, PreorderTicket } from '@/domain/entities';
@@ -89,11 +92,9 @@ export default function AdminMembersPage() {
 
   // health check for the old ticket_no-collision bug: duplicate numbers + approved-order items with no ticket
   const dupCount = (() => { const seen = new Set<string>(); let d = 0; for (const t of db.tickets) { if (seen.has(t.ticket_no)) d++; else seen.add(t.ticket_no); } return d; })();
-  const missingCount = (() => {
-    const used = new Set<string>(); let m = 0; const k = (a?: string) => a ?? null;
-    for (const o of db.orders) { if (o.status !== 'approved') continue; for (const it of o.items) { const t = db.tickets.find((t) => !used.has(t.id) && t.owner_id === o.user_id && t.product_id === it.product_id && k(t.variant_id) === k(it.variant_id) && k(t.batch_id) === k(it.batch_id)); if (t) used.add(t.id); else m++; } }
-    return m;
-  })();
+  // ต้องใช้สูตรเดียวกับ repairTickets เป๊ะ (unmatchedApprovedItems) — เดิมเขียนสูตรของตัวเองไว้ที่นี่
+  // ซึ่งไม่มีช่วง "รอให้นิ่ง" และไม่เว้นรายการที่ถูกยกเลิก → ป้ายบอก "ตั๋วหาย 1" แต่กดซ่อมแล้วไม่มีอะไรเกิด
+  const missingCount = unmatchedApprovedItems(db).length;
   const repair = () => {
     if (!confirm(`ซ่อมตั๋ว?\n· ออกเลขใหม่ให้ตั๋วที่เลขซ้ำ: ${dupCount}\n· ออกตั๋วที่หายไป (จากออเดอร์ที่อนุมัติแล้ว): ${missingCount}\nตั๋วที่ปกติอยู่แล้วไม่กระทบ`)) return;
     dispatch(repairTickets());
@@ -238,6 +239,7 @@ function DormantSection() {
 /** Admin panel to manage one member's pre-order tickets: edit deposit or delete completely. */
 function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () => void }) {
   const db = useDatabase();
+  const adminId = useCurrentUserId();
   const dispatch = useDispatch();
   const { flash } = useToast();
   const user = db.users.find((u) => u.id === userId);
@@ -263,6 +265,9 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
       if (res) await releaseReservation(res.id).catch(() => {});
     }
     dispatch(deleteTicket(t.id));
+    // การลบตั๋วคือการกระทำที่ย้อนกลับไม่ได้ที่สุดในระบบ — ต้องมีร่องรอยเสมอว่าใครลบ ใบไหน ของใคร
+    dispatch(logActivity(adminId, 'delete_ticket', `ลบตั๋ว ${t.ticket_no} · ${product?.series_name ?? ''} (${user?.display_name ?? ''})`, { targetId: t.id, targetLabel: t.ticket_no, amount: t.deposit_paid + (t.remaining_paid ?? 0) }));
+    if (await store.flush()) return flash('ลบไม่สำเร็จ — บันทึกไม่ผ่าน ลองใหม่อีกครั้ง');
     flash(`ลบตั๋ว ${t.ticket_no} แล้ว`);
   };
 
