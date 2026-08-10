@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -17,7 +17,7 @@ import { BulkNewSku } from './BulkNewSku';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { ticketSourceOf, ticketOrigin } from '@/domain/services/ticketSource';
-import { pendingHeld } from '@/domain/services/reservations';
+import { pendingHeld, poolHeld } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
@@ -465,6 +465,9 @@ function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product
   const [price, setPrice] = useState(String(defaultPrice || p.price_total));
   const [dep, setDep] = useState(String(p.deposit_amount));
   const [busy, setBusy] = useState(false);
+  const [stuck, setStuck] = useState(false);
+  // คีย์ประจำ "การมอบครั้งนี้" — ถ้าเซฟล้มแล้วกดใหม่ ตั๋วจะเป็นแถวเดิม (upsert ทับ) ไม่ใช่ใบที่สอง
+  const grantKey = useRef(`g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`);
   const buyers = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
 
   const submit = async () => {
@@ -484,7 +487,7 @@ function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product
       // อ่านจำนวนตั๋ว "ตอนนี้" หลังรอ RPC — ห้ามใช้ db ที่ผูกไว้ตอน render (poll อาจดึงข้อมูลใหม่เข้ามาระหว่างรอ)
       let before = 0;
       dispatch((d) => { before = d.tickets.length; return d; });
-      dispatch(grantFromSurplus(p.id, u.id, { qty: q, priceEach, depEach, label: 'ไล่เก็บใบพรี', startNos }));
+      dispatch(grantFromSurplus(p.id, u.id, { qty: q, priceEach, depEach, label: 'ไล่เก็บใบพรี', startNos, grantId: grantKey.current }));
       let made = 0;
       let no = '';
       dispatch((d) => {
@@ -494,7 +497,11 @@ function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product
       });
       // grantFromSurplus คืน db เดิมเมื่อของไม่พอ/ค่าพัง — ห้ามขึ้น ✓ หรือยิง push ถ้าไม่มีตั๋วเกิดจริง
       if (made <= 0) return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที');
-      if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง');
+      // เซฟไม่ผ่าน: ตั๋วยังอยู่ในเครื่องและระบบจะลองส่งเองใหม่ทุก 5 วิ — ห้ามชวนให้กดมอบซ้ำ
+      // (เดิมข้อความสั่งว่า "ลองมอบใหม่อีกครั้ง" = สั่งให้สร้างตั๋วซ้ำ) audit 2026-08-08
+      if (await store.flush()) { setStuck(true); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      setStuck(false);
+      grantKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`; // ครั้งต่อไป = คนละใบ
       dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${p.series_name} ×${q} ให้ ${u.display_name} (จากส่วนเกิน · เปิดรอบร่างให้อัตโนมัติ)`, { targetId: p.id, targetLabel: no || p.series_name, amount: depEach * q }));
       // DNA: push ห้ามบอกจำนวนสต๊อก — บอกได้แค่ชื่อของและจำนวนตั๋วที่ "ลูกค้าคนนี้" ได้
       if (pushEnabled(db, 'order_approved'))
@@ -518,8 +525,14 @@ function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product
         <label className="text-[10.5px] text-ink-faint">ราคา/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-20 py-2 text-center text-[12.5px]')} inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} /></label>
         <label className="text-[10.5px] text-ink-faint">มัดจำรับแล้ว/ชิ้น<input className={cx(inputCls, 'mt-0.5 w-24 py-2 text-center text-[12.5px]')} inputMode="numeric" value={dep} onChange={(e) => setDep(e.target.value.replace(/[^\d]/g, ''))} /></label>
         <span className="text-[10.5px] text-ink-faint">ค้างรวม<b className="mt-0.5 block text-center text-[12.5px] text-primary-soft">{baht(Math.max(0, (Number(price) || 0) - (Number(dep) || 0)) * (Number(qty) || 0))}</b></span>
-        <button onClick={submit} disabled={busy || !user} className="rounded-lg bg-[#8b5cf6] px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังออกตั๋ว…' : '✓ มอบตั๋ว'}</button>
+        <button onClick={submit} disabled={busy || !user || stuck} className="rounded-lg bg-[#8b5cf6] px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังออกตั๋ว…' : '✓ มอบตั๋ว'}</button>
       </div>
+      {stuck && (
+        <div className="mt-2 rounded-lg border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3 py-2 text-[11.5px] text-[#fbbf24]">
+          ⏳ ตั๋วออกแล้วในเครื่องนี้ แต่ยังส่งขึ้นเซิร์ฟเวอร์ไม่สำเร็จ — ระบบลองใหม่ให้เองทุก 5 วินาที
+          <b> ห้ามกดมอบซ้ำ</b> (จะได้ตั๋วสองใบ) · รีเฟรชหน้าเพื่อเช็คว่าขึ้นแล้วหรือยัง
+        </div>
+      )}
     </div>
   );
 }
@@ -534,6 +547,9 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
   const [userSel, setUserSel] = useState('');
   const [rows, setRows] = useState<Record<string, { on: boolean; qty: string; dep: string; price: string }>>({});
   const [busy, setBusy] = useState(false);
+  const [mStuck, setMStuck] = useState(false);
+  // คีย์ประจำ "การมอบครั้งนี้" — กดซ้ำหลังเซฟล้ม = ตั๋วแถวเดิม (upsert ทับ) ไม่ใช่ชุดที่สอง
+  const mKey = useRef(`g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`);
   const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
   const eligible = batches.filter((b) => batchRemaining(db, b.id, b.stock_qty) > 0);
   // ราคา/มัดจำเริ่มต้น = ของรอบ แต่แอดมินพิมพ์ทับได้รายรายการ (snapshot ลงตั๋วใบนั้นใบเดียว)
@@ -564,38 +580,43 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
     try {
       // จองเลขตั๋วจาก server ทีเดียวทั้งชุด (นับต่อ prefix) — allocator ใน mutation แชร์ตัวนับ ไม่ชนกัน
       const startNos = await reserveTicketNos(ticketPrefixCounts(db, chosen.map((b) => b.product_id)));
-      const want = chosen.reduce((s, b) => s + (Number(row(b).qty) || 1), 0);
       // อ่าน "จำนวนตอนนี้จริงๆ" หลังรอ RPC — ห้ามใช้ db ที่ผูกไว้ตอน render (poll อาจดึงตั๋วคนอื่นเข้ามา
       // ระหว่างรอ แล้วทำให้ read-back คิดว่าออกตั๋วสำเร็จทั้งที่ไม่มีอะไรเกิดเลย) audit regression #6
       let before = 0;
       dispatch((d) => { before = d.tickets.length; return d; });
-      dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0), priceEach: Number(row(b).price) || 0 })), startNos));
+      dispatch(grantSpecialTickets(u.id, chosen.map((b) => ({ batchId: b.id, qty: Number(row(b).qty) || 1, depEach: Math.max(0, Number(row(b).dep) || 0), priceEach: Number(row(b).price) || 0 })), startNos, mKey.current));
       // ⚠ grantSpecialTickets ข้ามรายการที่ของไม่พอแบบเงียบๆ (continue) และหน้าจอเช็คแค่ "ตั๋วที่ออกแล้ว"
       //   ไม่ได้หัก hold ที่ลูกค้าคนอื่นค้างอยู่ → เคยขึ้น "มอบตั๋วแล้ว ✓" + ยิง push ทั้งที่ไม่มีตั๋วเกิดเลย
       //   (เงินที่เก็บนอกระบบหายไปเฉยๆ) audit money #7
-      let issued = 0;
-      let issuedNos: string[] = [];
-      dispatch((d) => {
-        issued = d.tickets.length - before;
-        // ตั๋วใหม่ถูกใส่หัวรายการ — เก็บเลขไว้ผูกกับ activity log (ประวัติการมอบตั๋วจะได้รู้ว่าใครมอบ)
-        issuedNos = d.tickets.slice(0, Math.max(0, issued)).map((t) => t.ticket_no);
-        return d;
-      });
-      if (issued === 0) { setBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (มีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
-      if (await store.flush()) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
+      // ⚠ ทุกอย่างหลังจากนี้ (push / log / ข้อความ) ต้องอิง "ตั๋วที่ออกจริง" เท่านั้น ห้ามอิงรายการที่ติ๊ก
+      //   เดิม push บอกลูกค้าว่าได้ครบทุกรายการ + log บันทึกเงินครบ ทั้งที่บางรายการถูกข้ามเงียบ
+      //   → ลูกค้าเปิดกระเป๋าแล้วไม่เจอ และประวัติเงินนอกระบบเกินจริง (audit 2026-08-08)
+      let issued: { no: string; batchId?: string }[] = [];
+      dispatch((d) => { issued = d.tickets.slice(0, Math.max(0, d.tickets.length - before)).map((t) => ({ no: t.ticket_no, batchId: t.batch_id })); return d; });
+      const gotBatches = new Set(issued.map((t) => t.batchId).filter(Boolean) as string[]);
+      const done = chosen.filter((b) => gotBatches.has(b.id));
+      const missed = chosen.filter((b) => !gotBatches.has(b.id));
+      if (issued.length === 0) { setBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (มีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
+      // เซฟไม่ผ่าน = ตั๋วยังอยู่ในเครื่อง + ระบบลองส่งเองทุก 5 วิ → ห้ามชวนให้กดซ้ำ
+      if (await store.flush()) { setMStuck(true); setBusy(false); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองชุด) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      setMStuck(false);
+      mKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
       // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่
-      dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${issued} ใบ (${chosen.length} รายการ) ให้ ${u.display_name}`, {
+      dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${issued.length} ใบ (${done.length} รายการ) ให้ ${u.display_name}`, {
         targetId: u.id,
-        targetLabel: issuedNos.join(' '),
-        amount: chosen.reduce((s, b) => s + Math.max(0, Number(row(b).dep) || 0) * (Number(row(b).qty) || 1), 0),
+        targetLabel: issued.map((t) => t.no).join(' '),
+        amount: done.reduce((s, b) => s + Math.max(0, Number(row(b).dep) || 0) * (Number(row(b).qty) || 1), 0),
       }));
-      if (issued < want) flash(`⚠ มอบได้ ${issued} จาก ${want} ใบ — บางรายการของไม่พอ`);
-      // push ครั้งเดียว บอกว่าได้รายการไหนมาเพิ่ม (DNA: ไม่บอกจำนวนสต๊อก)
-      if (pushEnabled(db, 'order_approved')) {
-        const names = chosen.map((b) => db.products.find((x) => x.id === b.product_id)?.series_name ?? '').filter(Boolean);
-        sendPush(subsForUsers(db, [u.id]), { title: `🎫 ได้รับใบพรีใหม่ ${chosen.length} รายการ!`, body: `${names.join(' · ').slice(0, 110)} — แตะดูตั๋วของคุณ`, url: '/wallet' }, dispatch).catch(() => {});
+      if (missed.length > 0) {
+        const names = missed.map((b) => db.products.find((x) => x.id === b.product_id)?.series_name ?? '').filter(Boolean).join(', ');
+        flash(`⚠ ของไม่พอ ${missed.length} รายการ — ยังไม่ได้มอบ: ${names} (ลูกค้าไม่ได้รับแจ้งรายการนี้)`);
       }
-      flash(`มอบตั๋ว ${issued} ใบ ให้ ${u.display_name} แล้ว ✓ แจ้งเตือนลูกค้าแล้ว`);
+      // push ครั้งเดียว บอกว่าได้รายการไหนมาเพิ่ม (DNA: ไม่บอกจำนวนสต๊อก) — เฉพาะรายการที่ออกตั๋วได้จริง
+      if (pushEnabled(db, 'order_approved')) {
+        const names = done.map((b) => db.products.find((x) => x.id === b.product_id)?.series_name ?? '').filter(Boolean);
+        sendPush(subsForUsers(db, [u.id]), { title: `🎫 ได้รับใบพรีใหม่ ${done.length} รายการ!`, body: `${names.join(' · ').slice(0, 110)} — แตะดูตั๋วของคุณ`, url: '/wallet' }, dispatch).catch(() => {});
+      }
+      flash(`มอบตั๋ว ${issued.length} ใบ ให้ ${u.display_name} แล้ว ✓ แจ้งเตือนลูกค้าแล้ว`);
       setOpenPanel(false); setRows({}); setUserSel('');
     } finally { setBusy(false); }
   };
@@ -640,9 +661,15 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
                 );
               })}
             </div>
+            {mStuck && (
+              <div className="mt-3 rounded-lg border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3 py-2 text-[11.5px] text-[#fbbf24]">
+                ⏳ ตั๋วออกแล้วในเครื่องนี้ แต่ยังส่งขึ้นเซิร์ฟเวอร์ไม่สำเร็จ — ระบบลองใหม่ให้เองทุก 5 วินาที
+                <b> ห้ามกดมอบซ้ำ</b> (จะได้ตั๋วสองชุด) · รีเฟรชหน้าเพื่อเช็คว่าขึ้นแล้วหรือยัง
+              </div>
+            )}
             <div className="mt-3 flex items-center gap-2.5">
               <button onClick={() => setOpenPanel(false)} className="rounded-lg border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-semibold text-ink-muted2">ยกเลิก</button>
-              <button onClick={doGrant} disabled={busy || chosen.length === 0 || !userSel} className="flex-1 rounded-lg bg-[#8b5cf6] py-2.5 text-[13.5px] font-bold text-white disabled:opacity-50">
+              <button onClick={doGrant} disabled={busy || mStuck || chosen.length === 0 || !userSel} className="flex-1 rounded-lg bg-[#8b5cf6] py-2.5 text-[13.5px] font-bold text-white disabled:opacity-50">
                 {busy ? 'กำลังออกตั๋ว…' : `✓ มอบตั๋ว ${chosen.length} รายการ + แจ้งลูกค้า`}
               </button>
             </div>
@@ -990,8 +1017,14 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   // รอบไม่มีลูกค้า/จบยอดแล้ว: ของเหลือกลายเป็น In-Stock มือ 1 อัตโนมัติ (เจ้าของ 2026-07-22)
   const doArrive = () => {
     const owners = [...new Set(moving.map((t) => t.owner_id))];
+    // ⚠ SKU นี้มีรอบอื่นเปิดขายอยู่ไหม — เดิมกด "ถึงไทย" บนการ์ดรอบเก่าในหน้าประวัติ จะปิดรอบที่กำลัง
+    //   ขายอยู่ทิ้ง + ดันของทั้งก้อนเป็น In-Stock (audit 2026-08-08). ตัว mutation กันไว้แล้ว
+    //   ตรงนี้บอกแอดมินให้รู้ตัวก่อนกด จะได้ไม่งงว่าทำไมของไม่กลายเป็นพร้อมส่ง
+    const otherOpen = db.batches.some((x) => x.product_id === b.product_id && x.id !== b.id && x.status === 'open');
     const msg = moving.length === 0
-      ? `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้าง — สต๊อกที่เหลือ ${remaining} ชิ้นจะกลายเป็นสินค้า In-Stock (มือ 1) ทันที`
+      ? (otherOpen
+        ? `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้างในรอบนี้\n\n⚠ SKU นี้ยังมีรอบอื่นเปิดขายอยู่ — ของจะยังไม่กลายเป็น In-Stock (ต้องปิดรอบที่เปิดอยู่ก่อน)`
+        : `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้าง — สต๊อกที่เหลือ ${remaining} ชิ้นจะกลายเป็นสินค้า In-Stock (มือ 1) ทันที`)
       : `ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`;
     if (!confirm(msg)) return;
     dispatch(arriveSpecialRound(b.id));
@@ -1049,6 +1082,9 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   const [gDep, setGDep] = useState(String(b.deposit_amount));
   const [gPrice, setGPrice] = useState(String(b.price_total)); // ราคาเฉพาะตั๋วใบนี้ (ไม่แตะราคารอบ)
   const [gBusy, setGBusy] = useState(false);
+  const [gStuck, setGStuck] = useState(false);
+  // คีย์ประจำ "การมอบครั้งนี้" — กดซ้ำหลังเซฟล้ม = ตั๋วแถวเดิม (upsert ทับ) ไม่ใช่ใบที่สอง
+  const gKey = useRef(`g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`);
   const grantables = db.users.filter((u) => u.approved !== false && !u.is_admin).sort((a, x) => a.display_name.localeCompare(x.display_name));
   const doGrant = async () => {
     const u = db.users.find((x) => x.id === gUser);
@@ -1070,7 +1106,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       //   ซึ่งใบเก่าก็เข้าเงื่อนไข → ขึ้น ✓ + ยิง push ทั้งที่ไม่มีตั๋วใหม่เกิด (audit regression #3)
       let before = 0;
       dispatch((d) => { before = d.tickets.length; return d; });
-      dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos, priceEach));
+      dispatch(grantSpecialTicket(b.id, u.id, q, depEach, startNos, priceEach, gKey.current));
       let no = '';
       let made = 0;
       dispatch((d) => {
@@ -1079,7 +1115,10 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         return d;
       });
       if (made <= 0) { setGBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
-      if (await store.flush()) { setGBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองมอบใหม่อีกครั้ง'); }
+      // เซฟไม่ผ่าน = ตั๋วยังอยู่ในเครื่อง + ระบบลองส่งเองทุก 5 วิ → ห้ามชวนให้กดซ้ำ (เดิมสั่ง "ลองมอบใหม่")
+      if (await store.flush()) { setGStuck(true); setGBusy(false); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      setGStuck(false);
+      gKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
       // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่
       dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${p?.series_name ?? ''} ×${q} ให้ ${u.display_name} (รอบ ${b.label})`, { targetId: b.id, targetLabel: no || p?.series_name, amount: depEach * q }));
       if (pushEnabled(db, 'order_approved'))
@@ -1097,7 +1136,10 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   // จุดเริ่มรอบใหม่ (concept 2026-07-23): ผลิต (default, ผ่านโกดัง) / ของออกเดินทางแล้ว
   const [rStart, setRStart] = useState<'production' | 'shipping'>('production');
   // ของที่ยัง "ไม่ถูกขาย" ในคลัง SKU — คือของที่ปิดรอบทิ้งไว้แล้วยังเอามาขายต่อได้
-  const poolLeft = p && !p.is_stock ? Math.max(0, stockRemaining(db, p) - (b.status === 'open' ? remaining : 0)) : 0;
+  // ของที่ "ว่างจริง" ในคลัง — ต้องหัก hold ที่ลูกค้ากำลังจ่ายเงินค้างอยู่ด้วยทุกใบ (ทั้งที่ผูกรอบและไม่ผูก)
+  // เดิมไม่หัก → ปิดรอบทั้งที่มีสลิปรอตรวจ แล้วเปิดรอบใหม่จาก "ของที่เหลือ" = ขายของชิ้นเดียวกันสองครั้ง
+  // (audit 2026-08-08: รอบ 5 ชิ้น hold 2 → จอโชว์เหลือ 5 → ขายรวมได้ 7 ชิ้นจากของจริง 5)
+  const poolLeft = p && !p.is_stock ? Math.max(0, stockRemaining(db, p) - poolHeld(db, b.product_id) - (b.status === 'open' ? remaining : 0)) : 0;
   // แหล่งของรอบใหม่: 'pool' = ขายของที่เหลือในคลัง (ไม่บวกคลังซ้ำ) · 'new' = ของมาเพิ่มจากจีน
   const [rSrc, setRSrc] = useState<'pool' | 'new'>('pool');
   const doRestock = () => {

@@ -20,7 +20,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
   };
 }
 import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
-import { pendingHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
+import { pendingHeld, poolHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
@@ -419,14 +419,36 @@ export const uncloseBatch = (batchId: string) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === b.product_id);
   if (!p || p.is_stock) return db;                                            // ของเข้าสต๊อกพร้อมส่งไปแล้ว
   if (db.batches.some((x) => x.product_id === b.product_id && x.status === 'open')) return db;
-  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, status: 'open' as const } : x)) };
+  // ⚠ ต้องเช็คของจริงในคลังด้วย (audit 2026-08-08): รอบเก่าที่ถูกปิดไปแล้วอาจเหลือโควตาบนกระดาษ
+  //   แต่ของก้อนนั้นถูกขายไปกับรอบใหม่หมดแล้ว → เปิดกลับดื้อๆ = ขายของชิ้นเดียวกันสองรอบ
+  //   ทางแก้ที่ไม่ทำให้แอดมินตัน: เปิดกลับได้ แต่หั่นโควตาลงเหลือ "ที่ขายไปแล้ว + ของที่ยังว่างจริง"
+  const soldThis = db.tickets.filter((t) => t.batch_id === b.id).reduce((s, t) => s + t.qty, 0);
+  const pool = stockRemaining(db, p) - poolHeld(db, b.product_id);            // ของว่างจริง (หัก hold ค้างทุกใบ)
+  const allowed = soldThis + Math.max(0, pool);
+  if (allowed <= soldThis) return db;                                         // ไม่มีของว่างเลย = เปิดกลับไปก็ขายไม่ได้
+  return {
+    ...db,
+    batches: db.batches.map((x) => (x.id === batchId
+      ? { ...x, status: 'open' as const, stock_qty: Math.min(x.stock_qty, allowed) }
+      : x)),
+  };
 };
 
-export const removeBatch = (batchId: string) => (db: Database): Database => ({
-  ...db,
-  // never delete a round that has buyers — it would orphan their tickets (batch_id → nothing)
-  batches: db.tickets.some((t) => t.batch_id === batchId) ? db.batches : db.batches.filter((b) => b.id !== batchId),
-});
+/** ยกเลิก/ลบรอบทิ้ง — ได้เฉพาะรอบที่ "ไม่มีใครแตะเลย" จริงๆ เท่านั้น */
+export const removeBatch = (batchId: string) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b) return db;
+  // ห้ามลบรอบที่มีตั๋วอยู่ — ตั๋วจะกลายเป็นใบกำพร้า (batch_id ชี้ไปที่ไม่มีอยู่)
+  if (db.tickets.some((t) => t.batch_id === batchId)) return db;
+  // ⚠ ห้ามลบรอบที่ลูกค้ากำลังจ่ายเงินอยู่ด้วย (audit 2026-08-08): เดิมเช็คแค่ตั๋ว → ลบรอบทิ้งได้
+  //   ทั้งที่มีสลิปรอตรวจ พออนุมัติจะได้ตั๋วผูกรอบที่ไม่มีแล้ว + DB ปฏิเสธเพราะ FK (เซฟค้างทั้งแท็บ)
+  if (db.stockReservations.some((r) => r.batch_id === batchId && ['active', 'paid', 'confirmed'].includes(r.status))) return db;
+  if (db.orders.some((o) => o.status === 'pending_approval' && o.items.some((i) => i.batch_id === batchId))) return db;
+  // NOTE (ค้าง): ของที่ถูกบวกเข้าคลังตอนสร้างรอบแบบ legacy (addSurplus) ยังไม่ถูกคืนออกตอนลบรอบ
+  //   → เหลือ "ของผี" ใน surplus_qty. คืนแม่นยำไม่ได้จนกว่า stock_additions จะมีคอลัมน์ batch_id
+  //   (การเดาจาก note ชนกันเองได้เมื่อสองรอบชื่อเหมือนกัน = ตัดคลังผิดตัว ซึ่งแย่กว่าปล่อยไว้)
+  return { ...db, batches: db.batches.filter((x) => x.id !== batchId) };
+};
 
 // ── สต๊อกใบพรี / พรีรอบพิเศษ (special pre-order round) ─────────────────────────
 /** Open ONE special pre-order round (สต๊อกใบพรี) on an existing product. Guarded to a single OPEN
@@ -529,7 +551,7 @@ export const publishBatch = (batchId: string, patch?: { price?: number; deposit?
  *  เช่นตกลงราคาพิเศษกับลูกค้าเก่าทางแชท หรือไล่เก็บใบพรีเก่าที่ราคาไม่เท่ารอบปัจจุบัน.
  *  ⚠ ราคา/มัดจำที่ใส่จะถูก **snapshot ลงตั๋วใบนั้นใบเดียว** — ห้ามแตะราคาของรอบหรือของ SKU
  *    (ลูกค้าคนอื่นในรอบเดียวกันต้องไม่ได้รับผลกระทบ และหน้าร้านต้องยังโชว์ราคาเดิม) */
-export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number; priceEach?: number }[], startNos?: TicketNoStart) => (db: Database): Database => {
+export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number; priceEach?: number }[], startNos?: TicketNoStart, grantId?: string) => (db: Database): Database => {
   const user = db.users.find((u) => u.id === userId);
   if (!user || items.length === 0) return db;
   const when = new Date();
@@ -551,11 +573,20 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
     const priceEach = it.priceEach != null && it.priceEach > 0 ? Math.round(it.priceEach) : b.price_total;
     const dep = Math.max(0, Math.min(priceEach, it.depEach != null ? it.depEach : b.deposit_amount));
     const remainingEach = Math.max(0, priceEach - dep);
+    // ⚠ กันตั๋วซ้ำ: id ผูกกับ "ครั้งที่กดมอบ" (grantId) + รอบ — กดปุ่มเดิมซ้ำ/สองแท็บที่ถือ grantId
+    //   เดียวกัน จะ upsert ทับแถวเดิม ไม่เกิดใบใหม่. ไม่มี grantId (โค้ดเก่า) ถึงค่อยสุ่ม
+    //   (หลักการเดียวกับ orderTicketId ที่ใช้กับตั๋วจากออเดอร์ — audit ตั๋วซ้ำ 2026-08-07/08)
+    const ticketId = grantId ? `tg-${grantId}-${b.id}` : id('t');
+    if (db.tickets.some((t) => t.id === ticketId)) continue; // มอบไปแล้วด้วยการกดครั้งนี้
+    // ของอยู่ในมือจริงไหม ดูที่ "ชนิดของรอบ" (รอบจ่ายเต็ม = ของพร้อมส่ง) ไม่ใช่ยอดที่ลูกค้าคนนี้จ่าย —
+    // ไม่งั้นแอดมินที่บันทึกมัดจำบางส่วนบนรอบของในมือ จะได้ตั๋วสถานะ "ยังผลิตอยู่" ค้างถาวร
+    const roundIsFullPay = b.deposit_amount >= b.price_total;
     issued.push({
-      id: id('t'), ticket_no: alloc(franchiseOf(db, p)?.abbr ?? 'xx', issued),
+      id: ticketId, ticket_no: alloc(franchiseOf(db, p)?.abbr ?? 'xx', issued),
       product_id: p.id, batch_id: b.id, owner_id: userId, original_buyer_id: userId, qty: q,
       deposit_paid: dep * q, remaining_amount: remainingEach * q, remaining_paid: 0,
-      status: remainingEach === 0 ? 'paid_full' : 'active', product_status: mirrorStatusFor(p, b.id, remainingEach === 0), qr_code_url: '',
+      status: remainingEach === 0 ? 'paid_full' : 'active',
+      product_status: mirrorStatusFor(p, b.id, remainingEach === 0 || roundIsFullPay), qr_code_url: '',
       created_at: when.toISOString(), approved_at: when.toISOString(),
     });
   }
@@ -563,8 +594,8 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
 };
 
 /** มอบตั๋วรายการเดียว — wrapper ของ grantSpecialTickets (โค้ดออกเลข/ตัดสต๊อกชุดเดียวกัน). */
-export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart, priceEach?: number) =>
-  grantSpecialTickets(userId, [{ batchId, qty, depEach, priceEach }], startNos);
+export const grantSpecialTicket = (batchId: string, userId: string, qty: number, depEach?: number, startNos?: TicketNoStart, priceEach?: number, grantId?: string) =>
+  grantSpecialTickets(userId, [{ batchId, qty, depEach, priceEach }], startNos, grantId);
 
 /**
  * มอบตั๋วจาก "ส่วนเกิน" ที่ยังไม่ได้เปิดรอบ (เจ้าของ 2026-08-08) — ไล่เก็บใบพรีเก่าโดยไม่ต้อง
@@ -576,7 +607,7 @@ export const grantSpecialTicket = (batchId: string, userId: string, qty: number,
  */
 export const grantFromSurplus = (
   productId: string, userId: string,
-  opts: { qty: number; priceEach: number; depEach: number; roundQty?: number; label?: string; startNos?: TicketNoStart },
+  opts: { qty: number; priceEach: number; depEach: number; roundQty?: number; label?: string; startNos?: TicketNoStart; grantId?: string },
 ) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p || !db.users.some((u) => u.id === userId)) return db;
@@ -591,8 +622,10 @@ export const grantFromSurplus = (
   let next = db;
   let batchId = open?.id;
   if (!batchId) {
-    // รอบร่างต้องไม่ใหญ่กว่าของที่มีจริงในคลัง — ไม่งั้น publishBatch ทีหลังจะไป "งอก" คลังให้เอง
-    const roundQty = Math.max(q, Math.floor(opts.roundQty ?? q));
+    // ขนาดรอบร่าง = ของที่เหลือในคลังทั้งหมด (ไม่ใช่แค่จำนวนที่มอบครั้งนี้) — ไม่งั้นมอบได้แค่คนแรก
+    // แล้ว SKU ถูกล็อกด้วยรอบที่เต็มทันที ต้องไปกด "แก้ไข" ก่อนถึงมอบคนต่อไปได้ (audit 2026-08-08)
+    // รอบยังเป็นร่าง = ไม่ขึ้นหน้าร้าน ของจึงไม่ถูกปล่อยขายจนกว่าจะกดเปิดขายเอง
+    const roundQty = Math.max(q, Math.floor(opts.roundQty ?? stockRemaining(db, p)));
     if (roundQty > stockRemaining(db, p)) return db;
     next = openSpecialRound(productId, {
       qty: roundQty, price: priceEach, fullPay: false, deposit: depEach,
@@ -601,7 +634,7 @@ export const grantFromSurplus = (
     batchId = next.batches[0]?.id;
     if (next === db || !batchId) return db; // เปิดรอบไม่ผ่าน (สินค้าพร้อมส่ง/จำนวนไม่ถูก)
   }
-  const after = grantSpecialTickets(userId, [{ batchId, qty: q, depEach, priceEach }], opts.startNos)(next);
+  const after = grantSpecialTickets(userId, [{ batchId, qty: q, depEach, priceEach }], opts.startNos, opts.grantId)(next);
   return after === next ? db : after;
 };
 
@@ -1536,7 +1569,10 @@ export const arriveSpecialRound = (batchId: string) => (db: Database): Database 
   // (เจ้าของ 2026-07-22: รอบไม่มีลูกค้าเลย กดถึงไทย = เข้าสต๊อกขายพร้อมส่งทันที; ราคาเริ่ม = ราคารอบ
   // แอดมินไปปรับต่อได้ที่ In-Stock). รอบที่ยังมีคนค้างจ่าย → ยังไม่แปลง (กันขายทับของจอง กติกาเดิม)
   const pNow = out.products.find((x) => x.id === pid);
-  if (pNow && canConvertToInStock(out, pNow)) {
+  // ⚠ ห้ามแปลงเมื่อ SKU ยังมี "รอบอื่น" เปิดขายอยู่ (audit 2026-08-08): เดิมกดถึงไทยบนการ์ดรอบเก่า
+  //   ในหน้าประวัติ → รอบปัจจุบันที่กำลังขายถูกปิดทิ้ง + ของทั้งก้อนกลายเป็น In-Stock พร้อมส่ง
+  const otherOpen = out.batches.some((x) => x.product_id === pid && x.id !== b.id && x.status === 'open');
+  if (pNow && !otherOpen && canConvertToInStock(out, pNow)) {
     out = convertToInStock(pid, b.price_total)(out);
     out = { ...out, batches: out.batches.map((x) => (x.product_id === pid && x.status === 'open' ? { ...x, status: 'closed' as const } : x)) };
   }
@@ -1813,7 +1849,10 @@ export const deleteTicket = (ticketId: string) => (db: Database): Database => {
     ...db,
     orders,
     tickets: rest,
-    remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId),
+    // ⚠ ลบเฉพาะสลิปส่วนต่างที่ "ยังไม่ตรวจ" — สลิปที่อนุมัติแล้วคือหลักฐานว่าเงินเข้าจริง
+    //   เดิมลบทิ้งหมด → รายได้ของเดือนย้อนหลังหดลงเงียบๆ โดยไม่มีร่องรอย (audit 2026-08-08)
+    //   แถวที่เหลือกลายเป็นกำพร้า (ticket_id ชี้ตั๋วที่ไม่มีแล้ว) ซึ่ง cashIn ยังนับได้ถูกต้อง
+    remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId || r.status === 'approved'),
     transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
   };
 };

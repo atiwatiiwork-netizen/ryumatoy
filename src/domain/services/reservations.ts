@@ -26,6 +26,15 @@ export function pendingHeld(db: Database, productId: string, batchId?: string): 
     .reduce((s, r) => s + r.qty, 0);
 }
 
+/**
+ * hold ที่ยังค้างของ SKU นี้ **ทั้งหมด** — ทั้งที่ผูกรอบและไม่ผูกรอบ (pendingHeld แยกดูทีละกลุ่ม).
+ * ใช้กับบัญชี "ของเหลือในคลัง" ระดับ SKU (ปิดรอบ / เปิดรอบกลับ / เปิดรอบใหม่จากของที่เหลือ):
+ * ของที่ลูกค้ากำลังจ่ายเงินอยู่ต้องไม่ถูกนับว่าว่าง ไม่งั้นขายของชิ้นเดียวกันสองครั้ง (audit 2026-08-08)
+ */
+export function poolHeld(db: Database, productId: string): number {
+  return db.stockReservations.filter((r) => r.product_id === productId).filter(isPendingHold).reduce((s, r) => s + r.qty, 0);
+}
+
 /** @deprecated เดิมรวม confirmed (บัญชีใบจองล้วน) — เหลือไว้เผื่ออ้างอิง; ใช้ pendingHeld + ตั๋วแทน */
 export function reservedHeld(db: Database, productId: string, batchId?: string): number {
   return db.stockReservations

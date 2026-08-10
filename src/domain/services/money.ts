@@ -84,6 +84,7 @@ export function grantedTicketIds(db: Database): Set<string> {
     if (o.status !== 'approved') continue;
     const oTime = new Date(o.approved_at ?? o.created_at).getTime();
     for (const it of o.items) {
+      if (!(it.qty > 0)) continue; // รายการที่ถูกยกเลิก (แอดมินลบตั๋วของมัน) ไม่ "คุ้ม" ตั๋วใบไหนอีก
       const cands = db.tickets.filter((x) => !covered.has(x.id) && x.owner_id === o.user_id
         && x.product_id === it.product_id && (x.batch_id ?? null) === (it.batch_id ?? null)
         && (x.variant_id ?? null) === (it.variant_id ?? null));
@@ -97,8 +98,10 @@ export function grantedTicketIds(db: Database): Set<string> {
   // ⚠ ตัดตั๋วที่เกิดจาก "หาของ" ออก — มัดจำก้อนนั้นถูกนับไปแล้วในช่อง sourcing
   //   (approveSourcingStart สร้างสินค้า+ตั๋วโดยไม่มีออเดอร์ ถ้าไม่ตัดจะกลายเป็นนับสองรอบ
   //   ยอด "รับเข้าทั้งหมด" ของเดือนจะบวมเท่ากับยอดหาของทั้งเดือน) audit 2026-07-26 #1
+  //   ⚠ ต้องเช็ค "ไม่ผูกรอบ" ด้วย — ตั๋วหาของไม่เคยมี batch_id. ถ้าตัดทั้ง SKU ตั๋วที่แอดมินมอบ
+  //   /ขายรอบพิเศษบน SKU ที่เคยหาของ จะหายจากยอด granted ทั้งก้อน (audit 2026-08-08)
   const fromSourcing = new Set(db.sourcingRequests.map((s) => s.product_id).filter(Boolean) as string[]);
-  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !fromSourcing.has(t.product_id)).map((t) => t.id));
+  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !(!t.batch_id && fromSourcing.has(t.product_id))).map((t) => t.id));
   grantedCache.set(db, granted);
   return granted;
 }

@@ -62,11 +62,18 @@ export function ticketPrefixCounts(db: Database, productIds: string[], when = ne
  *  reserves numbers from the server RPC instead (see reserveTicketNos / migration v47). */
 export function nextTicketNo(db: Database, franchiseAbbr: string, when = new Date(), pending: { ticket_no: string }[] = []): string {
   const prefix = ticketPrefix(franchiseAbbr, when) + '-';
-  // count issued tickets PLUS ones being created in this same batch (pending) — otherwise two tickets
-  // of the same franchise issued in one approveOrder collide (ticket_no is UNIQUE in the DB → the
-  // second insert fails → later tickets never persist → they vanish from the customer's wallet).
-  const seq = [...db.tickets, ...pending].filter((t) => t.ticket_no.startsWith(prefix)).length + 1;
-  return prefix + padTicketSeq(seq);
+  // ⚠ ต้องนับจาก "เลขสูงสุดที่เคยออก + 1" ไม่ใช่ "จำนวนแถว + 1" — ลำดับที่มีรู (แอดมินลบตั๋วซ้ำทิ้ง
+  //   หรือบล็อกที่จองจาก RPC ใช้ไม่หมด) ทำให้การนับแถวย้อนไปทับเลขที่มีคนถืออยู่แล้ว → ticket_no
+  //   ชน UNIQUE ตอน insert → ทั้ง flush ล้มถาวรและ reloadIfIdle ถูกบล็อกทั้งแท็บ (audit 2026-08-08)
+  //   สูตรเดียวกับ real_max ใน RPC reserve_ticket_nos (migration v47)
+  // รวม pending ของรอบเดียวกันด้วย ไม่งั้นตั๋วสองใบใน approveOrder เดียวกันชนกันเอง
+  let max = 0;
+  for (const t of [...db.tickets, ...pending]) {
+    if (!t.ticket_no.startsWith(prefix)) continue;
+    const n = parseInt(t.ticket_no.slice(prefix.length), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return prefix + padTicketSeq(max + 1);
 }
 
 /**

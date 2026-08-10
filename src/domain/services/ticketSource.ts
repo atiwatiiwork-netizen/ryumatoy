@@ -40,7 +40,10 @@ const META: Record<TicketSource, { label: string; emoji: string; cls: string }> 
 
 export function ticketSourceOf(db: Database, t: PreorderTicket): TicketSource {
   // หาของมาก่อนเสมอ — ตั๋วพวกนี้ก็ไม่มีออเดอร์เหมือน granted แต่คนละเส้นเงิน
-  if (db.sourcingRequests.some((s) => s.product_id === t.product_id)) return 'sourcing';
+  // ⚠ ต้องมีเงื่อนไข "ไม่ผูกรอบ" ด้วย: ตั๋วงานหาของเกิดจาก approveSourcingStart ซึ่งไม่เคยมี batch_id
+  //   ถ้าเช็คแค่ product_id ตั๋วที่แอดมินมอบ/ลูกค้าซื้อรอบพิเศษ "บน SKU ที่เคยมีงานหาของ" จะถูกตีเป็น
+  //   sourcing ยกแผง → หายจากประวัติการมอบตั๋ว และเงินที่รับมาหายจากรายงาน (audit 2026-08-08)
+  if (!t.batch_id && db.sourcingRequests.some((s) => s.product_id === t.product_id)) return 'sourcing';
   if (grantedTicketIds(db).has(t.id)) return 'granted';
   if (t.batch_id) return 'special';
   const p = db.products.find((x) => x.id === t.product_id);
