@@ -19,7 +19,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
     return nextTicketNo(db, abbr, when, pending);
   };
 }
-import { franchiseOf, canConvertToInStock, stockRemaining } from '../domain/services/catalog';
+import { franchiseOf, canConvertToInStock, stockRemaining, inLiveAuction } from '../domain/services/catalog';
 import { pendingHeld, poolHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
@@ -111,6 +111,10 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     for (const l of lines) {
       const p = db.products.find((x) => x.id === l.productId);
       if (p?.is_stock && !l.batchId && l.qty > availableFor(db, p) + ownHeld(undefined, p.id)) return db;
+      // ⚠ ของที่กำลังอยู่ในห้องประมูล ห้ามขายทางอื่นพร้อมกัน (audit 2026-08-08): เดิม inLiveAuction
+      //   ถูกใช้แค่ตอนกรองการ์ดหน้าร้าน → การ์ดรอบพิเศษ/ลิงก์ตรง/ตะกร้าค้าง ยังสั่งซื้อทะลุมาได้
+      //   = ของชิ้นเดียวถูกขายทั้งในรอบพิเศษและให้ผู้ชนะประมูล
+      if (l.productId && inLiveAuction(db, l.productId)) return db;
     }
     const orderId = id('o');
     const rank = db.users.find((u) => u.id === userId)?.rank ?? 'bronze';
@@ -690,6 +694,11 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
   const price = opts.price && opts.price > 0 ? opts.price : (last?.price_total ?? db.products.find((p) => p.id === productId)?.price_total ?? 0);
   const deposit = opts.deposit && opts.deposit > 0 ? Math.min(opts.deposit, price) : (last?.deposit_amount ?? price);
   if (price <= 0 || opts.qty <= 0) return db;
+  const prod = db.products.find((p) => p.id === productId);
+  if (!prod) return db;
+  // ⚠ "ขายของที่เหลือในคลัง" ต้องไม่เกินของที่ว่างจริง — ด่านต้องอยู่ในตัว mutation ไม่ใช่แค่หน้าจอ
+  //   (เพดานบนหน้าจออ่านจาก snapshot ที่อาจค้าง 40 วิ) audit 2026-08-08
+  if (opts.fromPool && opts.qty > stockRemaining(db, prod) - poolHeld(db, productId)) return db;
   const fullPay = deposit >= price;
   // RESET the product's lifecycle for the fresh round so round-2 buyers don't inherit round-1's
   // advanced status (which would show them "ถึงไทยแล้ว" + skip the warehouse gate). Old-round tickets
@@ -701,7 +710,9 @@ export const restockSpecialRound = (productId: string, opts: { qty: number; pric
   const closed: Database = {
     ...db,
     batches: db.batches.map((b) => (b.product_id === productId && b.status === 'open' ? { ...b, status: 'closed' as const } : b)),
-    products: db.products.map((p) => (p.id === productId
+    // ⚠ SKU ที่กระดานพรีปกติยังเปิดจองอยู่ ('open') ห้ามเขียนทับสถานะ — รอบพิเศษวิ่งเคียงกระดานเดิม
+    //   (openSpecialRound มีด่านนี้อยู่แล้ว แต่ restock ยังไม่มี → สินค้าหลุดจากหน้าร้านเงียบๆ)
+    products: prod.status === 'open' ? db.products : db.products.map((p) => (p.id === productId
       ? { ...p, status: newStatus, shipped_at: newStatus === 'shipping' ? nowIso : undefined, eta_note: fullPay ? 'พร้อมส่ง' : newStatus === 'shipping' ? 'ระหว่างทาง' : 'ผลิต · รอเข้าโกดัง' }
       : p)),
   };
@@ -837,16 +848,26 @@ export const revertRoundStatus = (batchId: string, target: 'production' | 'shipp
 /** Edit an OPEN round's price/qty/label — only while nobody has bought from it yet. */
 export const editBatch = (batchId: string, patch: { price?: number; qty?: number; label?: string }) => (db: Database): Database => {
   if (db.tickets.some((t) => t.batch_id === batchId)) return db; // locked once a ticket references it
+  const b0 = db.batches.find((x) => x.id === batchId);
+  if (!b0) return db;
+  // ⚠ ห้ามแก้ราคา/จำนวนขณะที่ลูกค้ากำลังจ่ายเงินอยู่ (audit 2026-08-08): checkout อ่านราคา "สด"
+  //   ผ่าน livePrice → ลูกค้าโอนตามยอดเดิม แต่ระบบเก็บตามยอดใหม่ · และลดจำนวนต่ำกว่าที่จองค้าง
+  //   = ขายเกินของจริง (publishBatch กันไว้แล้ว แต่ปุ่ม "แก้ไข" ยังไม่กัน)
+  const held = pendingHeld(db, b0.product_id, batchId);
+  if (held > 0) return db;
+  if (patch.qty != null && patch.qty > 0 && Math.floor(patch.qty) < held) return db;
+  // ราคาใหม่ต้องไม่ต่ำกว่ามัดจำเดิม ไม่งั้นรอบมัดจำกลายเป็น "จ่ายเต็ม" เงียบๆ แล้วแถบสถานะรอบหายทั้งแถบ
+  const wasFullPay = b0.deposit_amount >= b0.price_total;
+  if (!wasFullPay && patch.price != null && patch.price > 0 && patch.price <= b0.deposit_amount) return db;
   return {
     ...db,
     batches: db.batches.map((b) => {
       if (b.id !== batchId) return b;
-      const fullPay = b.deposit_amount >= b.price_total;
       const price = patch.price != null && patch.price > 0 ? patch.price : b.price_total;
       return {
         ...b,
         price_total: price,
-        deposit_amount: fullPay ? price : b.deposit_amount,
+        deposit_amount: wasFullPay ? price : Math.min(price, b.deposit_amount),
         stock_qty: patch.qty != null && patch.qty > 0 ? Math.floor(patch.qty) : b.stock_qty,
         label: patch.label != null ? (patch.label.trim() || b.label) : b.label,
       };

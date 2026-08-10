@@ -30,6 +30,7 @@ export default function AdminMembersPage() {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
+  const adminId = useCurrentUserId();
   const [openId, setOpenId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null); // กันกดอนุมัติซ้ำระหว่างรอ RPC
   const [manageId, setManageId] = useState<string | null>(null);
@@ -79,7 +80,13 @@ export default function AdminMembersPage() {
   };
 
   const del = async (u: User) => {
-    if (!confirm(`ลบสมาชิก "${u.display_name}" ออกถาวร?\n\nจะลบ: โปรไฟล์ + บัญชีเข้าสู่ระบบ (เบอร์+PIN) + ออเดอร์/ใบพรี/รายการทั้งหมด\nกู้คืนไม่ได้ — ลูกค้าต้องสมัครใหม่ทั้งหมด`)) return;
+    // สรุปสิ่งที่กำลังจะหายให้เห็นก่อนกด + บันทึกไว้เป็นหลักฐาน (การกระทำนี้ย้อนกลับไม่ได้เลย)
+    const theirs = db.tickets.filter((t) => t.owner_id === u.id);
+    const paid = theirs.reduce((s, t) => s + (t.deposit_paid ?? 0) + (t.remaining_paid ?? 0), 0);
+    const due = theirs.reduce((s, t) => s + Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0)), 0);
+    if (!confirm(`ลบสมาชิก "${u.display_name}" ออกถาวร?\n\nจะลบ: โปรไฟล์ + บัญชีเข้าสู่ระบบ (เบอร์+PIN) + ออเดอร์/ใบพรี/รายการทั้งหมด\n· ใบพรี ${theirs.length} ใบ\n· เงินที่รับมาแล้ว ${baht(paid)}\n· ยอดค้างเก็บ ${baht(due)}\n\nกู้คืนไม่ได้ — ลูกค้าต้องสมัครใหม่ทั้งหมด`)) return;
+    dispatch(logActivity(adminId, 'purge_user', `ลบสมาชิก ${u.display_name} (${u.phone ?? '-'}) · ใบพรี ${theirs.length} ใบ · รับมาแล้ว ${baht(paid)} · ค้าง ${baht(due)}`, { targetId: u.id, targetLabel: theirs.map((t) => t.ticket_no).join(' ').slice(0, 300), amount: paid }));
+    await store.flush().catch(() => {});
     if (supabase) {
       const { data, error } = await supabase.rpc('ryuma_admin_purge_user', { p_user_id: u.id });
       const res = (data ?? {}) as { ok?: boolean; error?: string };
