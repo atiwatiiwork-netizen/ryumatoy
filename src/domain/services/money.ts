@@ -72,6 +72,24 @@ export function cashIn(db: Database, ym?: string): MoneyRow {
 
 /** ตั๋วที่ไม่มีออเดอร์รองรับ = แอดมินมอบเอง (เก็บเงินนอกระบบ). แคชต่อ db เพื่อไม่ให้ O(n²) */
 const grantedCache = new WeakMap<Database, Set<string>>();
+/**
+ * "ตั๋วใบนี้เกิดจากงานหาของไหม" — ตัวชี้ขาดตัวเดียวที่ทั้ง money.ts และ ticketSource.ts ใช้ร่วมกัน.
+ * (นิยามไว้ที่นี่เพราะ ticketSource นำเข้าจาก money อยู่แล้ว — วางกลับทางจะทำให้ import วนกัน)
+ *
+ * ⚠ ห้ามเช็คแค่ `product_id`: SKU ที่เคยมีงานหาของ ถ้าเปิดรอบพิเศษ/แอดมินมอบตั๋วทีหลัง ตั๋วพวกนั้น
+ *   จะถูกตีเป็น sourcing ยกแผง → หายจากประวัติการมอบตั๋ว + เงินหายจากรายงาน (audit 2026-08-08)
+ * ⚠ และห้ามเช็ค `!t.batch_id`: **approveSourcingStart สร้าง batch ให้ด้วย** (label 'หาของ')
+ *   ตั๋วหาของจึง **มี** batch_id เสมอ — เคยแก้ผิดทางนี้แล้วเงินหาของถูกนับซ้ำในช่อง granted
+ *
+ * ตัวชี้ขาดที่ถูก = **เจ้าของตั๋วคือคนที่ขอหาของ บน SKU เดียวกัน** (approveSourcingStart ออกตั๋วให้
+ * `r.user_id` บน `pid` เท่านั้น) และถ้าผูกรอบ รอบนั้นต้องเป็นรอบของงานหาของ
+ */
+export function isSourcingTicket(db: Database, t: PreorderTicket): boolean {
+  if (!db.sourcingRequests.some((s) => s.product_id === t.product_id && s.user_id === t.owner_id)) return false;
+  if (!t.batch_id) return true;
+  return db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ';
+}
+
 export function grantedTicketIds(db: Database): Set<string> {
   const hit = grantedCache.get(db);
   if (hit) return hit;
@@ -98,10 +116,10 @@ export function grantedTicketIds(db: Database): Set<string> {
   // ⚠ ตัดตั๋วที่เกิดจาก "หาของ" ออก — มัดจำก้อนนั้นถูกนับไปแล้วในช่อง sourcing
   //   (approveSourcingStart สร้างสินค้า+ตั๋วโดยไม่มีออเดอร์ ถ้าไม่ตัดจะกลายเป็นนับสองรอบ
   //   ยอด "รับเข้าทั้งหมด" ของเดือนจะบวมเท่ากับยอดหาของทั้งเดือน) audit 2026-07-26 #1
-  //   ⚠ ต้องเช็ค "ไม่ผูกรอบ" ด้วย — ตั๋วหาของไม่เคยมี batch_id. ถ้าตัดทั้ง SKU ตั๋วที่แอดมินมอบ
-  //   /ขายรอบพิเศษบน SKU ที่เคยหาของ จะหายจากยอด granted ทั้งก้อน (audit 2026-08-08)
-  const fromSourcing = new Set(db.sourcingRequests.map((s) => s.product_id).filter(Boolean) as string[]);
-  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !(!t.batch_id && fromSourcing.has(t.product_id))).map((t) => t.id));
+  //   ⚠ ตัวชี้ขาด "ตั๋วหาของ" ต้องใช้ isSourcingTicket ตัวเดียวกับ ticketSourceOf เสมอ —
+  //   เช็คแค่ product_id จะตัดตั๋วที่แอดมินมอบ/ขายรอบพิเศษบน SKU ที่เคยหาของทิ้งไปด้วย
+  //   (เงินหายจากยอด granted) ส่วนเช็ค !batch_id ก็ผิด เพราะตั๋วหาของ **มี** batch (label 'หาของ')
+  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !isSourcingTicket(db, t)).map((t) => t.id));
   grantedCache.set(db, granted);
   return granted;
 }

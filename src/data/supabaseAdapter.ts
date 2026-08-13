@@ -68,54 +68,76 @@ const stripItems = (order: Row): Row => {
   return copy;
 };
 
+/**
+ * ดึง "ทั้งตาราง" แบบแบ่งหน้า — ⚠ PostgREST/Supabase คืนสูงสุด **1000 แถวต่อคำขอ** แล้ว
+ * **ตัดที่เหลือทิ้งเงียบๆ ไม่มี error** ถ้าใช้ .select('*') เฉยๆ.
+ *
+ * ทำไมถึงต้องแก้ก่อนของโต (audit 2026-08-10): พอ preorder_tickets เกิน 1000 แถว แอปจะอ่านตั๋วได้
+ * ไม่ครบ → unmatchedApprovedItems เห็น "ออเดอร์อนุมัติแล้วแต่ตั๋วหาย" เป็นร้อยรายการ → ตัวกู้ตั๋ว
+ * (self-heal ฝั่งลูกค้า + ปุ่มซ่อมของแอดมิน) มินต์ตั๋วซ้ำให้ทั้งร้านพร้อมกัน = เคสตั๋วซ้ำ Mongkol
+ * แต่เกิดทีเดียวทุกคน. เช่นเดียวกับ stock_reservations (นับ hold ขาด = ขายเกิน) และ order_items.
+ *
+ * ตารางเล็กยังยิงคำขอเดียวเหมือนเดิม (ได้ < 1000 แถวก็หยุด) จึงไม่มีผลกับความเร็วตอนนี้.
+ */
+async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unknown[] | null; error: unknown }> {
+  const PAGE = 1000;
+  const out: unknown[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb.from(table).select('*').range(from, from + PAGE - 1);
+    if (error) return { data: null, error };
+    out.push(...(data ?? []));
+    if (!data || data.length < PAGE) return { data: out, error: null };
+  }
+}
+
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
     const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, settings] =
       await Promise.all([
-        sb.from('users').select('*'),
-        sb.from('categories').select('*'),
-        sb.from('manufacturers').select('*'),
-        sb.from('franchises').select('*'),
-        sb.from('series').select('*'),
-        sb.from('products').select('*'),
-        sb.from('preorder_boards').select('*'),
-        sb.from('board_close_logs').select('*'),
-        sb.from('product_batches').select('*'),
-        sb.from('stock_additions').select('*'),
-        sb.from('product_variants').select('*'),
-        sb.from('orders').select('*'),
-        sb.from('order_items').select('*'),
-        sb.from('preorder_tickets').select('*'),
-        sb.from('remaining_payments').select('*'),
-        sb.from('rank_requests').select('*'),
-        sb.from('stock_reservations').select('*'),
-        sb.from('ticket_transfers').select('*'),
-        sb.from('coupons').select('*'),
-        sb.from('coupon_grants').select('*'),
-        sb.from('campaigns').select('*'),
-        sb.from('campaign_awards').select('*'),
-        sb.from('push_subscriptions').select('*'),
-        sb.from('push_prefs').select('*'),
-        sb.from('push_config').select('*'),
-        sb.from('sourcing_requests').select('*'),
-        sb.from('sourcing_memos').select('*'),
-        sb.from('mission_submissions').select('*'),
-        sb.from('app_config').select('*'),
-        sb.from('rank_tiers').select('*'),
-        sb.from('payment_accounts').select('*'),
+        fetchAll(sb, 'users'),
+        fetchAll(sb, 'categories'),
+        fetchAll(sb, 'manufacturers'),
+        fetchAll(sb, 'franchises'),
+        fetchAll(sb, 'series'),
+        fetchAll(sb, 'products'),
+        fetchAll(sb, 'preorder_boards'),
+        fetchAll(sb, 'board_close_logs'),
+        fetchAll(sb, 'product_batches'),
+        fetchAll(sb, 'stock_additions'),
+        fetchAll(sb, 'product_variants'),
+        fetchAll(sb, 'orders'),
+        fetchAll(sb, 'order_items'),
+        fetchAll(sb, 'preorder_tickets'),
+        fetchAll(sb, 'remaining_payments'),
+        fetchAll(sb, 'rank_requests'),
+        fetchAll(sb, 'stock_reservations'),
+        fetchAll(sb, 'ticket_transfers'),
+        fetchAll(sb, 'coupons'),
+        fetchAll(sb, 'coupon_grants'),
+        fetchAll(sb, 'campaigns'),
+        fetchAll(sb, 'campaign_awards'),
+        fetchAll(sb, 'push_subscriptions'),
+        fetchAll(sb, 'push_prefs'),
+        fetchAll(sb, 'push_config'),
+        fetchAll(sb, 'sourcing_requests'),
+        fetchAll(sb, 'sourcing_memos'),
+        fetchAll(sb, 'mission_submissions'),
+        fetchAll(sb, 'app_config'),
+        fetchAll(sb, 'rank_tiers'),
+        fetchAll(sb, 'payment_accounts'),
         // limit ต้อง ≥ cap ในหน่วยความจำ (400 ใน logActivity) ไม่งั้นแถวที่ถูกตัดจะดูเหมือน "ถูกลบ"
         sb.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(400),
         // ใหม่สุดก่อนเสมอ: เรียงตาม due_date ขึ้น + limit จะ "ปักหน้าต่างไว้ที่นัดเก่าสุด"
         // พอมีครบ 500 แถว นัดที่ออกใหม่จะหลุดหน้าต่างทั้งหมด = ฟีเจอร์ตายเงียบ (audit v57 #15)
         sb.from('payment_plans').select('*').order('created_at', { ascending: false }).limit(500),
         // ประมูล (v60) — ยังไม่รัน migration = ตารางไม่มี → ต้องไม่พังทั้งแอป (ไม่อยู่ใน fatal list)
-        sb.from('auctions').select('*'),
+        fetchAll(sb, 'auctions'),
         // auction_bids: RLS ให้ลูกค้าเห็นเฉพาะบิดของตัวเอง (ประวัติสาธารณะมาจาก RPC ที่ปิดชื่อ)
-        sb.from('auction_bids').select('*'),
-        sb.from('auction_watch').select('*'),
-        sb.from('auction_entries').select('*'),
-        sb.from('shop_settings').select('*'),
+        fetchAll(sb, 'auction_bids'),
+        fetchAll(sb, 'auction_watch'),
+        fetchAll(sb, 'auction_entries'),
+        fetchAll(sb, 'shop_settings'),
       ]);
 
     // coupon_grants / campaigns / campaign_awards are intentionally NOT in this fatal list: before

@@ -1,5 +1,5 @@
 import type { Database, PreorderTicket } from '../entities';
-import { grantedTicketIds } from './money';
+import { grantedTicketIds, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
 
 /**
@@ -38,12 +38,11 @@ const META: Record<TicketSource, { label: string; emoji: string; cls: string }> 
   sourcing: { label: 'งานหาของ', emoji: '🔎', cls: 'bg-[#0891b2]/[0.18] text-[#67e8f9]' },
 };
 
+export { isSourcingTicket } from './money'; // ตัวชี้ขาด "ตั๋วหาของ" — นิยามที่ money.ts (กัน import วนกัน)
+
 export function ticketSourceOf(db: Database, t: PreorderTicket): TicketSource {
   // หาของมาก่อนเสมอ — ตั๋วพวกนี้ก็ไม่มีออเดอร์เหมือน granted แต่คนละเส้นเงิน
-  // ⚠ ต้องมีเงื่อนไข "ไม่ผูกรอบ" ด้วย: ตั๋วงานหาของเกิดจาก approveSourcingStart ซึ่งไม่เคยมี batch_id
-  //   ถ้าเช็คแค่ product_id ตั๋วที่แอดมินมอบ/ลูกค้าซื้อรอบพิเศษ "บน SKU ที่เคยมีงานหาของ" จะถูกตีเป็น
-  //   sourcing ยกแผง → หายจากประวัติการมอบตั๋ว และเงินที่รับมาหายจากรายงาน (audit 2026-08-08)
-  if (!t.batch_id && db.sourcingRequests.some((s) => s.product_id === t.product_id)) return 'sourcing';
+  if (isSourcingTicket(db, t)) return 'sourcing';
   if (grantedTicketIds(db).has(t.id)) return 'granted';
   if (t.batch_id) return 'special';
   const p = db.products.find((x) => x.id === t.product_id);
