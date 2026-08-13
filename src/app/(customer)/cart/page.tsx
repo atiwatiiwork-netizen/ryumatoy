@@ -5,7 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
-import { productLabel } from '@/domain/services/catalog';
+import { productLabel, inLiveAuction } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
 import { userBatchQuota, BATCH_MAX_PER_USER, batchAvailable, availableFor, pendingHeld, myPendingHold } from '@/domain/services/reservations';
 import { useToast } from '@/state/ToastProvider';
@@ -42,6 +42,9 @@ export default function CartPage() {
   const lineGone = (l: (typeof cart.lines)[number]): 'temp' | 'gone' | null => {
     const p = db.products.find((pp) => pp.id === l.productId);
     if (!p) return 'gone'; // ถูกนำออกจากร้านแล้ว
+    // ของที่ถูกยกไปเปิดห้องประมูล = ซื้อทางนี้ไม่ได้ (submitOrder ปัดตกอยู่แล้ว — ต้องบอกตั้งแต่ตะกร้า
+    // ไม่ใช่ปล่อยให้ไปโอนเงินก่อนแล้วค่อยเงียบ) audit 2026-08-10
+    if (inLiveAuction(db, p.id)) return 'gone';
     const mine = myPendingHold(db, CURRENT_USER_ID, p.id, l.batchId);
     if (l.batchId) {
       const b = db.batches.find((bb) => bb.id === l.batchId);

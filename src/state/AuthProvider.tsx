@@ -205,7 +205,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAppUserId(res.user_id);
         notifyAdminLine(`👤 สมัครสมาชิกใหม่รออนุมัติ: ${name} · ${phone}`); // ping the owner's LINE
         await store.reload();
+        return res;
       }
+      // ⚠ สมัครไม่ผ่าน (เบอร์ซ้ำ/อื่นๆ) แต่ signUp ด้านบนให้ session มาแล้ว — **ต้องออกจากระบบทันที**
+      //   (ช่องยึดบัญชี audit 2026-08-10): ถ้าปล่อย session ค้างไว้ effect self-heal ด้านบนจะเรียก
+      //   ryuma_link_self ซึ่งผูก "แถวผู้ใช้ที่ยังไม่มี auth_id และเบอร์ตรงกัน" เข้ากับ session นี้
+      //   → คนที่รู้แค่เบอร์โทรของเหยื่อ เข้าเป็นเหยื่อได้เต็มตัว (เห็นตั๋ว/ยอดค้าง/ที่อยู่ + สั่งของแทน)
+      //   ตั้ง signingUp เป็น true ไว้ตลอดช่วง signOut ด้วย (finally จะปลดหลัง session หายแล้ว)
+      await supabase.auth.signOut().catch(() => { /* ยังไงก็ต้องไม่ทิ้ง session ที่ยังใช้ได้ */ });
+      setAppUserId(null);
       return res;
     } finally {
       signingUp.current = false;

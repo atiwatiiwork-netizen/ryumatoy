@@ -15,7 +15,7 @@ import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder, markPlanPaid } from '@/data/mutations';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
-import { productLabel } from '@/domain/services/catalog';
+import { productLabel, inLiveAuction } from '@/domain/services/catalog';
 import { batchAvailable, availableFor, isPendingHold, pendingHeld, myPendingHold, userTakenInBatch, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
@@ -98,6 +98,11 @@ export default function CheckoutPage() {
   const deadLines = validLines.filter((l) => {
     const p = db.products.find((pp) => pp.id === l.productId);
     if (!p) return true;
+    // ⚠ ของที่ถูกยกไปเปิดห้องประมูล ต้องบล็อก "ตั้งแต่ก่อนเห็นเลขบัญชี" (audit 2026-08-10):
+    //   submitOrder มีด่านนี้อยู่แล้ว แต่มันปัดตกเงียบตอนกดส่ง = ลูกค้าโอนเงินไปแล้วค่อยรู้
+    //   (ตะกร้าอยู่ใน localStorage ค้างข้ามวันได้ · เข้าลิงก์ตรง /shop/{id} ก็มาถึงหน้านี้ได้)
+    //   กติกาเดียวกับเคส Kid Naruto: ห้ามให้ถึงหน้าจ่ายเงินถ้าสั่งไม่ได้
+    if (inLiveAuction(db, p.id)) return true;
     if (l.batchId) {
       const b = db.batches.find((bb) => bb.id === l.batchId);
       if (!b || b.status !== 'open' || b.published === false) return true;   // รอบปิด/ยังเป็นร่าง
