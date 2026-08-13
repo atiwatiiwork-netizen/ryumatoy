@@ -260,9 +260,14 @@ export const supabaseAdapter: PersistenceAdapter = {
       next.orders.flatMap((o) => o.items) as unknown as Row[],
       base.orders.flatMap((o) => o.items) as unknown as Row[],
     ));
+    // ⚠ ลำดับ: remaining_payments ก่อน preorder_tickets — หลักการเดียวกับ orders ก่อน tickets
+    //   (เคสตั๋วซ้ำ 2026-08-07): สถานะของสลิป (pending→approved) คือ "ด่าน" ที่กันแอดมินอีกเครื่อง
+    //   กดอนุมัติซ้ำ ส่วนตัวเลขบนตั๋ว (หนี้ลด) คือ "เงิน" — ด่านต้องขึ้นเซิร์ฟเวอร์ก่อนเงินเสมอ
+    //   เดิมตั๋วลงก่อน → เครื่องอื่น poll เจอช่วงกลางคัน "หนี้ลดแล้วแต่สลิปยัง pending" → อนุมัติซ้ำ
+    //   = หนี้ลดสองรอบจากเงินก้อนเดียว (audit ADV-01 2026-08-08)
+    await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
     await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
 
-    await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
     await step('ticket_transfers', () => syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]));
     await step('rank_tiers', () => syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name'));

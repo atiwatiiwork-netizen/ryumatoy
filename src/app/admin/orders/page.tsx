@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import { type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
@@ -11,6 +13,7 @@ import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipp
 import { approveRemainingPayment, rejectRemainingPayment, logActivity } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
+import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { PreorderTicket } from '@/domain/entities';
 
@@ -22,6 +25,8 @@ export default function OrdersHubPage() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const adminId = useCurrentUserId();
+  // กันกดอนุมัติ/ปฏิเสธสลิปส่วนต่างรัวๆ ระหว่างรอเซฟ — เงินเข้า-หนี้ลดต้องเกิดครั้งเดียว
+  const [rpBusy, setRpBusy] = useState<string | null>(null);
 
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const ticketOf = (tid: string) => db.tickets.find((t) => t.id === tid);
@@ -84,26 +89,50 @@ export default function OrdersHubPage() {
                     <div className="text-sm font-semibold">{userName(r.user_id)} · {baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(r.coupon_discount)}</span> : null}</div>
                     <div className="font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</div>
                   </div>
-                  <button onClick={() => {
-                    dispatch(approveRemainingPayment(r.id));
-                    // read-back: ยอดอาจยังไม่ครบจริง (แก้มัดจำย้อนหลังระหว่างรอตรวจ) — ห้ามบอก "ชำระครบ" มั่ว
-                    let full = false;
-                    dispatch((d) => { const x = d.tickets.find((t2) => t2.id === r.ticket_id); full = !!x && x.remaining_paid >= x.remaining_amount; return d; });
-                    if (pushEnabled(db, 'rp_approved'))
-                      sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
-                    dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
-                    flash('อนุมัติส่วนต่างแล้ว');
-                  }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">Approve</button>
+                  <button disabled={rpBusy === r.id} onClick={async () => {
+                    if (rpBusy) return; // เงินเข้า-หนี้ลด ต้องเกิดครั้งเดียว — กันกดรัวระหว่างรอเซฟ
+                    setRpBusy(r.id);
+                    try {
+                      dispatch(approveRemainingPayment(r.id));
+                      // read-back: mutation no-op ได้ (อีกเครื่องอนุมัติไปแล้ว) + ยอดอาจยังไม่ครบจริง
+                      // (แก้มัดจำย้อนหลังระหว่างรอตรวจ) — ห้ามขึ้น ✓/push/บอก "ชำระครบ" มั่ว
+                      let applied = false;
+                      let full = false;
+                      dispatch((d) => {
+                        applied = d.remainingPayments.find((x) => x.id === r.id)?.status === 'approved';
+                        const x = d.tickets.find((t2) => t2.id === r.ticket_id);
+                        full = !!x && x.remaining_paid >= x.remaining_amount;
+                        return d;
+                      });
+                      if (!applied) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+                      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "รับยอดแล้ว" — push ที่ออกไปเรียกคืนไม่ได้
+                      if (await store.flush()) return flash('อนุมัติแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+                      if (pushEnabled(db, 'rp_approved'))
+                        sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                      dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
+                      flash('อนุมัติส่วนต่างแล้ว');
+                    } finally { setRpBusy(null); }
+                  }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50">Approve</button>
                   {/* ปฏิเสธสลิปส่วนต่าง (audit 2026-07-25): เดิมไม่มีทางนี้ → สลิปปลอมค้างคิวถาวร
                       + คูปองลูกค้าหายฟรี. ปฏิเสธ = คืนคูปอง ยอดหนี้คงเดิม */}
-                  <button onClick={() => {
+                  <button disabled={rpBusy === r.id} onClick={async () => {
+                    if (rpBusy) return;
                     if (!confirm(`ปฏิเสธสลิปส่วนต่างนี้? (${baht(r.amount)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
-                    dispatch(rejectRemainingPayment(r.id));
-                    if (pushEnabled(db, 'order_rejected'))
-                      sendPush(subsForUsers(db, [r.user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${tk?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
-                    dispatch(logActivity(adminId, 'reject_rp', `ปฏิเสธสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
-                    flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
-                  }} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>
+                    setRpBusy(r.id);
+                    try {
+                      dispatch(rejectRemainingPayment(r.id));
+                      let applied = false;
+                      dispatch((d) => { applied = !d.remainingPayments.some((x) => x.id === r.id); return d; });
+                      if (!applied) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+                      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "สลิปไม่ผ่าน ส่งใหม่" — ถ้าเซฟไม่ขึ้น
+                      // ลูกค้าส่งใหม่ไม่ได้ (สลิปเดิมยังค้างบนเซิร์ฟเวอร์) = งงทั้งคู่
+                      if (await store.flush()) return flash('ปฏิเสธแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+                      if (pushEnabled(db, 'order_rejected'))
+                        sendPush(subsForUsers(db, [r.user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${tk?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+                      dispatch(logActivity(adminId, 'reject_rp', `ปฏิเสธสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
+                      flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
+                    } finally { setRpBusy(null); }
+                  }} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171] disabled:opacity-50">ปฏิเสธ</button>
                 </div>
               );
             })}

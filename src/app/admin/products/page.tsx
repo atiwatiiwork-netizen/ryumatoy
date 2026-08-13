@@ -14,6 +14,7 @@ import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
 import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { productAwaitingWarehouse } from '@/domain/services/warehouse';
+import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForProductOwners, statusPushPayload, pushEnabled } from '@/lib/push';
 import type { WcfType } from '@/domain/entities';
 import {
@@ -412,9 +413,12 @@ function StatusRow({ product: p }: { product: Product }) {
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const ticketUrl = (no: string) => (typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(no)}` : no);
 
-  const advance = (extra?: { tracking_no?: string; shipped_at?: string }) => {
+  const advance = async (extra?: { tracking_no?: string; shipped_at?: string }) => {
     if (!next) return;
     dispatch(setProductStatus(p.id, next, extra));
+    // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า/ขึ้น ✓ — push "ถึงไทย มาจ่ายส่วนต่าง" ที่ออกไปทั้งที่
+    // สถานะยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมายังเป็นสถานะเดิม กดจ่ายไม่ได้ (audit 2026-08-08)
+    if (await store.flush()) { flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ'); return; }
     // notify this lot's buyers when it starts moving / lands (ryuma push spec 4.1/4.2)
     if ((next === 'shipping' || next === 'arrived') && pushEnabled(db, next === 'shipping' ? 'lot_shipping' : 'lot_arrived'))
       sendPush(subsForProductOwners(db, p.id), statusPushPayload(next, p.series_name), dispatch).catch(() => {});

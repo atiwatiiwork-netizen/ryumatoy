@@ -11,6 +11,7 @@ import { uploadImage } from '@/lib/upload';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
 import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel, logActivity } from '@/data/mutations';
+import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { LabelSheet } from '../orders/LabelSheet';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
@@ -51,9 +52,17 @@ export default function ShippingPage() {
   const staleFlash = () => flash('รายการนี้ถูกจัดการไปแล้ว/สถานะเปลี่ยน — ตรวจหน้าอีกครั้ง');
   const dueOf = (t: PreorderTicket) => t.remaining_amount - t.remaining_paid;
 
-  const accept = (t: PreorderTicket) => {
+  // DNA save: เซฟให้ผ่านก่อนค่อย push/ขึ้น ✓ — push ที่ออกไปแล้วเรียกคืนไม่ได้ (audit 2026-08-08)
+  const commit = async () => {
+    if (!(await store.flush())) return true;
+    flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค');
+    return false;
+  };
+
+  const accept = async (t: PreorderTicket) => {
     dispatch(acceptDelivery(t.id));
     if (!verify(t.id, (x) => !!x.delivery?.accepted_at)) return staleFlash();
+    if (!(await commit())) return;
     if (pushEnabled(db, 'parcel') && t.delivery) {
       const body = t.delivery.method === 'courier' ? 'เรียกรถเข้ามารับของได้เลย — นัดเวลากับแอดมินทางแชท'
         : t.delivery.method === 'pickup' ? 'เข้ามารับของได้เลย — นัดวัน-เวลากับแอดมินทางแชท'
@@ -63,11 +72,12 @@ export default function ShippingPage() {
     flash(`รับเรื่องแล้ว · ${DELIVERY_METHOD_LABEL[t.delivery!.method]} ✓`);
   };
 
-  const closeJob = (t: PreorderTicket) => {
+  const closeJob = async (t: PreorderTicket) => {
     const warn = dueOf(t) > 0 ? `\n⚠ ตั๋วนี้ยังค้างชำระ ${baht(dueOf(t))} — เก็บเงินก่อนปิดงาน!` : '';
     if (!confirm(`ปิดงาน ${t.ticket_no} — ลูกค้ารับของแล้วใช่ไหม?${warn}`)) return;
     dispatch(closeDelivery(t.id));
     if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
+    if (!(await commit())) return;
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 รับของเรียบร้อย', body: 'ขอบคุณที่อุดหนุนริวมะครับ 🙏', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
     dispatch(logActivity(adminId, 'close_delivery', `ปิดงานรับของ (${DELIVERY_METHOD_LABEL[t.delivery!.method]})`, { targetId: t.id, targetLabel: t.ticket_no }));
@@ -80,20 +90,22 @@ export default function ShippingPage() {
       sendPush(subsForUsers(db, [t.owner_id]), { title: '📦 ของพร้อมส่งแล้ว!', body: 'ชำระครบแล้ว — แตะเลือกวิธีรับของได้เลย', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
     flash(`ส่งแจ้งเตือนให้ ${userName(t.owner_id)} แล้ว 🔔`);
   };
-  const shipToRegistered = (t: PreorderTicket) => {
+  const shipToRegistered = async (t: PreorderTicket) => {
     const u = db.users.find((x) => x.id === t.owner_id);
     if (!confirm(`จัดส่ง ${t.ticket_no} ตามที่อยู่ที่ลงทะเบียนของ ${u?.display_name}?\n📍 ${u?.shipping_address}`)) return;
     dispatch(chooseDelivery(t.id, t.owner_id, 'registered'));
     dispatch(acceptDelivery(t.id));
     if (!verify(t.id, (x) => x.delivery?.method === 'registered' && !!x.delivery.accepted_at)) return staleFlash();
+    if (!(await commit())) return;
     if (pushEnabled(db, 'parcel'))
       sendPush(subsForUsers(db, [t.owner_id]), { title: '✅ รับเรื่องจัดส่งแล้ว', body: 'แอดมินจัดส่งตามที่อยู่ที่ลงทะเบียนให้ — รอเลขพัสดุได้เลย', url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
     flash(`เข้าคิวจัดส่งแล้ว · ${t.ticket_no} ✓`);
   };
-  const closeOffline = (t: PreorderTicket) => {
+  const closeOffline = async (t: PreorderTicket) => {
     if (!confirm(`ปิดงาน ${t.ticket_no} — ตั๋วนี้ส่ง/รับของกันนอกระบบไปแล้วใช่ไหม? (ไม่ push หาลูกค้า)`)) return;
     dispatch(markShippedOffline(t.id));
     if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();
+    if (!(await commit())) return;
     dispatch(logActivity(adminId, 'close_offline', 'ปิดงานนอกระบบ (ส่งของกันเองไปแล้ว)', { targetId: t.id, targetLabel: t.ticket_no }));
     flash(`ปิดงานนอกระบบ · ${t.ticket_no} ✓`);
   };
@@ -249,23 +261,26 @@ function TrackRow({ ticket }: { ticket: PreorderTicket }) {
     catch { flash('อัปโหลดไม่สำเร็จ'); }
     finally { setBusy(false); }
   };
-  const ship = () => {
+  const ship = async () => {
     if (busy) return; // กันดับเบิลคลิก = push "ส่งแล้ว" ซ้ำหาลูกค้า
     if (!carrier) return flash('เลือกขนส่งก่อน');
     if (!no.trim()) return flash('ใส่เลขพัสดุก่อน');
     setBusy(true);
-    dispatch(setParcel(ticket.id, carrier, no.trim(), img));
-    // read-back: setParcel no-op ถ้าตั๋ว shipped ไปแล้ว (แท็บอื่นชิงกด) — อย่า push/flash ซ้ำ
-    let applied = false;
-    dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.status === 'shipped' && x.parcel_no === no.trim(); return d; });
-    setBusy(false);
-    if (!applied) return flash('ตั๋วนี้ถูกจัดส่งไปแล้ว — ตรวจหน้าอีกครั้ง');
-    const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
-    // push "ส่งแล้ว" ให้ลูกค้าทันทีหลังกรอกเลข (เจ้าของ 2026-07-23 ข้อ 3)
-    if (pushEnabled(db, 'parcel'))
-      sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
-    dispatch(logActivity(adminId, 'set_parcel', `ส่งพัสดุ ${cLabel} ${no.trim()}`, { targetId: ticket.id, targetLabel: ticket.ticket_no }));
-    flash(`จัดส่งแล้ว · ${ticket.ticket_no} ✓ แจ้งลูกค้าแล้ว`);
+    try {
+      dispatch(setParcel(ticket.id, carrier, no.trim(), img));
+      // read-back: setParcel no-op ถ้าตั๋ว shipped ไปแล้ว (แท็บอื่นชิงกด) — อย่า push/flash ซ้ำ
+      let applied = false;
+      dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.status === 'shipped' && x.parcel_no === no.trim(); return d; });
+      if (!applied) return flash('ตั๋วนี้ถูกจัดส่งไปแล้ว — ตรวจหน้าอีกครั้ง');
+      // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งเลขพัสดุ — เลขที่ push ไปแล้วแต่เซฟไม่ขึ้น = ตั๋วลูกค้าไม่มีเลขให้กดตาม
+      if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค');
+      const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
+      // push "ส่งแล้ว" ให้ลูกค้าทันทีหลังกรอกเลข (เจ้าของ 2026-07-23 ข้อ 3)
+      if (pushEnabled(db, 'parcel'))
+        sendPush(subsForUsers(db, [ticket.owner_id]), { title: '📮 พัสดุจัดส่งแล้ว!', body: `${cLabel} · ${no.trim()} — แตะเพื่อดูตั๋ว`, url: `/wallet/${encodeURIComponent(ticket.ticket_no)}` }, dispatch).catch(() => {});
+      dispatch(logActivity(adminId, 'set_parcel', `ส่งพัสดุ ${cLabel} ${no.trim()}`, { targetId: ticket.id, targetLabel: ticket.ticket_no }));
+      flash(`จัดส่งแล้ว · ${ticket.ticket_no} ✓ แจ้งลูกค้าแล้ว`);
+    } finally { setBusy(false); }
   };
 
   return (

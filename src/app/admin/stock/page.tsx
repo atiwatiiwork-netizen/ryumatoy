@@ -960,7 +960,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   };
   // ── ผลิต → เดินทาง (แอดมินกดเอง ไม่ต้องผ่านคิวโกดัง) ──
   const [depTr, setDepTr] = useState<'truck' | 'ship'>('truck');
-  const doDepart = () => {
+  const doDepart = async () => {
     const label = depTr === 'ship' ? 'เรือ 🚢' : 'รถ 🚚';
     if (!confirm(`ของรอบนี้ออกจากจีนแล้ว? (${label})\n${nProd > 0 ? `ตั๋ว ${nProd} ใบจะเป็น "กำลังเดินทางมาไทย" + เริ่มนับ ETA` : 'ยังไม่มีลูกค้า — ตัวสินค้าจะเป็น "กำลังเดินทาง"'}\nลูกค้าจะเริ่มจ่ายส่วนต่างได้`)) return;
     const before = nProd;
@@ -968,6 +968,8 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     let moved = 0;
     dispatch((d) => { moved = before - d.tickets.filter((t) => t.batch_id === b.id && t.product_status === 'production').length; return d; });
     if (before > 0 && moved <= 0) return flash('เปลี่ยนสถานะไม่สำเร็จ — ลองรีเฟรชแล้วกดใหม่');
+    // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า/ขึ้น ✓ — push ที่ออกไปแล้วเรียกคืนไม่ได้
+    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ');
     if (p && pushEnabled(db, 'lot_shipping')) {
       const seen = new Set<string>();
       for (const t of tickets.filter((x) => x.product_status === 'production')) {
@@ -1015,7 +1017,7 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
 
   // ถึงไทยแล้ว (เฉพาะตั๋วรอบนี้) + push ลูกค้าที่พรีรายการนี้.
   // รอบไม่มีลูกค้า/จบยอดแล้ว: ของเหลือกลายเป็น In-Stock มือ 1 อัตโนมัติ (เจ้าของ 2026-07-22)
-  const doArrive = () => {
+  const doArrive = async () => {
     const owners = [...new Set(moving.map((t) => t.owner_id))];
     // ⚠ SKU นี้มีรอบอื่นเปิดขายอยู่ไหม — เดิมกด "ถึงไทย" บนการ์ดรอบเก่าในหน้าประวัติ จะปิดรอบที่กำลัง
     //   ขายอยู่ทิ้ง + ดันของทั้งก้อนเป็น In-Stock (audit 2026-08-08). ตัว mutation กันไว้แล้ว
@@ -1028,6 +1030,9 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
       : `ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`;
     if (!confirm(msg)) return;
     dispatch(arriveSpecialRound(b.id));
+    // DNA save: เซฟให้ผ่านก่อนค่อย push "ถึงไทยแล้ว" — แจ้งลูกค้าให้มาจ่ายส่วนต่างทั้งที่สถานะ
+    // ยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมาแล้วยังเป็น "เดินทาง" กดจ่ายไม่ได้ งงทั้งคู่
+    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ');
     if (p && pushEnabled(db, 'lot_arrived')) {
       const seen = new Set<string>();
       for (const t of moving) {

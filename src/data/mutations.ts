@@ -775,7 +775,10 @@ export const departSpecialRound = (batchId: string, opts: { transport: SourcingT
   const b = db.batches.find((x) => x.id === batchId);
   if (!b) return db;
   const date = opts.date || new Date().toISOString().slice(0, 10);
-  const cohort = db.tickets.filter((t) => t.batch_id === batchId && t.product_status === 'production');
+  // รวม mirror 'open' ด้วย (สูตรเดียวกับ arriveSpecialRound): ตั๋วรอบพิเศษที่เกิดตอน SKU ยังเปิด
+  // กระดานพรี/สถานะเก่า เกิดมาเป็น 'open' — เดิมปุ่ม "ออกเดินทาง" ไม่พาตั๋วพวกนี้ไปด้วย
+  // → ลูกค้าไม่ได้สถานะเดินทาง กดจ่ายส่วนต่างไม่ได้ทั้งรอบ (audit 2026-08-10 ก่อนของเข้าจริง)
+  const cohort = db.tickets.filter((t) => t.batch_id === batchId && ['open', 'production'].includes(t.product_status) && t.status !== 'shipped');
   const p = db.products.find((x) => x.id === b.product_id);
   const productProd = !!p && !p.is_stock && p.status === 'production';
   if (cohort.length === 0 && !productProd) return db; // ไม่มีอะไรให้ขยับ — อย่าทำให้ store dirty
