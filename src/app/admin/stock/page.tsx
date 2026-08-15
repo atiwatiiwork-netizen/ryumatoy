@@ -1402,10 +1402,26 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
         };
         const pool = p && !p.is_stock ? (p.surplus_qty ?? 0) : null;
         const keep = p && !p.is_stock ? Math.max(0, stockRemaining(db, p) - (b.status === 'open' ? remaining : 0)) : null;
+        // ── ป้ายสถานะจ่ายส่วนต่างต่อคน (เจ้าของ 2026-08-11: "จ่ายเสร็จให้ขึ้น effect จะได้รู้ว่าเหลือใคร") ──
+        // จ่ายครบ = เขียว ✓ · ยังค้าง+ของถึงไทยแล้ว = แดงกระพริบ (ต้องทวง) · ยังค้าง+ของยังไม่ถึง = เทา (ยังไม่ถึงกำหนด)
+        const payBadge = (t: PreorderTicket) => {
+          const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
+          if (t.status === 'shipped') return <span className="rounded bg-[#2563eb]/[0.16] px-1.5 py-0.5 text-[10px] font-bold text-[#60a5fa]">📦 ส่งแล้ว</span>;
+          if (due <= 0) return <span className="rounded bg-[#16a34a]/20 px-1.5 py-0.5 text-[10px] font-extrabold text-[#4ade80]">✓ จ่ายครบ</span>;
+          const collectable = ['arrived', 'delivered'].includes(t.product_status); // ของถึงไทยแล้ว = ทวงได้
+          return <span className={cx('rounded px-1.5 py-0.5 text-[10px] font-bold', collectable ? 'animate-blink bg-[#b91c1c]/25 text-[#f87171]' : 'bg-white/[0.08] text-ink-faint')}>{collectable ? `⏳ ค้าง ${baht(due)}` : `รอถึงไทย · ค้าง ${baht(due)}`}</span>;
+        };
+        // นับเพื่อสรุปหัว: จ่ายส่วนต่างครบกี่คน / เหลือกี่คน (เฉพาะรอบที่ของถึงไทยแล้ว)
+        const payCounts = (rows: PreorderTicket[]) => {
+          let done = 0, owe = 0;
+          for (const t of rows) (((t.remaining_amount ?? 0) - (t.remaining_paid ?? 0)) <= 0 ? done++ : owe++);
+          return { done, owe };
+        };
         const Row = ({ t, tag }: { t: PreorderTicket; tag?: string }) => (
           <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
             <span className="flex items-center gap-2">
               <Icon name="user" size={13} className="text-primary-soft" /> {userName(t.owner_id)}
+              {payBadge(t)}
               {tag && <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">{tag}</span>}
             </span>
             <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unitOf(t))}</b> · มัดจำ {t.deposit_paid > 0 ? <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> : <b className="text-[#f87171]">฿0 ยังไม่จ่าย</b>} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
@@ -1430,12 +1446,19 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
                     <div className="flex flex-col gap-1">{grantedRows.map((t) => <Row key={t.id} t={t} tag={roundsAll.length > 1 ? `รอบ ${noOf(t.batch_id!)}` : undefined} />)}</div>
                   </div>
                 )}
-                {buyGroups.map((g) => (
-                  <div key={g.no}>
-                    <div className="mb-1 text-[11px] font-bold text-[#f1d27a]">🛒 ซื้อหน้าร้าน รอบ {g.no} ({g.rows.length} ใบ · เรียงตามวันที่)</div>
-                    <div className="flex flex-col gap-1">{g.rows.map((t) => <Row key={t.id} t={t} />)}</div>
-                  </div>
-                ))}
+                {buyGroups.map((g) => {
+                  const c = payCounts(g.rows);
+                  return (
+                    <div key={g.no}>
+                      <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                        <span className="text-[#f1d27a]">🛒 ซื้อหน้าร้าน รอบ {g.no} ({g.rows.length} ใบ)</span>
+                        {c.done > 0 && <span className="rounded bg-[#16a34a]/20 px-1.5 py-0.5 text-[10px] text-[#4ade80]">จ่ายครบ {c.done}</span>}
+                        {c.owe > 0 && <span className="rounded bg-[#b91c1c]/20 px-1.5 py-0.5 text-[10px] text-[#f87171]">เหลือ {c.owe}</span>}
+                      </div>
+                      <div className="flex flex-col gap-1">{g.rows.map((t) => <Row key={t.id} t={t} />)}</div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
