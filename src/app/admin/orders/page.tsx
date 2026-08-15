@@ -13,6 +13,8 @@ import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipp
 import { approveRemainingPayment, rejectRemainingPayment, logActivity } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
+import { ticketSourceOf } from '@/domain/services/ticketSource';
+import { cx } from '@/components/ui';
 import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import type { PreorderTicket } from '@/domain/entities';
@@ -160,6 +162,82 @@ export default function OrdersHubPage() {
           </div>
         )}
       </Section>
+
+      {/* §4 History Log · เงินเข้าทั้งหมด — ค้นย้อนหลังได้ว่าใครโอนมาเท่าไหร่ ค่าอะไร วันไหน */}
+      <MoneyHistory />
+    </div>
+  );
+}
+
+/* ── History Log การเงิน (เจ้าของ 2026-08-11: "มีคนโอน 1000 ชื่อประเสริฐ แต่ไม่รู้รายการอะไร") ──
+   รวมทุกเงินที่เข้าจริง: มัดจำ (ออเดอร์อนุมัติ) · ส่วนต่าง (สลิปอนุมัติ) · มอบตั๋ว (เก็บนอกระบบ)
+   ค้นหาได้ด้วย ชื่อลูกค้า / สินค้า / ยอด / เลขตั๋ว — ไล่ย้อนหลังหาว่าเงินก้อนนั้นคือรายการไหน */
+type MoneyEvent = { at: string; kind: 'มัดจำ' | 'ส่วนต่าง' | 'มอบตั๋ว'; who: string; item: string; amount: number; ref: string };
+function MoneyHistory() {
+  const db = useDatabase();
+  const [q, setQ] = useState('');
+  const nm = (id: string) => db.products.find((p) => p.id === id)?.series_name ?? '(สินค้าถูกลบ)';
+  const un = (id: string) => db.users.find((u) => u.id === id)?.display_name ?? '(ผู้ใช้ถูกลบ)';
+
+  const events: MoneyEvent[] = [];
+  // มัดจำ — ออเดอร์ที่อนุมัติแล้ว (เงินก้อนแรก)
+  for (const o of db.orders) {
+    if (o.status !== 'approved') continue;
+    const items = o.items.filter((i) => i.qty > 0).map((i) => `${nm(i.product_id)}×${i.qty}`).join(' · ');
+    events.push({ at: o.approved_at ?? o.created_at, kind: 'มัดจำ', who: un(o.user_id), item: items || '—', amount: o.total_deposit ?? 0, ref: o.id });
+  }
+  // ส่วนต่าง — สลิปที่อนุมัติแล้ว (แหล่งความจริงของ "โอน 1000 มาทีหลัง")
+  for (const r of db.remainingPayments) {
+    if (r.status !== 'approved') continue;
+    const t = db.tickets.find((x) => x.id === r.ticket_id);
+    events.push({ at: r.approved_at ?? r.created_at, kind: 'ส่วนต่าง', who: un(r.user_id), item: t ? nm(t.product_id) : '(ตั๋วถูกลบ)', amount: r.amount ?? 0, ref: t?.ticket_no ?? r.ticket_id });
+  }
+  // มอบตั๋ว — เงินมัดจำที่เก็บนอกระบบ (ticketSourceOf granted)
+  for (const t of db.tickets) {
+    if (ticketSourceOf(db, t) !== 'granted' || (t.deposit_paid ?? 0) <= 0) continue;
+    events.push({ at: t.approved_at ?? t.created_at, kind: 'มอบตั๋ว', who: un(t.owner_id), item: nm(t.product_id), amount: t.deposit_paid ?? 0, ref: t.ticket_no });
+  }
+  events.sort((a, b) => (a.at < b.at ? 1 : -1));
+
+  const s = q.trim().toLowerCase();
+  const rows = !s ? events : events.filter((e) =>
+    e.who.toLowerCase().includes(s) || e.item.toLowerCase().includes(s) || e.ref.toLowerCase().includes(s)
+    || String(e.amount).includes(s.replace(/[,฿\s]/g, '')));
+  const total = rows.reduce((n, e) => n + e.amount, 0);
+  const KIND: Record<MoneyEvent['kind'], string> = {
+    'มัดจำ': 'bg-[#16a34a]/[0.16] text-[#4ade80]',
+    'ส่วนต่าง': 'bg-[#d97706]/[0.18] text-[#fbbf24]',
+    'มอบตั๋ว': 'bg-[#8b5cf6]/[0.18] text-[#c4b5fd]',
+  };
+  const fmt = (iso: string) => new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="mb-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-base font-bold text-ink">
+        <Icon name="copy" size={18} className="text-[#60a5fa]" /> <span>📋 History Log · เงินเข้าทั้งหมด</span>
+        <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{events.length}</span>
+      </div>
+      <div className="mb-3 text-[11.5px] text-ink-faint">มัดจำ + ส่วนต่าง + มอบตั๋ว — ค้นชื่อลูกค้า / สินค้า / ยอด / เลขตั๋ว เพื่อไล่ย้อนหลัง</div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ค้นหา เช่น ประเสริฐ / 1000 / Orochimaru / NR-2026-07"
+        className="mb-3 w-full rounded-lg border border-subtle bg-surface-3 px-3.5 py-2.5 text-sm outline-none placeholder:text-ink-faint focus:border-accent" />
+      {q.trim() && <div className="mb-2 text-[12px] text-ink-muted2">พบ {rows.length} รายการ · รวม <b className="text-[#4ade80]">{baht(total)}</b></div>}
+      {rows.length === 0 ? (
+        <Empty text={q.trim() ? 'ไม่พบรายการ — ลองพิมพ์ยอดหรือชื่ออื่น' : 'ยังไม่มีเงินเข้า'} />
+      ) : (
+        <div className="flex flex-col divide-y divide-hair">
+          {rows.slice(0, 200).map((e, i) => (
+            <div key={e.ref + e.kind + i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2 text-[12.5px]">
+              <span className="w-[118px] shrink-0 text-[11px] text-ink-faint">{fmt(e.at)}</span>
+              <span className={cx('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-extrabold', KIND[e.kind])}>{e.kind}</span>
+              <span className="min-w-[110px] shrink-0 font-semibold">{e.who}</span>
+              <span className="min-w-[120px] flex-1 truncate text-ink-muted2">{e.item}</span>
+              <span className="shrink-0 font-mono text-[10.5px] text-ink-faint">{e.ref.startsWith('o-') ? '' : e.ref}</span>
+              <span className="w-[82px] shrink-0 text-right font-bold text-primary-soft">{baht(e.amount)}</span>
+            </div>
+          ))}
+          {rows.length > 200 && <div className="py-2 text-center text-[11.5px] text-ink-faint">แสดง 200 รายการล่าสุด · พิมพ์ค้นหาเพื่อแคบลง</div>}
+        </div>
+      )}
     </div>
   );
 }
