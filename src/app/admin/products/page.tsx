@@ -420,9 +420,24 @@ function StatusRow({ product: p }: { product: Product }) {
     // สถานะยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมายังเป็นสถานะเดิม กดจ่ายไม่ได้ (audit 2026-08-08)
     if (await store.flush()) { flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ'); return; }
     // notify this lot's buyers when it starts moving / lands (ryuma push spec 4.1/4.2)
-    if ((next === 'shipping' || next === 'arrived') && pushEnabled(db, next === 'shipping' ? 'lot_shipping' : 'lot_arrived'))
-      sendPush(subsForProductOwners(db, p.id), statusPushPayload(next, p.series_name), dispatch).catch(() => {});
-    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว`);
+    // ⚠ push ไปที่ "เครื่องลูกค้า" ไม่ใช่เครื่องแอดมิน — แอดมินจึงไม่เห็นแจ้งเตือนเอง (เจ้าของ 2026-08-16
+    //   เข้าใจผิดว่า push ไม่ทำงาน). โชว์จำนวนที่ยิงจริงในข้อความ เพื่อให้แอดมินตรวจสอบได้ว่าส่งแล้ว
+    let note = '';
+    if ((next === 'shipping' || next === 'arrived')) {
+      const key = next === 'shipping' ? 'lot_shipping' : 'lot_arrived';
+      if (!pushEnabled(db, key)) note = ` · ⚠ สวิตช์แจ้งเตือน "${key}" ถูกปิดอยู่ (หน้า Push)`;
+      else {
+        const targets = subsForProductOwners(db, p.id);
+        if (targets.length === 0) note = ' · (ลูกค้ายังไม่เปิดกระดิ่ง — ยังไม่มีเครื่องรับแจ้งเตือน)';
+        else {
+          try {
+            const { sent } = await sendPush(targets, statusPushPayload(next, p.series_name), dispatch);
+            note = sent > 0 ? ` · 🔔 แจ้งเตือนลูกค้า ${sent} เครื่องแล้ว` : ' · (กระดิ่งลูกค้าหมดอายุ — ไม่มีเครื่องรับ)';
+          } catch { note = ' · ⚠ ส่งแจ้งเตือนไม่สำเร็จ (เน็ต/เซิร์ฟเวอร์) — สถานะบันทึกแล้ว'; }
+        }
+      }
+    }
+    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว${note}`);
     setOpen(false);
   };
   // ปิดใบพรี = เปิดจอง → ผลิต ผ่าน closeProduction (โค้ดเดียวกับหน้า ปิดรอบสั่งผลิต)

@@ -1033,20 +1033,24 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
     // DNA save: เซฟให้ผ่านก่อนค่อย push "ถึงไทยแล้ว" — แจ้งลูกค้าให้มาจ่ายส่วนต่างทั้งที่สถานะ
     // ยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมาแล้วยังเป็น "เดินทาง" กดจ่ายไม่ได้ งงทั้งคู่
     if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ');
+    // push ไปที่ "เครื่องลูกค้า" ไม่ใช่เครื่องแอดมิน — โชว์จำนวนที่ยิงจริง เพื่อให้แอดมินตรวจสอบได้
+    let notified = 0, withBell = 0;
     if (p && pushEnabled(db, 'lot_arrived')) {
-      const seen = new Set<string>();
-      for (const t of moving) {
-        if (seen.has(t.owner_id)) continue;
-        seen.add(t.owner_id);
-        sendPush(subsForUsers(db, [t.owner_id]), { title: '🇹🇭 ของถึงไทยแล้ว!', body: `${productLabel(db, p.id)} — ${t.remaining_amount > t.remaining_paid ? 'ชำระส่วนต่างเพื่อรับของได้เลย' : 'เลือกวิธีรับของได้เลย'}`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch).catch(() => {});
-      }
+      const results = await Promise.allSettled(owners.map((oid) => {
+        const t = moving.find((x) => x.owner_id === oid)!;
+        const targets = subsForUsers(db, [oid]);
+        if (targets.length) withBell++;
+        return sendPush(targets, { title: '🇹🇭 ของถึงไทยแล้ว!', body: `${productLabel(db, p.id)} — ${t.remaining_amount > t.remaining_paid ? 'ชำระส่วนต่างเพื่อรับของได้เลย' : 'เลือกวิธีรับของได้เลย'}`, url: `/wallet/${encodeURIComponent(t.ticket_no)}` }, dispatch);
+      }));
+      notified = results.reduce((s, r) => s + (r.status === 'fulfilled' ? r.value.sent : 0), 0);
     }
     // เช็คผล: ถ้า SKU แปลงเป็น in-stock แล้ว (จบยอด+มีของเหลือ) บอกแอดมินชัดๆ
     let becameStock = false, stockNow = 0;
     dispatch((d) => { const pp = d.products.find((x) => x.id === b.product_id); becameStock = !!pp?.is_stock; stockNow = pp?.stock_qty ?? 0; return d; });
+    const bell = owners.length === 0 ? '' : notified > 0 ? ` · 🔔 แจ้งเตือน ${notified} เครื่อง (${withBell}/${owners.length} คนเปิดกระดิ่ง)` : ` · (ลูกค้า ${owners.length} คนยังไม่เปิดกระดิ่ง — แจ้งในแชทเพิ่ม)`;
     flash(becameStock
       ? `ถึงไทยแล้ว ✓ ของเหลือกลายเป็น In-Stock มือ 1 · สต๊อก ${stockNow} ชิ้น (ปรับราคาต่อได้ที่ In-Stock)`
-      : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓ แจ้งลูกค้า ${owners.length} คน`);
+      : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓${bell}`);
   };
 
   // ── ร่าง → เปิดขาย (publish): ตั้งราคา/มัดจำ/จำนวนของล็อตนี้ก่อน แล้วค่อยขึ้นหน้าร้าน + push ──
