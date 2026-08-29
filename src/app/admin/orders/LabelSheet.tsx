@@ -55,35 +55,44 @@ function drawSlot(ctx: CanvasRenderingContext2D, slot: LabelSlot, x: number, y: 
   ctx.fillText(`ผู้ส่ง ${SENDER_NAME} ${SENDER_PHONE}`, x + PAD, cy);
   cy += 40;
 
-  // เว้น 2 บรรทัด (spec ข้อ 3 — ที่ว่างสำหรับแปะ/เขียนเพิ่ม)
-  cy += 80;
+  // เว้นที่ว่างสำหรับแปะ/เขียนเพิ่ม (spec ข้อ 3) — ลดลงนิดเพื่อรับบรรทัดเบอร์โทรที่แยกออกมา
+  cy += 54;
 
-  // ผู้รับ (ที่อยู่ลูกค้าที่สมัครมาในระบบ / ที่อยู่ใหม่ที่กรอก)
+  // ผู้รับ — ชื่อ (บรรทัดบน)
   ctx.font = "bold 34px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
-  const headLines = wrapText(ctx, `ผู้รับ ${slot.to.name}${slot.to.phone ? ` โทร. ${slot.to.phone}` : ''}`, innerW);
-  for (const l of headLines.slice(0, 2)) { ctx.fillText(l, x + PAD, cy); cy += 44; }
+  const nameLines = wrapText(ctx, `ผู้รับ ${slot.to.name}`, innerW);
+  for (const l of nameLines.slice(0, 2)) { ctx.fillText(l, x + PAD, cy); cy += 44; }
+  // เบอร์โทร — บรรทัดถัดลงมาใต้ชื่อ (เจ้าของ 2026-08-16: แยกออกจากชื่อ ให้อ่านง่ายตอนโทรหาลูกค้า)
+  if (slot.to.phone) {
+    ctx.font = "bold 36px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
+    ctx.fillText(`โทร. ${slot.to.phone}`, x + PAD, cy);
+    cy += 48;
+  }
+  cy += 4;
   ctx.font = "30px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
   const addrLines = wrapText(ctx, slot.to.address || '— ไม่มีที่อยู่ในระบบ —', innerW);
   for (const l of addrLines.slice(0, 4)) { ctx.fillText(l, x + PAD, cy); cy += 38; }
   if (addrLines.length > 4) { ctx.fillText('…', x + PAD, cy); }
 
   // บรรทัดสุดท้าย: ชื่อสินค้า + ค่าย + จำนวน (วาดจากล่างขึ้น กันชนที่อยู่)
-  ctx.font = "24px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
-  ctx.fillStyle = '#374151';
+  // เจ้าของ 2026-08-16: ให้เด่นขึ้น — ตัวหนา ใหญ่ขึ้น สีเข้ม (เดิม 24px บาง สีเทา อ่านยากตอนแพ็ค)
+  ctx.font = "bold 30px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
+  ctx.fillStyle = '#111';
+  const LINE_H = 38;
   const MAX_PRODUCT_LINES = 3;
   const shown = slot.lines.slice(0, MAX_PRODUCT_LINES);
   const extra = slot.lines.length - shown.length;
   const texts = shown.map((l) => `• ${l.label} ×${l.qty}`);
   if (extra > 0) texts.push(`  …และอีก ${extra} รายการ`);
-  let py = y + h - PAD - texts.length * 30;
-  // เส้นคั่นบางๆ เหนือรายการสินค้า
-  ctx.strokeStyle = '#d1d5db';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(x + PAD, py - 10); ctx.lineTo(x + w - PAD, py - 10); ctx.stroke();
+  let py = y + h - PAD - texts.length * LINE_H;
+  // เส้นคั่นเหนือรายการสินค้า (เข้มขึ้นให้เห็นกรอบชัด)
+  ctx.strokeStyle = '#9ca3af';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x + PAD, py - 14); ctx.lineTo(x + w - PAD, py - 14); ctx.stroke();
   for (const tline of texts) {
     const fit = wrapText(ctx, tline, innerW)[0] ?? tline; // สินค้ายาวเกิน = ตัดบรรทัดเดียว
     ctx.fillText(fit, x + PAD, py);
-    py += 30;
+    py += LINE_H;
   }
 }
 
