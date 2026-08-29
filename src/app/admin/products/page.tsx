@@ -359,16 +359,36 @@ function LotStatus() {
   useEffect(() => { if (db.manufacturers.length && !db.manufacturers.some((m) => m.id === makerId)) setMakerId(db.manufacturers[0].id); }, [db.manufacturers, makerId]);
   // exclude products still in an OPEN board — they're managed via the board (close it first),
   // so they can't be finalized in two places.
-  const lots = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status !== 'closed' && !inOpenBoard(db, p));
+  const isLot = (p: Product) => !p.is_stock && p.status !== 'closed' && !inOpenBoard(db, p);
+  const lots = db.products.filter((p) => p.manufacturer_id === makerId && isLot(p));
+  // สรุปต่อค่าย: กี่ล็อต + ถึงไทยกี่ล็อต (audit 2026-08-16: เจ้าของนึกว่าข้อมูลหาย เพราะหน้านี้
+  // โชว์ทีละค่าย แต่ dropdown ไม่บอกว่าค่ายอื่นมีของ — Kid Naruto อยู่ค่าย Power 56 ล็อต แต่ดูค่าย Zzz อยู่)
+  const perMaker = db.manufacturers.map((m) => {
+    const ls = db.products.filter((p) => p.manufacturer_id === m.id && isLot(p));
+    return { m, total: ls.length, arrived: ls.filter((p) => p.status === 'arrived').length, moving: ls.filter((p) => p.status === 'shipping').length };
+  });
+  const totalLots = perMaker.reduce((s, x) => s + x.total, 0);
+  const needAttention = perMaker.filter((x) => x.m.id !== makerId && (x.arrived > 0 || x.moving > 0));
   return (
     <div className="max-w-[720px]">
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
         <span className="text-[12.5px] font-semibold text-ink-muted">ค่าย</span>
         <select className="rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none" value={makerId} onChange={(e) => setMakerId(e.target.value)}>
-          {db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {perMaker.map(({ m, total, arrived }) => <option key={m.id} value={m.id}>{m.name} ({total}){arrived > 0 ? ` · 🇹🇭 ${arrived}` : ''}</option>)}
         </select>
-        <span className="text-[12px] text-ink-faint">{lots.length} ล็อต</span>
+        <span className="text-[12px] text-ink-faint">{lots.length} ล็อตในค่ายนี้ · รวมทุกค่าย {totalLots} ล็อต</span>
       </div>
+      {/* ทางลัดไปค่ายที่มีของ "ถึงไทย/กำลังมา" — กันของตกหล่นเพราะซ่อนอยู่คนละค่าย */}
+      {needAttention.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5 rounded-xl border border-[#2563eb]/30 bg-[#2563eb]/[0.07] px-3 py-2">
+          <span className="text-[11.5px] font-semibold text-[#93c5fd]">ค่ายอื่นที่มีของถึงไทย/กำลังมา:</span>
+          {needAttention.map(({ m, arrived, moving }) => (
+            <button key={m.id} onClick={() => setMakerId(m.id)} className="rounded-lg border border-[#2563eb]/40 bg-[#2563eb]/[0.12] px-2.5 py-1 text-[11.5px] font-bold text-[#bcd3f5]">
+              {m.name}{arrived > 0 ? ` · 🇹🇭 ${arrived}` : ''}{moving > 0 ? ` · 🚚 ${moving}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
       {lots.length === 0 ? (
         <Panel><div className="py-8 text-center text-ink-faint">ไม่มีล็อตพรีของค่ายนี้</div></Panel>
       ) : (
