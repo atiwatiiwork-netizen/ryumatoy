@@ -119,42 +119,65 @@ export function AdminShell({ children }: { children: ReactNode }) {
     ] },
   ];
 
+  // ── redesign 2026-08-30 (design panel: "Single-line Rail") ──────────────────
+  // เดิมทุกเมนูเป็น 2 บรรทัด (ชื่อ + คำอธิบายสีจาง) = รก คอนทราสต์ต่ำ สแกนยาก
+  // ใหม่: ทุกแถวบรรทัดเดียวความสูงเท่ากัน (h-9) → กวาดตาเป็นคอลัมน์เดียว · คำอธิบายย้ายไป tooltip (title)
+  //   · active เบาลง (แดงจางโปร่ง + แถบ accent ซ้าย) ไม่ตะโกนกลบเมนูอื่น
+  //   · หัวกลุ่มโชว์ "ยอดรวมงานค้าง" ชิดขวา (graft จากแนว C) + จุด live ที่กลุ่ม "ทำวันนี้"
   return (
     <div className="flex min-h-screen bg-base font-sans text-ink">
-      <aside className="sticky top-0 flex h-screen w-[230px] flex-col gap-0.5 overflow-y-auto border-r border-subtle bg-sidebar px-3.5 py-5">
-        <div className="flex items-center gap-2.5 px-2 pb-[14px] pt-1">
+      <aside className="sticky top-0 flex h-screen w-[230px] shrink-0 flex-col border-r border-subtle bg-sidebar">
+        <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
           <img src="/ryuma-logo.png" alt="Ryuma" width={36} height={36} className="rounded-[9px]" />
-          <div>
-            <div className="text-base font-extrabold">Ryuma</div>
-            <div className="text-[10px] tracking-widest text-ink-faint">ADMIN PANEL</div>
+          <div className="leading-tight">
+            <div className="text-[15px] font-extrabold">Ryuma</div>
+            <div className="text-[10px] tracking-[0.14em] text-ink-faint">ADMIN PANEL</div>
           </div>
         </div>
-        {groups.map((g, gi) => (
-          <div key={g.title ?? gi} className={cx(gi > 0 && 'mt-2.5')}>
-            {g.title && <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-ink-faint">{g.title}</div>}
-            <div className="flex flex-col gap-0.5">
-              {g.items.map((n) => (
-                <Link
-                  key={n.label}
-                  href={n.href}
-                  className={cx('flex items-center gap-2.5 rounded-[11px] px-3 py-[9px] text-sm', n.active ? 'bg-cta font-bold text-white' : 'font-medium text-ink-muted2')}
-                >
-                  <Icon name={n.icon} size={19} className="shrink-0" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate leading-tight">{n.label}</span>
-                    {/* คำอธิบายสั้นใต้ชื่อเมนู — บอกว่าเข้าไปทำอะไร ไม่ต้องเดาจากชื่อ */}
-                    {n.sub && <span className={cx('block truncate text-[10px] leading-tight', n.active ? 'text-white/70' : 'text-ink-faint')}>{n.sub}</span>}
-                  </span>
-                  {n.badge ? <span className="shrink-0 rounded-full bg-primary-bright px-[7px] text-[11px] font-bold text-white">{n.badge}</span> : null}
-                </Link>
-              ))}
-            </div>
-          </div>
-        ))}
-        <div className="flex-1" />
-        <div className="flex items-center gap-2.5 rounded-xl border border-subtle bg-surface-2 p-3">
-          <div className="grid h-[34px] w-[34px] place-items-center rounded-full bg-primary font-bold">R</div>
-          <div className="text-xs">
+
+        <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 pb-3">
+          {groups.map((g, gi) => {
+            const groupBadge = g.items.reduce((s, i) => s + (i.badge ?? 0), 0);
+            return (
+              <div key={g.title ?? gi}>
+                {g.title && (
+                  <div className="mb-1 flex items-center gap-1.5 px-2.5">
+                    {gi === 0 && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary-bright" aria-hidden />}
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">{g.title}</span>
+                    {groupBadge > 0 && <span className="ml-auto text-[10px] font-bold tabular-nums text-ink-faint">{groupBadge}</span>}
+                  </div>
+                )}
+                <ul className="space-y-0.5">
+                  {g.items.map((n) => (
+                    <li key={n.label}>
+                      <Link
+                        href={n.href}
+                        title={n.sub}
+                        aria-current={n.active ? 'page' : undefined}
+                        className={cx(
+                          'group relative flex h-9 items-center gap-2.5 rounded-[10px] pl-3 pr-2 text-[13.5px] transition-colors',
+                          n.active ? 'bg-primary/[0.14] font-semibold text-ink' : 'font-medium text-ink-muted2 hover:bg-surface-2 hover:text-ink',
+                        )}
+                      >
+                        {/* แถบ accent ซ้าย (โผล่เฉพาะ active) — ใช้ opacity เพื่อ layout ไม่ขยับตอนสลับ */}
+                        <span aria-hidden className={cx('absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full bg-primary-bright transition-opacity', n.active ? 'opacity-100' : 'opacity-0')} />
+                        <Icon name={n.icon} size={18} className={cx('shrink-0', n.active ? 'text-primary-soft' : 'text-ink-muted2 group-hover:text-ink')} />
+                        <span className="flex-1 truncate">{n.label}</span>
+                        {n.badge ? (
+                          <span className="ml-auto grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-full bg-primary-bright px-1.5 text-[11px] font-bold leading-none tabular-nums text-white">{n.badge}</span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </nav>
+
+        <div className="m-2.5 mt-auto flex items-center gap-2.5 rounded-xl border border-subtle bg-surface-2 p-3">
+          <div className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-primary font-bold text-white">R</div>
+          <div className="text-xs leading-tight">
             <div className="font-semibold">Ryuma Admin</div>
             <div className="text-[10px] text-ink-faint">เจ้าของร้าน</div>
           </div>
