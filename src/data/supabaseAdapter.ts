@@ -79,14 +79,23 @@ const stripItems = (order: Row): Row => {
  *
  * ตารางเล็กยังยิงคำขอเดียวเหมือนเดิม (ได้ < 1000 แถวก็หยุด) จึงไม่มีผลกับความเร็วตอนนี้.
  */
+// ⚠ 4 ตารางนี้ไม่มีคอลัมน์ id (PK เป็นอย่างอื่น) — .order('id') กับพวกมัน = 42703 ทั้งโหลดล้มทั้งแอป
+//   (เหตุการณ์จริง 2026-08-31: ลูกค้าเข้าเว็บไม่ได้ทั้งร้านหลัง deploy .order('id') แบบเหมารวม)
+const NO_ID_COLUMN = new Set(['push_prefs', 'push_config', 'app_config', 'rank_tiers']);
+
 async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unknown[] | null; error: unknown }> {
   const PAGE = 1000;
   const out: unknown[] = [];
+  // ลำดับคงที่กันข้าม/ซ้ำแถวตอนแบ่งหน้า — เฉพาะตารางที่มี id; ที่เหลือเป็นตาราง config เล็ก (หน้าเดียว)
+  let orderable = !NO_ID_COLUMN.has(table);
   for (let from = 0; ; from += PAGE) {
-    // ต้องมีลำดับคงที่ ไม่งั้นถ้ามี insert คั่นระหว่างดึงหน้า แถวขอบหน้าจะถูกข้าม (เห็นของ/hold ขาด →
-    // เสี่ยงขายเกินชั่วคราว) หรือซ้ำ — ทุกตารางมี id (PK) เรียงตามนี้เสถียรเสมอ (regression audit 2026-08-31)
-    const { data, error } = await sb.from(table).select('*').order('id', { ascending: true }).range(from, from + PAGE - 1);
-    if (error) return { data: null, error };
+    const base = sb.from(table).select('*');
+    const { data, error } = await (orderable ? base.order('id', { ascending: true }) : base).range(from, from + PAGE - 1);
+    if (error) {
+      // กันเหนียว: ตารางใหม่ในอนาคตที่ไม่มี id — ถอย order ออกแล้วลองใหม่ แทนที่จะพังทั้งโหลด
+      if (orderable && from === 0 && (error as { code?: string }).code === '42703') { orderable = false; from = -PAGE; continue; }
+      return { data: null, error };
+    }
     out.push(...(data ?? []));
     if (!data || data.length < PAGE) return { data: out, error: null };
   }
