@@ -58,6 +58,10 @@ begin
   if is_app_admin() then return new; end if;
 
   if TG_OP = 'INSERT' then
+    -- ⚠ แอปเซฟด้วย upsert → BEFORE INSERT ยิงแม้แถวมีอยู่แล้ว: ถ้าเป็นตั๋วเดิม (เช่นลูกค้าถือ
+    --   ตั๋วมอบ/legacy กดเลือกวิธีรับของ) ต้องปล่อยผ่านไปให้ด่าน UPDATE คุม ไม่ใช่ raise
+    --   (เหตุการณ์จริง 2026-08-31: guard เดิมทำตั๋วมอบเซฟล้มตลอด — แก้ใน v65 และที่นี่)
+    if exists (select 1 from preorder_tickets t where t.id = new.id) then return new; end if;
     -- ตั๋วที่ลูกค้า "ออกเองได้" มีทางเดียว: ตัวกู้ตั๋วที่หายจากออเดอร์ที่อนุมัติแล้ว
     -- ซึ่ง id ต้องเป็น 't-<id ของรายการในออเดอร์>' (orderTicketId) และรายการนั้นต้องเป็นของเขาจริง
     if not exists (

@@ -25,6 +25,10 @@ begin
   if is_app_admin() or current_setting('ryuma.trusted', true) = 'on' then return new; end if;
 
   if TG_OP = 'INSERT' then
+    -- ⚠ แอปเซฟด้วย upsert → INSERT trigger ยิงแม้แถวมีอยู่: ลูกค้าแก้ที่อยู่/โปรไฟล์ = upsert
+    --   แถวเดิม ต้องปล่อยผ่านให้ด่าน UPDATE คุม ไม่งั้นบังคับ approved=false แล้วชนด่าน
+    --   update จนเซฟล้ม (เหตุการณ์จริง 2026-08-31 — แก้ใน v65 และที่นี่)
+    if exists (select 1 from users u where u.id = new.id) then return new; end if;
     new.is_admin    := false;      -- ⛔ กันยกตัวเองเป็นแอดมิน (ช่องวิกฤตเดิม)
     new.approved    := false;      -- ต้องให้แอดมินอนุมัติเท่านั้น
     new.rank        := 'bronze';   -- ห้ามเกิดมาแรงก์สูง (ราคา/สิทธิ์เข้าถึงพิเศษ)
@@ -63,6 +67,8 @@ begin
   if is_app_admin() or current_setting('ryuma.trusted', true) = 'on' then return new; end if;
 
   if TG_OP = 'INSERT' then
+    -- upsert แถวเดิม → ปล่อยผ่านให้ด่าน UPDATE คุม (เหตุผลเดียวกับ guard users/tickets)
+    if exists (select 1 from order_items i where i.id = new.id) then return new; end if;
     select o.user_id into v_owner from orders o where o.id = new.order_id;
     if v_owner is distinct from app_user_id() then
       raise exception 'ryuma: เพิ่มรายการในออเดอร์คนอื่นไม่ได้';
