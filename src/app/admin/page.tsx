@@ -18,7 +18,7 @@ import { orphanUsedGrants } from '@/domain/services/coupons';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from '@/domain/services/delivery';
 import { productLabel, lineImage, canConvertToInStock, stockRemaining } from '@/domain/services/catalog';
 import { repairTickets } from '@/data/mutations';
-import { cashIn, outstanding } from '@/domain/services/money';
+import { cashIn, outstanding, grantedTicketIds } from '@/domain/services/money';
 import { currentYm } from '@/domain/services/analytics';
 import type { ProductStatus, PreorderTicket } from '@/domain/entities';
 
@@ -48,10 +48,13 @@ export default function AdminDashboardPage() {
   const sameDay = (d?: string) => d != null && new Date(d).toDateString() === now.toDateString();
   const monthCash = cashIn(db, currentYm());
   const owed = outstanding(db);
+  const grantedIds = grantedTicketIds(db);
   const todayIncome =
     db.orders.filter((o) => o.status === 'approved' && sameDay(o.approved_at ?? o.created_at)).reduce((s, o) => s + o.total_deposit, 0)
     + db.remainingPayments.filter((r) => r.status === 'approved' && sameDay(r.approved_at ?? r.created_at)).reduce((s, r) => s + r.amount, 0)
-    + db.sourcingRequests.filter((r) => ['paid', 'working'].includes(r.status) && sameDay(r.paid_at)).reduce((s, r) => s + (r.deposit ?? 0) * (r.qty ?? 1), 0);
+    + db.sourcingRequests.filter((r) => ['paid', 'working'].includes(r.status) && sameDay(r.paid_at)).reduce((s, r) => s + (r.deposit ?? 0) * (r.qty ?? 1), 0)
+    // มัดจำตั๋วที่แอดมินมอบวันนี้ (ไล่เก็บใบพรี) — เดิมตกช่องนี้ ทำ "วันนี้" ต่ำกว่าจริง (เทียบสูตร cashIn.granted)
+    + db.tickets.filter((t) => t.batch_id && (t.deposit_paid ?? 0) > 0 && grantedIds.has(t.id) && sameDay(t.approved_at ?? t.created_at)).reduce((s, t) => s + (t.deposit_paid ?? 0), 0);
   const monthIncome = monthCash.total;
   const lowStock = db.products.filter((p) => p.is_stock && (p.stock_qty ?? 0) <= 5).length;
   const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];

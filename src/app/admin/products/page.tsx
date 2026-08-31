@@ -783,7 +783,7 @@ function Products() {
                 </label>
               </div>
             </div>
-            <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
+            <Field label="สถานะ"><select className={inputCls} value={draft.status} onChange={(e) => set('status', e.target.value as ProductStatus)}>{STATUSES.filter((s) => s.v !== 'delivered' || draft.status === 'delivered').map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}</select></Field>
             {draft.status === 'shipping' && (
               <div className="grid grid-cols-2 gap-3 rounded-xl border border-[#2563eb]/30 bg-[#2563eb]/[0.06] p-3">
                 <Field label="เลข Tracking"><input className={inputCls} value={draft.tracking_no} onChange={(e) => set('tracking_no', e.target.value)} placeholder="เช่น SF123..." /></Field>

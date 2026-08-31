@@ -2,6 +2,12 @@
 -- Ryuma — v63: ปิดช่องโหว่วิกฤต 4 จุด (audit 2026-08-10) · วางใน SQL Editor แล้วกด Run
 -- รันซ้ำได้ ไม่ทำข้อมูลเสีย · ไม่ต้องแก้โค้ดฝั่งแอปเลย (แอปทำงานเหมือนเดิมทุกอย่าง)
 --
+-- 🔧 แก้เพิ่ม (re-audit 2026-08-31 — ต้องรันไฟล์นี้ซ้ำถ้าเคยรันเวอร์ชันเก่าไปแล้ว):
+--   · ส่วน 4: เดิม drop ชื่อ policy ผิด (sr_read) → anon ยังอ่าน stock_reservations ได้จริง (แก้แล้ว)
+--   · ส่วน 2: guard ตั๋วบังคับ variant_id/qty ตอน insert + บังคับ variant_id/qr/approved_at/warehouse_*/
+--            parcel_image/shipped_out_at กลับค่าเดิมตอน update (กันสลับรุ่น/ปลอมหลักฐานโกดัง)
+--   · ยังต้องรัน migration_lockdown_v64.sql ต่อ (ปิด: ยกตัวเองเป็นแอดมิน, ลบแถวเงิน, จองปลอม)
+--
 -- ⚠ ด่วนที่สุดคือส่วนที่ 1 — ตอนนี้ใครก็ได้ที่รู้แค่ URL เว็บ สามารถ:
 --   · ไล่ดูชื่อไฟล์ทั้งถัง (ทดสอบจริงแล้ว: 409 ไฟล์ · สลิปโอนเงินลูกค้า 156 ใบ)
 --   · โหลดสลิปลูกค้าทุกใบ (ชื่อบัญชี/ยอด/เวลาโอน) — ทดสอบจริงแล้ว HTTP 200
@@ -66,6 +72,9 @@ begin
     new.owner_id := app_user_id();
     new.remaining_paid := 0;            -- ห้ามเกิดมาพร้อม "จ่ายครบแล้ว"
     new.status := 'active';
+    -- รุ่นย่อย + จำนวน ต้องมาจากรายการในออเดอร์ (กันสลับรุ่นแพงกว่า/ปั๊มจำนวน)
+    new.variant_id := (select oi.variant_id from order_items oi where 't-' || oi.id = new.id);
+    new.qty := coalesce((select oi.qty from order_items oi where 't-' || oi.id = new.id), 1);
     -- มัดจำต้องไม่เกินที่บันทึกไว้ในรายการของออเดอร์
     new.deposit_paid := least(coalesce(new.deposit_paid, 0),
       coalesce((select oi.deposit_amount from order_items oi where 't-' || oi.id = new.id), 0));
@@ -82,10 +91,20 @@ begin
   new.owner_id         := old.owner_id;
   new.original_buyer_id := old.original_buyer_id;
   new.product_id       := old.product_id;
+  new.variant_id       := old.variant_id;      -- กันสลับรุ่นย่อยเป็นตัวแพงกว่าโดยยอดค้างเท่าเดิม
   new.batch_id         := old.batch_id;
   new.qty              := old.qty;
   new.parcel_no        := old.parcel_no;
   new.carrier          := old.carrier;
+  new.approved_at      := old.approved_at;
+  new.qr_code_url      := old.qr_code_url;
+  -- หลักฐานเข้าโกดังจีน (gate ผลิต→เดินทาง) — ลูกค้าปลอม/รบกวนไม่ได้
+  new.warehouse_at        := old.warehouse_at;
+  new.warehouse_transport := old.warehouse_transport;
+  new.warehouse_slip      := old.warehouse_slip;
+  -- หลักฐาน/เวลาการส่งพัสดุ
+  new.parcel_image     := old.parcel_image;
+  new.shipped_out_at   := old.shipped_out_at;
   return new;
 end $$;
 
@@ -168,6 +187,10 @@ create trigger ryuma_auction_entries_guard before insert or update on auction_en
 drop policy if exists reservations_read on stock_reservations;
 drop policy if exists stock_reservations_read on stock_reservations;
 drop policy if exists reservations_read_authed on stock_reservations;
+-- ⚠ ชื่อจริงของ policy public-read คือ `sr_read` (migration_reserve_v18.sql:22 `using(true)`)
+--   เดิมพลาด drop ชื่อนี้ไป → policy permissive จะ OR กัน anon จึงยังอ่านได้แม้รัน v63
+--   (ยืนยันด้วยการทดสอบจริง 2026-08-31: anon อ่าน stock_reservations ได้ 3 แถว)
+drop policy if exists sr_read on stock_reservations;
 create policy reservations_read_authed on stock_reservations
   for select to authenticated using (true);
 

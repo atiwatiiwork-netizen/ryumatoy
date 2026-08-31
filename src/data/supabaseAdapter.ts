@@ -83,7 +83,9 @@ async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unkn
   const PAGE = 1000;
   const out: unknown[] = [];
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await sb.from(table).select('*').range(from, from + PAGE - 1);
+    // ต้องมีลำดับคงที่ ไม่งั้นถ้ามี insert คั่นระหว่างดึงหน้า แถวขอบหน้าจะถูกข้าม (เห็นของ/hold ขาด →
+    // เสี่ยงขายเกินชั่วคราว) หรือซ้ำ — ทุกตารางมี id (PK) เรียงตามนี้เสถียรเสมอ (regression audit 2026-08-31)
+    const { data, error } = await sb.from(table).select('*').order('id', { ascending: true }).range(from, from + PAGE - 1);
     if (error) return { data: null, error };
     out.push(...(data ?? []));
     if (!data || data.length < PAGE) return { data: out, error: null };

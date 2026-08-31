@@ -555,7 +555,7 @@ export const publishBatch = (batchId: string, patch?: { price?: number; deposit?
  *  เช่นตกลงราคาพิเศษกับลูกค้าเก่าทางแชท หรือไล่เก็บใบพรีเก่าที่ราคาไม่เท่ารอบปัจจุบัน.
  *  ⚠ ราคา/มัดจำที่ใส่จะถูก **snapshot ลงตั๋วใบนั้นใบเดียว** — ห้ามแตะราคาของรอบหรือของ SKU
  *    (ลูกค้าคนอื่นในรอบเดียวกันต้องไม่ได้รับผลกระทบ และหน้าร้านต้องยังโชว์ราคาเดิม) */
-export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number; priceEach?: number }[], startNos?: TicketNoStart, grantId?: string) => (db: Database): Database => {
+export const grantSpecialTickets = (userId: string, items: { batchId: string; qty: number; depEach?: number; priceEach?: number }[], startNos?: TicketNoStart, grantId?: string, inHand?: boolean) => (db: Database): Database => {
   const user = db.users.find((u) => u.id === userId);
   if (!user || items.length === 0) return db;
   const when = new Date();
@@ -585,12 +585,17 @@ export const grantSpecialTickets = (userId: string, items: { batchId: string; qt
     // ของอยู่ในมือจริงไหม ดูที่ "ชนิดของรอบ" (รอบจ่ายเต็ม = ของพร้อมส่ง) ไม่ใช่ยอดที่ลูกค้าคนนี้จ่าย —
     // ไม่งั้นแอดมินที่บันทึกมัดจำบางส่วนบนรอบของในมือ จะได้ตั๋วสถานะ "ยังผลิตอยู่" ค้างถาวร
     const roundIsFullPay = b.deposit_amount >= b.price_total;
+    // ไล่เก็บใบพรีของที่ "อยู่ในมือแล้ว" (SKU ถึงไทย/ส่งมอบ/ปิดรอบ) → ตั๋วต้องเป็น 'arrived' จ่ายส่วนต่างได้ทันที.
+    // ไม่งั้น mirrorStatusFor บังคับเป็น 'open' (กันรอบผลิตใหม่สืบสถานะเก่า) แล้วตั๋วค้างตาย: ลูกค้าจ่ายส่วนต่าง
+    // ไม่ได้ (canPay ต้องการ shipping/arrived/delivered) และแอดมินไม่มีปุ่มขยับ (audit รอยต่อ 2026-08-31)
+    const inHandReal: ProductStatus | undefined =
+      inHand && ['arrived', 'delivered', 'closed'].includes(p.status) ? 'arrived' : undefined;
     issued.push({
       id: ticketId, ticket_no: alloc(franchiseOf(db, p)?.abbr ?? 'xx', issued),
       product_id: p.id, batch_id: b.id, owner_id: userId, original_buyer_id: userId, qty: q,
       deposit_paid: dep * q, remaining_amount: remainingEach * q, remaining_paid: 0,
       status: remainingEach === 0 ? 'paid_full' : 'active',
-      product_status: mirrorStatusFor(p, b.id, remainingEach === 0 || roundIsFullPay), qr_code_url: '',
+      product_status: inHandReal ?? mirrorStatusFor(p, b.id, remainingEach === 0 || roundIsFullPay), qr_code_url: '',
       created_at: when.toISOString(), approved_at: when.toISOString(),
     });
   }
@@ -638,7 +643,8 @@ export const grantFromSurplus = (
     batchId = next.batches[0]?.id;
     if (next === db || !batchId) return db; // เปิดรอบไม่ผ่าน (สินค้าพร้อมส่ง/จำนวนไม่ถูก)
   }
-  const after = grantSpecialTickets(userId, [{ batchId, qty: q, depEach, priceEach }], opts.startNos, opts.grantId)(next);
+  // inHand=true: ไล่เก็บใบพรีของที่อยู่ในมือแล้ว → ตั๋วเป็น 'arrived' จ่ายส่วนต่างได้ทันที (ไม่ค้าง 'open')
+  const after = grantSpecialTickets(userId, [{ batchId, qty: q, depEach, priceEach }], opts.startNos, opts.grantId, true)(next);
   return after === next ? db : after;
 };
 
@@ -1825,21 +1831,31 @@ export const setStockCond = (productId: string, cond: StockCond) => (db: Databas
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
  *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */
-export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: Database): Database => ({
-  ...db,
-  tickets: db.tickets.map((t) => {
-    if (t.id !== ticketId) return t;
-    // ราคาเต็มของตั๋วตาม snapshot = มัดจำ + ส่วนต่างทั้งก้อน (remaining_paid เป็นส่วนหนึ่งของ
-    // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
-    const grandTotal = t.deposit_paid + t.remaining_amount;
-    const dep = Math.max(0, Math.min(newDeposit, grandTotal));
-    const remaining = grandTotal - dep;
-    const paid = Math.min(t.remaining_paid, remaining); // กันจ่ายเกินยอดใหม่
-    // สถานะต้องคำนวณใหม่เสมอ — เดิมค้าง 'paid_full' ทั้งที่ยอดเพิ่งถูกขยับให้ค้างอีก (F4/F6)
-    const status: PreorderTicket['status'] = t.status === 'shipped' ? 'shipped' : paid >= remaining ? 'paid_full' : 'active';
-    return { ...t, deposit_paid: dep, remaining_amount: remaining, remaining_paid: paid, status };
-  }),
-});
+export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: Database): Database => {
+  const t0 = db.tickets.find((t) => t.id === ticketId);
+  if (!t0) return db;
+  // ราคาเต็มของตั๋วตาม snapshot = มัดจำ + ส่วนต่างทั้งก้อน (remaining_paid เป็นส่วนหนึ่งของ
+  // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
+  const grandTotal = t0.deposit_paid + t0.remaining_amount;
+  const dep = Math.max(0, Math.min(newDeposit, grandTotal));
+  const delta = dep - t0.deposit_paid;                 // มัดจำที่ขยับ (บวก=เพิ่ม)
+  const remaining = grandTotal - dep;
+  const paid = Math.min(t0.remaining_paid, remaining); // กันจ่ายเกินยอดใหม่
+  // สถานะต้องคำนวณใหม่เสมอ — เดิมค้าง 'paid_full' ทั้งที่ยอดเพิ่งถูกขยับให้ค้างอีก (F4/F6)
+  const status: PreorderTicket['status'] = t0.status === 'shipped' ? 'shipped' : paid >= remaining ? 'paid_full' : 'active';
+  // ⚠ ตั๋วที่มาจากออเดอร์ (id = t-<orderItemId>): cashIn.deposits อ่านจาก order.total_deposit ไม่ใช่ตั๋ว
+  //   ถ้าขยับมัดจำบนตั๋วอย่างเดียว → รายได้ (อ่านออเดอร์) กับ ค้างเก็บ (อ่านตั๋ว) ไม่ตรงกัน = เงินหายเงียบๆ
+  //   (audit รอยต่อ 2026-08-31). จึงต้องขยับ total_deposit ตาม delta เดียวกัน. ตั๋วมอบ (ไม่มีออเดอร์)
+  //   ไม่เข้าเงื่อนไขนี้ — cashIn.granted อ่านจากตั๋วตรงๆ อยู่แล้ว จึงถูกต้องโดยไม่ต้องแตะออเดอร์
+  const itemId = ticketId.startsWith('t-') ? ticketId.slice(2) : null;
+  const orderId = itemId ? db.orders.find((o) => o.items.some((it) => it.id === itemId))?.id : undefined;
+  return {
+    ...db,
+    tickets: db.tickets.map((t) => (t.id === ticketId ? { ...t, deposit_paid: dep, remaining_amount: remaining, remaining_paid: paid, status } : t)),
+    orders: delta === 0 || !orderId ? db.orders
+      : db.orders.map((o) => (o.id === orderId ? { ...o, total_deposit: Math.max(0, (o.total_deposit ?? 0) + delta) } : o)),
+  };
+};
 
 /** Admin deletes a ticket entirely — removes it + any linked remaining-payments and
  *  P2P transfer listings from the DB. (Stock return for in-stock items is handled in the
