@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import Link from 'next/link';
 import { AdminTabs } from '@/components/AdminTabs';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -19,6 +20,7 @@ import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { ticketSourceOf, ticketOrigin } from '@/domain/services/ticketSource';
 import { pendingHeld, poolHeld } from '@/domain/services/reservations';
+import { ticketPaidFull } from '@/domain/services/delivery';
 import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
@@ -688,19 +690,63 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
 const batchStillMoving = (db: Database, b: ProductBatch) =>
   db.tickets.some((t) => t.batch_id === b.id && ['production', 'shipping'].includes(t.product_status) && t.status !== 'shipped');
 
+/** แท็บจัดการของเข้า (เจ้าของ 2026-09-05): 🚚 = ของกำลังเดินทาง รอกด "ถึงไทย" · 🇹🇭 = ถึงแล้ว เก็บเงิน+ใส่เลขพัสดุ */
+type LotStage = 'shipping' | 'arrived';
+const stageTickets = (tickets: PreorderTicket[], stage: LotStage) =>
+  tickets.filter((t) => t.status !== 'shipped' && t.product_status === stage);
+
+/** ชิปเก็บเงินของลอต: ชำระแล้ว x/y · ค้างจ่าย · รอใส่เลขพัสดุ (ลิงก์ไปหน้าจัดส่ง) — วางในแถวชิปสถานะ */
+function PayChips({ tickets }: { tickets: PreorderTicket[] }) {
+  const total = tickets.length;
+  if (total === 0) return null;
+  const paid = tickets.filter(ticketPaidFull).length;
+  const awaitTrack = tickets.filter((t) => ticketPaidFull(t) && t.status !== 'shipped' && !t.parcel_no && ['arrived', 'delivered'].includes(t.product_status)).length;
+  const owing = total - paid;
+  return (<>
+    <span className={cx('rounded-md px-1.5 py-0.5', paid >= total ? 'bg-[#16a34a]/15 text-[#4ade80]' : 'bg-white/[0.07] text-ink-muted2')}>💰 ชำระแล้ว {paid}/{total}</span>
+    {owing > 0 && <span className="rounded-md bg-[#d97706]/15 px-1.5 py-0.5 text-[#fbbf24]">ค้างจ่าย {owing}</span>}
+    {awaitTrack > 0 && <Link href="/admin/shipping" className="rounded-md bg-[#2563eb]/[0.15] px-1.5 py-0.5 text-[#93c5fd] hover:bg-[#2563eb]/25">📮 รอใส่เลขพัสดุ {awaitTrack} → จัดส่ง</Link>}
+  </>);
+}
+
 function OpenRounds() {
   const db = useDatabase();
+  const [view, setView] = useState<'all' | LotStage>('all');
   const open = db.batches.filter((b) => b.status === 'open');
   const closedMoving = db.batches.filter((b) => b.status !== 'open' && batchStillMoving(db, b));
-  const active = [...open, ...closedMoving].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  // ── จัดกลุ่มตาม SKU: สินค้าเดียวกันทุกลอต (พรีปกติ + รอบพิเศษทุกรอบ) อยู่การ์ดเดียว (เจ้าของ 2026-09-05
+  const activeAll = [...open, ...closedMoving].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+  // ── ลอตรายขั้นสำหรับแท็บ 🚚/🇹🇭: มองทุกรอบ (เปิด+ปิด) + ลอตพรีปกติ — ของเข้าไม่สนว่ารอบยังขายอยู่ไหม ──
+  const stageBatches = (stage: LotStage) => db.batches.filter((b) => {
+    const ts = db.tickets.filter((t) => t.batch_id === b.id);
+    if (stageTickets(ts, stage).length > 0) return true;
+    // รอบเปิดที่ยังไม่มีลูกค้าแต่ตัวของกำลังเดินทาง — ต้องเห็นในแท็บ 🚚 เพื่อกดถึงไทย (ของเหลือ → In-Stock)
+    if (stage === 'shipping' && b.status === 'open' && ts.length === 0) {
+      const p = db.products.find((x) => x.id === b.product_id);
+      return !!p && !p.is_stock && p.status === 'shipping';
+    }
+    return false;
+  }).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const stageNormalPids = (stage: LotStage) => {
+    const pids = new Set<string>();
+    for (const t of db.tickets) if (!t.batch_id && t.status !== 'shipped' && t.product_status === stage) pids.add(t.product_id);
+    return pids;
+  };
+  const shipB = stageBatches('shipping'), arrB = stageBatches('arrived');
+  const shipN = stageNormalPids('shipping'), arrN = stageNormalPids('arrived');
+
+  // ── ชุดที่โชว์ตามแท็บ → จัดกลุ่มตาม SKU: สินค้าเดียวกันทุกลอตอยู่การ์ดเดียว (เจ้าของ 2026-09-05
   //    "สินค้าเดียวกันมีหลายลอต พอของมาต้องกดแยกกัน") — แต่ละลอตยังมีแถบสถานะของตัวเอง ──
+  const batchesShown = view === 'all' ? activeAll : view === 'shipping' ? shipB : arrB;
+  const normalShown = view === 'all' ? null : view === 'shipping' ? shipN : arrN;
   const skuIds: string[] = [];
   const byProduct = new Map<string, ProductBatch[]>();
-  for (const b of active) {
+  for (const b of batchesShown) {
     if (!byProduct.has(b.product_id)) { byProduct.set(b.product_id, []); skuIds.push(b.product_id); }
     byProduct.get(b.product_id)!.push(b);
   }
+  // SKU ที่มีเฉพาะลอตพรีปกติในขั้นนี้ (ไม่มีรอบพิเศษเข้าเกณฑ์) ก็ต้องโผล่ในแท็บด้วย
+  if (normalShown) for (const pid of normalShown) if (!byProduct.has(pid)) { byProduct.set(pid, []); skuIds.push(pid); }
   // กลุ่ม SKU เรียงตามค่าย (คงลำดับใหม่→เก่าในค่าย)
   const groups: { makerId: string; makerName: string; logo?: string; ids: string[] }[] = [];
   for (const pid of skuIds) {
@@ -711,14 +757,25 @@ function OpenRounds() {
     if (!g) { g = { makerId: id, makerName: mk?.name ?? 'อื่นๆ', logo: mk?.logo_url, ids: [] }; groups.push(g); }
     g.ids.push(pid);
   }
+  const stage = view === 'all' ? undefined : view;
   return (
     <div className="mb-6">
-      <div className="mb-2 flex items-center gap-2 text-[15px] font-bold">
-        สินค้า & รอบขาย ({skuIds.length} สินค้า · {active.length} รอบ)
-        {open.length > 0 && <MultiGrant batches={open} />}
+      {/* แท็บจัดการของเข้า — แยกงาน "รอกดถึงไทย" กับ "ถึงแล้ว เก็บเงิน/ส่ง" ออกจากลิสต์รวม */}
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <SubBtn active={view === 'all'} onClick={() => setView('all')}>📦 ทั้งหมด ({activeAll.length} รอบ)</SubBtn>
+        <SubBtn active={view === 'shipping'} onClick={() => setView('shipping')}>🚚 กำลังเดินทาง — รอกดถึงไทย ({shipB.length + shipN.size})</SubBtn>
+        <SubBtn active={view === 'arrived'} onClick={() => setView('arrived')}>🇹🇭 ถึงไทยแล้ว — เก็บเงิน/ส่ง ({arrB.length + arrN.size})</SubBtn>
       </div>
-      {active.length === 0 ? (
-        <div className="rounded-2xl border border-subtle bg-surface-2 py-6 text-center text-[13px] text-ink-faint">ยังไม่มีรอบเปิดอยู่</div>
+      <div className="mb-2 flex items-center gap-2 text-[15px] font-bold">
+        {view === 'all' ? <>สินค้า & รอบขาย ({skuIds.length} สินค้า · {activeAll.length} รอบ)</>
+          : view === 'shipping' ? <>🚚 ของกำลังเดินทางมาไทย — ถึงเมื่อไหร่กด "🇹🇭 ถึงไทย" ที่ลอตนั้น ({skuIds.length} สินค้า)</>
+          : <>🇹🇭 ของถึงไทยแล้ว — ตามเก็บส่วนต่าง + ใส่เลขพัสดุ ({skuIds.length} สินค้า)</>}
+        {view === 'all' && open.length > 0 && <MultiGrant batches={open} />}
+      </div>
+      {skuIds.length === 0 ? (
+        <div className="rounded-2xl border border-subtle bg-surface-2 py-6 text-center text-[13px] text-ink-faint">
+          {view === 'all' ? 'ยังไม่มีรอบเปิดอยู่' : view === 'shipping' ? 'ไม่มีของกำลังเดินทาง' : 'ไม่มีของค้างจัดการ — ถึงไทยแล้วจบงานหมด 🎉'}
+        </div>
       ) : groups.map((g) => (
         <div key={g.makerId} className="mb-4">
           <div className="mb-2 flex items-center gap-2 text-[12.5px] font-bold text-ink-muted">
@@ -727,7 +784,7 @@ function OpenRounds() {
             <span className="text-ink-faint">· {g.ids.length} สินค้า</span>
           </div>
           <div className="grid gap-3 lg:grid-cols-2 lg:items-start">
-            {g.ids.map((pid) => <SkuGroup key={pid} productId={pid} batches={byProduct.get(pid)!} />)}
+            {g.ids.map((pid) => <SkuGroup key={pid} productId={pid} batches={byProduct.get(pid)!} stage={stage} />)}
           </div>
         </div>
       ))}
@@ -738,14 +795,15 @@ function OpenRounds() {
 /** การ์ดรวม "สินค้า 1 ตัว = ทุกลอต": หัวการ์ดคือตัว SKU · ข้างในไล่ทีละลอต — พรีปกติ (กระดานหลัก)
  *  แล้วตามด้วยรอบพิเศษทุกรอบ แต่ละลอตโชว์ ราคาเต็ม/มัดจำ/เหลือ + แถบสถานะกดแยกลอตได้
  *  (ของเข้าไม่พร้อมกัน — รอบไหนถึงก่อนกดรอบนั้น ไม่กระทบลอตอื่น) */
-function SkuGroup({ productId, batches }: { productId: string; batches: ProductBatch[] }) {
+function SkuGroup({ productId, batches, stage }: { productId: string; batches: ProductBatch[]; stage?: LotStage }) {
   const db = useDatabase();
   const p = db.products.find((x) => x.id === productId);
   const allTickets = db.tickets.filter((t) => t.product_id === productId);
   const normalTickets = allTickets.filter((t) => !t.batch_id);
   // ลอตพรีปกติโชว์เมื่อยังมีตั๋วกระดานหลักที่งานไม่จบ — SKU ที่เกิดจากรอบพิเศษล้วนไม่มีลอตนี้
-  // (อยู่ในกระดานปิดพรี = จัดการผ่านกระดาน ไม่โชว์ซ้ำที่นี่)
-  const showNormal = !!p && !p.is_stock && !inOpenBoard(db, p) && normalTickets.some((t) => t.status !== 'shipped');
+  // (อยู่ในกระดานปิดพรี = จัดการผ่านกระดาน ไม่โชว์ซ้ำที่นี่) · ในแท็บ 🚚/🇹🇭 = โชว์เฉพาะเมื่อมีตั๋วอยู่ขั้นนั้น
+  const showNormal = !!p && !p.is_stock && !inOpenBoard(db, p) && (
+    stage ? stageTickets(normalTickets, stage).length > 0 : normalTickets.some((t) => t.status !== 'shipped'));
   const lots = batches.length + (showNormal ? 1 : 0);
   const openBatches = batches.filter((b) => b.status === 'open');
   const movingClosed = batches.filter((b) => b.status !== 'open');
@@ -774,12 +832,13 @@ function SkuGroup({ productId, batches }: { productId: string; batches: ProductB
             <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-bold">
               <span className="rounded-md bg-[#d4af37]/15 px-1.5 py-0.5 text-[#f1d27a]">🧵 พรีปกติ · กระดานหลัก</span>
               <span className="font-mono font-normal text-ink-faint">{baht(p.price_total)} · มัดจำ {baht(p.deposit_amount)} · ตั๋ว {normalTickets.length} ใบ</span>
+              <PayChips tickets={normalTickets} />
             </div>
             <StatusRow product={p} />
           </div>
         )}
         {openBatches.map((b) => <RoundRow key={b.id} batch={b} inGroup />)}
-        {movingClosed.length > 0 && (
+        {!stage && movingClosed.length > 0 && (
           <div className="pt-1 text-[10.5px] font-bold text-ink-faint">รอบที่ปิดขายแล้ว — ของยังเดินอยู่ กดถึงไทยแยกรอบได้ที่นี่</div>
         )}
         {movingClosed.map((b) => <RoundRow key={b.id} batch={b} readOnly inGroup />)}
@@ -1280,6 +1339,8 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
               {nArr > 0 && <span className="rounded-md bg-[#16a34a]/15 px-1.5 py-0.5 text-[#4ade80]">ถึงไทย {nArr}</span>}
               {p?.sf_code && <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 font-mono text-ink-muted2">SF {p.sf_code.slice(0, 14)}</span>}
             </>)}
+            {/* สถานะเก็บเงินของลอต (เจ้าของ 2026-09-05): ชำระแล้ว x/y · ค้างจ่าย · รอใส่เลขพัสดุ */}
+            <PayChips tickets={tickets} />
           </div>
         </div>
       </div>
