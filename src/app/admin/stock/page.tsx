@@ -10,7 +10,8 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
-import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel, inOpenBoard } from '@/domain/services/catalog';
+import { StatusRow } from '../products/StatusRow';
 import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, grantFromSurplus, setSpecialGate, logActivity } from '@/data/mutations';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { BulkNewSku } from './BulkNewSku';
@@ -22,7 +23,7 @@ import { store } from '@/data/store';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
 import { ocrImage } from '@/lib/ocr';
-import type { PreorderTicket, Product, ProductBatch, WcfType } from '@/domain/entities';
+import type { Database, PreorderTicket, Product, ProductBatch, WcfType } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const labelCls = 'mb-1 block text-[12px] font-semibold text-ink-muted';
@@ -682,36 +683,51 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
 
 // ── Open rounds management + history ────────────────────────────────────────
 // การ์ดรูปสไตล์ "หาของนอกระบบ" + group ตามค่าย (เจ้าของ 2026-07-20)
+/** รอบที่ปิดขายแล้วแต่ "ของยังเดินอยู่" (มีตั๋วผลิต/เดินทางค้าง) — ของเข้าไม่พร้อมกัน
+ *  ต้องกดถึงไทยแยกรอบจากในกลุ่ม SKU ไม่ใช่ไปคุ้ยหาในประวัติ (เจ้าของ 2026-09-05) */
+const batchStillMoving = (db: Database, b: ProductBatch) =>
+  db.tickets.some((t) => t.batch_id === b.id && ['production', 'shipping'].includes(t.product_status) && t.status !== 'shipped');
+
 function OpenRounds() {
   const db = useDatabase();
-  const open = db.batches.filter((b) => b.status === 'open').sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  // group ด้วยค่ายของสินค้า (คงลำดับใหม่→เก่าในกลุ่ม)
-  const groups: { makerId: string; makerName: string; logo?: string; batches: ProductBatch[] }[] = [];
-  for (const b of open) {
-    const p = db.products.find((x) => x.id === b.product_id);
+  const open = db.batches.filter((b) => b.status === 'open');
+  const closedMoving = db.batches.filter((b) => b.status !== 'open' && batchStillMoving(db, b));
+  const active = [...open, ...closedMoving].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  // ── จัดกลุ่มตาม SKU: สินค้าเดียวกันทุกลอต (พรีปกติ + รอบพิเศษทุกรอบ) อยู่การ์ดเดียว (เจ้าของ 2026-09-05
+  //    "สินค้าเดียวกันมีหลายลอต พอของมาต้องกดแยกกัน") — แต่ละลอตยังมีแถบสถานะของตัวเอง ──
+  const skuIds: string[] = [];
+  const byProduct = new Map<string, ProductBatch[]>();
+  for (const b of active) {
+    if (!byProduct.has(b.product_id)) { byProduct.set(b.product_id, []); skuIds.push(b.product_id); }
+    byProduct.get(b.product_id)!.push(b);
+  }
+  // กลุ่ม SKU เรียงตามค่าย (คงลำดับใหม่→เก่าในค่าย)
+  const groups: { makerId: string; makerName: string; logo?: string; ids: string[] }[] = [];
+  for (const pid of skuIds) {
+    const p = db.products.find((x) => x.id === pid);
     const mk = p ? manufacturerOf(db, p) : undefined;
     const id = mk?.id ?? 'none';
     let g = groups.find((x) => x.makerId === id);
-    if (!g) { g = { makerId: id, makerName: mk?.name ?? 'อื่นๆ', logo: mk?.logo_url, batches: [] }; groups.push(g); }
-    g.batches.push(b);
+    if (!g) { g = { makerId: id, makerName: mk?.name ?? 'อื่นๆ', logo: mk?.logo_url, ids: [] }; groups.push(g); }
+    g.ids.push(pid);
   }
   return (
     <div className="mb-6">
       <div className="mb-2 flex items-center gap-2 text-[15px] font-bold">
-        รอบที่เปิดอยู่ ({open.length})
+        สินค้า & รอบขาย ({skuIds.length} สินค้า · {active.length} รอบ)
         {open.length > 0 && <MultiGrant batches={open} />}
       </div>
-      {open.length === 0 ? (
+      {active.length === 0 ? (
         <div className="rounded-2xl border border-subtle bg-surface-2 py-6 text-center text-[13px] text-ink-faint">ยังไม่มีรอบเปิดอยู่</div>
       ) : groups.map((g) => (
         <div key={g.makerId} className="mb-4">
           <div className="mb-2 flex items-center gap-2 text-[12.5px] font-bold text-ink-muted">
             {g.logo ? <img src={g.logo} alt="" className="h-5 w-5 rounded-full object-cover" /> : <Icon name="store" size={15} className="text-primary-soft" />}
             {g.makerName}
-            <span className="text-ink-faint">· {g.batches.length} รอบ</span>
+            <span className="text-ink-faint">· {g.ids.length} สินค้า</span>
           </div>
-          <div className="grid gap-2.5 lg:grid-cols-2">
-            {g.batches.map((b) => <RoundRow key={b.id} batch={b} />)}
+          <div className="grid gap-3 lg:grid-cols-2 lg:items-start">
+            {g.ids.map((pid) => <SkuGroup key={pid} productId={pid} batches={byProduct.get(pid)!} />)}
           </div>
         </div>
       ))}
@@ -719,9 +735,64 @@ function OpenRounds() {
   );
 }
 
+/** การ์ดรวม "สินค้า 1 ตัว = ทุกลอต": หัวการ์ดคือตัว SKU · ข้างในไล่ทีละลอต — พรีปกติ (กระดานหลัก)
+ *  แล้วตามด้วยรอบพิเศษทุกรอบ แต่ละลอตโชว์ ราคาเต็ม/มัดจำ/เหลือ + แถบสถานะกดแยกลอตได้
+ *  (ของเข้าไม่พร้อมกัน — รอบไหนถึงก่อนกดรอบนั้น ไม่กระทบลอตอื่น) */
+function SkuGroup({ productId, batches }: { productId: string; batches: ProductBatch[] }) {
+  const db = useDatabase();
+  const p = db.products.find((x) => x.id === productId);
+  const allTickets = db.tickets.filter((t) => t.product_id === productId);
+  const normalTickets = allTickets.filter((t) => !t.batch_id);
+  // ลอตพรีปกติโชว์เมื่อยังมีตั๋วกระดานหลักที่งานไม่จบ — SKU ที่เกิดจากรอบพิเศษล้วนไม่มีลอตนี้
+  // (อยู่ในกระดานปิดพรี = จัดการผ่านกระดาน ไม่โชว์ซ้ำที่นี่)
+  const showNormal = !!p && !p.is_stock && !inOpenBoard(db, p) && normalTickets.some((t) => t.status !== 'shipped');
+  const lots = batches.length + (showNormal ? 1 : 0);
+  const openBatches = batches.filter((b) => b.status === 'open');
+  const movingClosed = batches.filter((b) => b.status !== 'open');
+  return (
+    <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
+      {/* หัวการ์ด = ตัวสินค้า (SKU) — สรุปรวมทุกลอต */}
+      <div className="mb-2.5 flex items-center gap-3">
+        <div className="h-[56px] w-[56px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+          {p?.images[0]
+            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={22} className="text-primary-soft/25" /></div>}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14.5px] font-extrabold">{p?.series_name ?? '—'}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5 text-[10.5px] font-bold">
+            <span className="rounded-md bg-primary/[0.16] px-1.5 py-0.5 text-primary-soft">{lots} ลอต</span>
+            <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">ตั๋วรวม {allTickets.length}</span>
+            {p && !p.is_stock && <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">คลัง {stockRemaining(db, p)}</span>}
+            {p?.eta_note && <span className="rounded-md bg-[#2563eb]/[0.12] px-1.5 py-0.5 text-[#93c5fd]">{p.eta_note}</span>}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        {showNormal && p && (
+          <div className="rounded-xl border border-subtle bg-surface-3/40 px-3.5 pb-1 pt-2.5">
+            <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-bold">
+              <span className="rounded-md bg-[#d4af37]/15 px-1.5 py-0.5 text-[#f1d27a]">🧵 พรีปกติ · กระดานหลัก</span>
+              <span className="font-mono font-normal text-ink-faint">{baht(p.price_total)} · มัดจำ {baht(p.deposit_amount)} · ตั๋ว {normalTickets.length} ใบ</span>
+            </div>
+            <StatusRow product={p} />
+          </div>
+        )}
+        {openBatches.map((b) => <RoundRow key={b.id} batch={b} inGroup />)}
+        {movingClosed.length > 0 && (
+          <div className="pt-1 text-[10.5px] font-bold text-ink-faint">รอบที่ปิดขายแล้ว — ของยังเดินอยู่ กดถึงไทยแยกรอบได้ที่นี่</div>
+        )}
+        {movingClosed.map((b) => <RoundRow key={b.id} batch={b} readOnly inGroup />)}
+      </div>
+    </div>
+  );
+}
+
 function History() {
   const db = useDatabase();
-  const closed = db.batches.filter((b) => b.status !== 'open').sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  // รอบปิดที่ "ของยังเดินอยู่" ถูกยกไปโชว์ในกลุ่ม SKU ข้างบนแล้ว — ประวัติเก็บเฉพาะรอบที่จบจริง
+  // (โชว์ซ้ำสองที่ = แอดมินกดสถานะจากสองการ์ดของรอบเดียวกัน สับสน)
+  const closed = db.batches.filter((b) => b.status !== 'open' && !batchStillMoving(db, b)).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   if (closed.length === 0) return null;
   return (
     <div className="mb-6">
@@ -919,7 +990,7 @@ function Step({ on, tone, onClick, children }: { on: boolean; tone: 'amber' | 'b
   );
 }
 
-function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: boolean }) {
+function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOnly?: boolean; inGroup?: boolean }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
@@ -1180,20 +1251,25 @@ function RoundRow({ batch: b, readOnly }: { batch: ProductBatch; readOnly?: bool
   };
 
   return (
-    <div className={cx('rounded-xl border border-subtle bg-surface-2 p-3.5', readOnly && moving.length === 0 && 'opacity-75')}>
-      {/* การ์ดรูปสไตล์ "หาของนอกระบบ": รูป + ชื่อ + ราคา + chips สถานะรอบ */}
+    <div className={cx('rounded-xl border border-subtle p-3.5', inGroup ? 'bg-surface-3/40' : 'bg-surface-2', readOnly && moving.length === 0 && 'opacity-75')}>
+      {/* การ์ดรูปสไตล์ "หาของนอกระบบ": รูป + ชื่อ + ราคา + chips สถานะรอบ
+          inGroup = อยู่ในการ์ดรวม SKU แล้ว → ไม่ต้องซ้ำรูป/ชื่อสินค้า โชว์แค่ชื่อลอต */}
       <div className="flex items-start gap-3">
-        <div className="h-[64px] w-[64px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
-          {p?.images[0]
-            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
-            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={24} className="text-primary-soft/25" /></div>}
-        </div>
+        {!inGroup && (
+          <div className="h-[64px] w-[64px] shrink-0 overflow-hidden rounded-[10px] border border-subtle bg-stripe">
+            {p?.images[0]
+              ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+              : <div className="grid h-full w-full place-items-center"><Icon name="box" size={24} className="text-primary-soft/25" /></div>}
+          </div>
+        )}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold">{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span> <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}</div>
+          <div className="truncate text-sm font-bold">{inGroup ? <span className="text-[#c4b5fd]">⚡ {b.label}</span> : <>{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span></>} <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}</div>
           {/* ตัวเลขให้อ่านแบบเดียวกับที่เจ้าของคิด (เคส Orochimaru "ไม่ 14 หรอ"): ขาย/เปิดกด/ติดจอง/เก็บ
               ⏳ ติดจอง = คนกำลังจ่าย/สลิปรอตรวจ — ฝั่งลูกค้าเห็น "หมดชั่วคราว" ตอนเลขนี้กินของเหลือหมด */}
           <div className="mt-0.5 font-mono text-[11px] text-ink-faint">
             เปิด {fmtDate(b.created_at)} · {baht(b.price_total)} · {fullPay ? 'จ่ายเต็ม' : `มัดจำ ${baht(b.deposit_amount)}`} · เหลือ {remaining}/{b.stock_qty} · ขาย {sold}
+            {/* เวลาของเข้า: วันเข้าโกดังจีนของลอตนี้ (ใบแรกที่ยืนยัน) = จุดเริ่มนับ ETA จริง */}
+            {(() => { const w = tickets.map((t) => t.warehouse_at).filter(Boolean).sort()[0]; return w ? <span className="text-[#93c5fd]"> · เข้าโกดัง {fmtDate(w)}</span> : null; })()}
             {(() => { const held = pendingHeld(db, b.product_id, b.id); return held > 0 ? <span className="animate-blink font-bold text-[#fbbf24]"> · ⏳ ติดจอง {held} (ลูกค้าเห็นเหลือ {Math.max(0, remaining - held)})</span> : null; })()}
             {p && !p.is_stock ? ` · 🔒 เก็บหลังรอบนี้ ${Math.max(0, stockRemaining(db, p) - remaining)}` : ''}
           </div>
