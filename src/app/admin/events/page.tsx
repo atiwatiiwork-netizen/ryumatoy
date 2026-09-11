@@ -102,7 +102,7 @@ export default function AdminEventsPage() {
 
   return (
     <div>
-      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }]} />
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }]} />
       <div className="mb-1 text-2xl font-extrabold">กิจกรรม / Event</div>
       <div className="mb-5 text-[13px] text-ink-faint">พรีครบตามเป้า รับคูปองอัตโนมัติ · แสดงแบนเนอร์หน้าแรก + ความคืบหน้าในหน้าสินค้า</div>
 

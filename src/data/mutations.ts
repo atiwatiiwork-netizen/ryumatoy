@@ -26,6 +26,7 @@ import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orpha
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn } from '../domain/services/points';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -338,12 +339,18 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
     // always applies. Skipped for the customer-side Diamond auto-approve (mintRewards:false).
     const withRewards = mintRewards ? grantAllCampaignRewards(order.user_id)(updated) : updated;
 
+    // คะแนนสะสม (v66): ตั๋วที่ "เกิดมาปิดยอดแล้ว" (พร้อมส่ง / รอบจ่ายเต็ม) ได้คะแนนตอนนี้เลย —
+    // ใบพรีปกติยังค้างส่วนต่าง จะได้ตอน approveRemainingPayment งวดสุดท้าย. ผูกกับ mintRewards
+    // ด้วยเหตุผลเดียวกับคูปอง Event: RLS ห้ามลูกค้าเขียน point_ledger → ทาง Diamond auto-approve
+    // (customer session) ต้องไม่แตะ ไม่งั้น flush ทั้งก้อนล้มและตั๋วหาย
+    const withPoints = mintRewards ? mintPointsForTickets(newTickets.map((t) => t.id))(withRewards) : withRewards;
+
     // rank progress counts APPROVED pieces → auto-raise a request when a threshold is crossed
     const user = db.users.find((u) => u.id === order.user_id);
-    const pieces = rankPiecesOf(withRewards, order.user_id);
+    const pieces = rankPiecesOf(withPoints, order.user_id);
     const elig = eligibleRank(db.settings, pieces);
-    if (user && rankIndex(elig) > rankIndex(user.rank)) return requestRank(order.user_id, elig, pieces)(withRewards);
-    return withRewards;
+    if (user && rankIndex(elig) > rankIndex(user.rank)) return requestRank(order.user_id, elig, pieces)(withPoints);
+    return withPoints;
   };
 }
 
@@ -927,7 +934,7 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
   const pay = db.remainingPayments.find((r) => r.id === paymentId);
   if (!pay || pay.status !== 'pending') return db;
-  return {
+  const next: Database = {
     ...db,
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
     tickets: db.tickets.map((t) => {
@@ -938,6 +945,8 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
       return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
   };
+  // คะแนนสะสม (v66): งวดนี้ทำให้ตั๋ว "ปิดยอด" → ได้คะแนนครั้งเดียว (id ผูกตั๋ว = กันซ้ำ) ในมุทเทชันเดียวกัน
+  return mintPointsForTickets([pay.ticket_id])(next);
 };
 
 /** Admin ปฏิเสธสลิปส่วนต่าง (สลิปปลอม/ยอดผิด) → คืนคูปองให้ลูกค้า + ยอดหนี้คงเดิม (ไม่เคยถูกหัก).
@@ -1894,6 +1903,8 @@ export const deleteTicket = (ticketId: string) => (db: Database): Database => {
     //   แถวที่เหลือกลายเป็นกำพร้า (ticket_id ชี้ตั๋วที่ไม่มีแล้ว) ซึ่ง cashIn ยังนับได้ถูกต้อง
     remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId || r.status === 'approved'),
     transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
+    // คะแนนสะสม (v66): ตั๋วที่เคยได้คะแนนแล้วถูกลบ → ดึงคะแนนกลับด้วยแถวติดลบ (ไม่ลบแถวเดิม — สมุด append-only)
+    pointLedger: (() => { const r = reverseRowForTicket(db, ticketId); return r ? [r, ...db.pointLedger] : db.pointLedger; })(),
   };
 };
 
@@ -2283,4 +2294,49 @@ export const buyNowLocal = (auctionId: string, userId: string) => (db: Database)
     auctions: db.auctions.map((x) => (x.id === auctionId ? { ...x, current_price: a.buy_now_price!, bid_count: x.bid_count + 1 } : x)),
   };
   return closeAuctionLocal(auctionId)(withBid);
+};
+
+// ── คะแนนสะสม (v66 · ryuma-points-spec) ─────────────────────────────────────
+/** ให้คะแนนตั๋วที่ "ปิดยอดแล้ว" ในรายการ — ตัวเดียวที่ approveOrder / approveRemainingPayment เรียก.
+ *  ไม่เข้าเกณฑ์/ได้ไปแล้ว/ระบบปิด = ข้ามเงียบๆ (earnRowForTicket ตัดสิน). id แถวผูกตั๋ว → ส่งซ้ำ = แถวเดิม. */
+export const mintPointsForTickets = (ticketIds: string[], actorId?: string) => (db: Database): Database => {
+  const fresh: Database['pointLedger'] = [];
+  const now = new Date().toISOString();
+  for (const id of ticketIds) {
+    const t = db.tickets.find((x) => x.id === id);
+    if (!t) continue;
+    // กันซ้ำในชุดเดียวกัน (ตั๋ว id เดียวโผล่ 2 ครั้ง) — hasEarned ดูแค่ db เดิม
+    if (fresh.some((e) => e.ref_id === id)) continue;
+    const row = earnRowForTicket(db, t, { actorId, now });
+    if (row) fresh.push(row);
+  }
+  return fresh.length ? { ...db, pointLedger: [...fresh, ...db.pointLedger] } : db;
+};
+
+/** แอดมินเติม/หักคะแนนมือ (เช่น ตั๋วมอบเก็บเงินนอกระบบ, แก้ยอดหลังปิดยอด) — ต้องมีเหตุผลเสมอ */
+export const adjustPoints = (actorId: string, userId: string, delta: number, note: string) => (db: Database): Database => {
+  const d = Math.trunc(delta);
+  if (!d || !db.users.some((u) => u.id === userId)) return db;
+  // หักเกินยอดคงเหลือไม่ได้ — ยอดติดลบทำให้ลูกค้าเห็นตัวเลขงงและซ่อนหนี้คะแนนผิด
+  const bal = db.pointLedger.filter((e) => e.user_id === userId).reduce((s, e) => s + e.delta, 0);
+  if (d < 0 && bal + d < 0) return db;
+  const row: Database['pointLedger'][number] = {
+    id: id('pl-adj'), user_id: userId, delta: d, kind: 'admin_adjust',
+    note: note.trim() || (d > 0 ? 'แอดมินเติมคะแนน' : 'แอดมินหักคะแนน'),
+    created_by: actorId, created_at: new Date().toISOString(),
+  };
+  return logActivity(actorId, 'adjust_points', `${d > 0 ? 'เติม' : 'หัก'}คะแนน ${Math.abs(d)} · ${db.users.find((u) => u.id === userId)?.display_name ?? ''} · ${row.note}`, { targetId: userId, amount: Math.abs(d) })({ ...db, pointLedger: [row, ...db.pointLedger] });
+};
+
+/** ให้คะแนน "ย้อนหลัง" ทุกตั๋วที่ปิดยอดแล้วแต่ยังไม่มีแถว (ตั๋วที่จบก่อนเปิดระบบ / เซฟล้ม) — แอดมินกดเอง
+ *  ⚠ force: ทำงานแม้ระบบยังปิด (พรีวิว) — เจ้าของตัดสินใจเองว่าจะนับของเก่าไหม */
+export const backfillPoints = (actorId: string) => (db: Database): Database => {
+  const now = new Date().toISOString();
+  const rows = ticketsMissingEarn(db)
+    .map((t) => earnRowForTicket(db, t, { actorId, now, force: true, note: undefined }))
+    .filter((r): r is NonNullable<typeof r> => !!r)
+    .map((r) => ({ ...r, note: `ย้อนหลัง · ${r.note ?? ''}` }));
+  if (!rows.length) return db;
+  const total = rows.reduce((s, r) => s + r.delta, 0);
+  return logActivity(actorId, 'backfill_points', `ให้คะแนนย้อนหลัง ${rows.length} ใบ รวม ${total} คะแนน`, { amount: total })({ ...db, pointLedger: [...rows, ...db.pointLedger] });
 };

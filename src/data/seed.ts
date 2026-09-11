@@ -183,6 +183,7 @@ export const SEED_DATABASE: Database = {
   auctionBids: [],
   auctionWatch: [],
   auctionEntries: [],
+  pointLedger: [],
   paymentAccounts: [
     { id: 'pay-1', name: 'Ryuma Toy Shop', number: '081-234-5678', active: true },
   ],
@@ -204,6 +205,12 @@ export const SEED_DATABASE: Database = {
     rank_gold_deposit_pct: 50,
     instock_disc_gold_type: 'percent',
     instock_disc_gold_value: 0,
+    points_enabled: false,
+    points_per_100baht: 1,
+    points_min_redeem: 50,
+    points_max_per_piece_pre: 100,
+    points_max_per_piece_instock: 200,
+    points_expire_months: 12,
     announcements: [],
   },
 };

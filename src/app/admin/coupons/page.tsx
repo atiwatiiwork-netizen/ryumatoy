@@ -37,7 +37,7 @@ export default function AdminCouponsPage() {
 
   return (
     <div>
-      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }]} />
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }]} />
       <div className="mb-1 text-2xl font-extrabold">คูปองส่วนลด</div>
       <div className="mb-5 text-[13px] text-ink-faint">สร้างคูปอง (ลดเป็นบาท) · มอบให้ลูกค้า · ติดตามใครได้/ใครใช้</div>
 

@@ -111,6 +111,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/members', 'user', 'สมาชิก & Ranks', newMembers + rankReq, 'อนุมัติ + เลื่อนขั้น'),
       it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด', undefined, 'ค้นตั๋ว/ตรวจย้อนหลัง'),
       it('/admin/coupons', 'tag', 'คูปอง & กิจกรรม', undefined, 'ส่วนลด + Event'),
+      it('/admin/points', 'verified', 'คะแนนสะสม', undefined, 'พรีวิว + ให้คะแนน'),
     ] },
     { title: 'ร้าน', items: [
       it('/admin', 'dashboard', 'ภาพรวม & ตัวเลข', undefined, 'เงิน + สถานะรวม'),

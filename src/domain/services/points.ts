@@ -1,0 +1,205 @@
+import type { Database, PointLedgerEntry, PreorderTicket, ShopSettings } from '../entities';
+import { ticketPaid, ticketDue, isSourcingTicket } from './money';
+import { orderOfTicket } from './journey';
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ *  POINTS — SINGLE SOURCE OF TRUTH ของระบบคะแนนสะสม (ryuma-points-spec, migration v66)
+ *  ────────────────────────────────────────────────────────────────────────────
+ *  DNA RULE: ทุกที่ที่ "คิด/ให้/ใช้/โชว์" คะแนน ต้องเรียกไฟล์นี้ ห้ามคำนวณเองในหน้าจอ.
+ *
+ *  กติกา (เจ้าของ 2026-09-10/11):
+ *   · ทุก 100฿ ที่จ่ายจริง = points_per_100baht คะแนน (ปัดลง) · 1 คะแนน = 1฿
+ *   · ได้คะแนน "ครั้งเดียว" ตอนตั๋วปิดยอด (ticketDue = 0) — ใบพรี/รอบพิเศษได้ตอนส่วนต่างงวดสุดท้าย
+ *     ถูกอนุมัติ, พร้อมส่ง/จ่ายเต็มได้ตอนอนุมัติออเดอร์ (ตั๋วเกิดมาปิดยอดแล้ว) — **ไม่ให้ตอนมัดจำ**
+ *   · ฐานคิด = ticketPaid (มัดจำ + ส่วนต่าง "สุทธิ" หลังคูปอง) → ส่วนลดไม่สร้างคะแนน
+ *   · ไม่ให้: ตั๋วหาของ (เงินอยู่ฝั่งหาของ) · ออเดอร์จ่ายค่าประมูล (เฟสหน้า)
+ *   · Milestone 500/1,000/2,000 นับ "สะสมตลอดชีพ" (ผลรวมแถวบวก) ไม่ถอย รางวัล = สิทธิ์ ไม่ใช่เงิน
+ *
+ *  กันบั๊ก (บทเรียนคูปอง orphan v38/v39 + ตั๋วซ้ำ Mongkol):
+ *   · id แถว earn ผูกตั๋ว (earnIdFor) → อนุมัติซ้ำ/เซฟล้มส่งซ้ำ = แถวเดิม · DB มี unique(kind, ref_id) อีกชั้น
+ *   · แถวคะแนนเกิดใน mutation เดียวกับการอนุมัติ (ไม่ใช่ effect แยก) → ไม่มี "ปิดยอดแล้วแต่คะแนนไม่มา"
+ *   · ลูกค้าเขียน point_ledger ไม่ได้เลย (RLS) → ปั้นคะแนนเองไม่ได้
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+export const POINT_BAHT_UNIT = 100;
+
+/** id แถว "ได้คะแนน" ของตั๋วใบนี้ — ตัวเดียวที่ทุกทางต้องใช้ (idempotency key) */
+export const earnIdFor = (ticketId: string) => `pl-earn-${ticketId}`;
+export const reverseIdFor = (ticketId: string) => `pl-rev-${ticketId}`;
+
+/** คะแนนจากยอดเงิน — ปัดลงทุก 100฿ */
+export function pointsForAmount(settings: ShopSettings, amount: number): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Math.floor(amount / POINT_BAHT_UNIT) * Math.max(0, settings.points_per_100baht ?? 1);
+}
+
+/** ตั๋วใบนี้ "ปิดยอดแล้ว" (จ่ายครบ + มีเงินจริง) */
+export const ticketClosed = (t: PreorderTicket) => ticketDue(t) === 0 && ticketPaid(t) > 0;
+
+/** ตั๋วใบนี้เข้าเกณฑ์ได้คะแนนไหม (ไม่ดูว่าเคยได้แล้วหรือยัง) — ตัวชี้ขาดตัวเดียว */
+export function ticketEarnEligible(db: Database, t: PreorderTicket): { ok: boolean; why?: string } {
+  if (!ticketClosed(t)) return { ok: false, why: 'ยังไม่ปิดยอด' };
+  if (isSourcingTicket(db, t)) return { ok: false, why: 'ตั๋วหาของ (ไม่ให้เฟสนี้)' };
+  // ออเดอร์ที่เป็นตัวจ่ายค่าประมูล (v61) — คะแนนประมูลค่อยว่ากันเฟสหน้า
+  if (t.id.startsWith('t-')) {
+    const itemId = t.id.slice(2);
+    const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
+    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return { ok: false, why: 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)' };
+  } else {
+    const order = orderOfTicket(db, t);
+    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return { ok: false, why: 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)' };
+  }
+  return { ok: true };
+}
+
+/** คะแนนที่ตั๋วใบนี้ "ควรได้" (ฐาน = จ่ายจริงทั้งใบ) — 0 ถ้าไม่เข้าเกณฑ์ */
+export function pointsForTicket(db: Database, settings: ShopSettings, t: PreorderTicket): number {
+  return ticketEarnEligible(db, t).ok ? pointsForAmount(settings, ticketPaid(t)) : 0;
+}
+
+export const hasEarned = (db: Database, ticketId: string) => db.pointLedger.some((e) => e.id === earnIdFor(ticketId));
+
+/**
+ * สร้างแถว "ได้คะแนน" ให้ตั๋วใบนี้ — คืน null เมื่อ: ระบบปิด / ไม่เข้าเกณฑ์ / ได้ไปแล้ว / คะแนนเป็น 0.
+ * ⚠ ต้องเรียกกับ db ที่ตั๋ว "อัปเดตแล้ว" (หลังบวกส่วนต่าง) — ผู้เรียกคือ approveOrder / approveRemainingPayment
+ */
+export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorId?: string; now?: string; force?: boolean; note?: string } = {}): PointLedgerEntry | null {
+  if (!opts.force && !db.settings.points_enabled) return null;
+  if (hasEarned(db, t.id)) return null;
+  const pts = pointsForTicket(db, db.settings, t);
+  if (pts <= 0) return null;
+  const product = db.products.find((p) => p.id === t.product_id);
+  return {
+    id: earnIdFor(t.id),
+    user_id: t.owner_id,
+    delta: pts,
+    kind: 'earn_ticket',
+    ref_type: 'ticket',
+    ref_id: t.id,
+    note: opts.note ?? `ปิดยอด ${t.ticket_no} · ${product?.series_name ?? 'สินค้า'}${t.qty > 1 ? ` ×${t.qty}` : ''} · จ่ายรวม ฿${Math.round(ticketPaid(t)).toLocaleString('en-US')}`,
+    created_by: opts.actorId ?? 'system',
+    created_at: opts.now ?? new Date().toISOString(),
+  };
+}
+
+/** แถว "ดึงคะแนนกลับ" เมื่อตั๋วที่เคยได้คะแนนถูกลบ — null ถ้าไม่เคยได้ หรือดึงกลับไปแล้ว */
+export function reverseRowForTicket(db: Database, ticketId: string, opts: { actorId?: string; note?: string } = {}): PointLedgerEntry | null {
+  const earn = db.pointLedger.find((e) => e.id === earnIdFor(ticketId));
+  if (!earn) return null;
+  if (db.pointLedger.some((e) => e.id === reverseIdFor(ticketId))) return null;
+  return {
+    id: reverseIdFor(ticketId),
+    user_id: earn.user_id,
+    delta: -earn.delta,
+    kind: 'reverse_ticket',
+    ref_type: 'ticket',
+    ref_id: ticketId,
+    note: opts.note ?? `ดึงคืน — ตั๋วถูกลบ (${earn.note ?? ticketId})`,
+    created_by: opts.actorId ?? 'system',
+    created_at: new Date().toISOString(),
+  };
+}
+
+// ── อ่านค่า ───────────────────────────────────────────────────────────────────
+
+export const ledgerOf = (db: Database, userId: string) =>
+  db.pointLedger.filter((e) => e.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+/** ยอดคงเหลือใช้ได้ = ผลรวมทุกแถว (ไม่ติดลบเวลาโชว์) */
+export const balanceOf = (db: Database, userId: string) =>
+  Math.max(0, db.pointLedger.filter((e) => e.user_id === userId).reduce((s, e) => s + e.delta, 0));
+
+/** สะสมตลอดชีพ = ผลรวมแถวบวกที่เป็น "ได้จริง" (ไม่นับแอดมินเติม/คืน) หัก reverse — ใช้กับ milestone */
+export const lifetimeOf = (db: Database, userId: string) =>
+  Math.max(0, db.pointLedger
+    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket'))
+    .reduce((s, e) => s + e.delta, 0));
+
+/** วันที่เคลื่อนไหวล่าสุด (ใช้กับกติกาหมดอายุ 12 เดือน — ตัวกวาดยังไม่เปิด) */
+export const lastActivityOf = (db: Database, userId: string) => ledgerOf(db, userId)[0]?.created_at;
+
+/** หนี้คะแนนค้างทั้งร้าน (คะแนน = บาท) */
+export function pointsLiability(db: Database): { points: number; customers: number } {
+  const byUser = new Map<string, number>();
+  for (const e of db.pointLedger) byUser.set(e.user_id, (byUser.get(e.user_id) ?? 0) + e.delta);
+  let points = 0, customers = 0;
+  for (const v of byUser.values()) if (v > 0) { points += v; customers += 1; }
+  return { points, customers };
+}
+
+// ── Milestone (สิทธิ์ ไม่ใช่เงิน — เจ้าของ 2026-09-10) ─────────────────────────
+
+export interface Milestone { threshold: number; label: string; emoji: string; perks: string[] }
+export const MILESTONES: Milestone[] = [
+  { threshold: 500, label: 'นักสะสม', emoji: '🥉', perks: ['ป้ายในโปรไฟล์', 'เห็นรอบใหม่ก่อน 3 ชม.'] },
+  { threshold: 1000, label: 'ขาประจำ', emoji: '🥈', perks: ['เพดานของ hot 3 ตัว/คน', 'เห็นรอบใหม่ก่อน 6 ชม.'] },
+  { threshold: 2000, label: 'ตำนาน', emoji: '🥇', perks: ['จองของพร้อมส่งก่อน 24 ชม.', 'คิวส่งมอบก่อน', 'ป้ายพิเศษ'] },
+];
+
+export function milestoneProgress(lifetime: number): { reached: Milestone[]; next: Milestone | null; pct: number; need: number } {
+  const reached = MILESTONES.filter((m) => lifetime >= m.threshold);
+  const next = MILESTONES.find((m) => lifetime < m.threshold) ?? null;
+  const prev = reached[reached.length - 1]?.threshold ?? 0;
+  const pct = next ? Math.min(100, ((lifetime - prev) / (next.threshold - prev)) * 100) : 100;
+  return { reached, next, pct, need: next ? next.threshold - lifetime : 0 };
+}
+
+// ── ใช้คะแนน (เฟสหน้า — เตรียมสูตรกลางไว้ให้ checkout / wallet เรียก) ───────────
+
+/** ยอดคะแนนที่ใช้ได้กับรายการนี้ = min(คงเหลือ, เพดาน×qty, ยอดค้างหลังคูปอง) และต้อง ≥ ขั้นต่ำ */
+export function maxRedeemable(settings: ShopSettings, args: { balance: number; isStock: boolean; qty: number; payable: number }): number {
+  const cap = (args.isStock ? settings.points_max_per_piece_instock : settings.points_max_per_piece_pre) * Math.max(1, args.qty);
+  const m = Math.max(0, Math.floor(Math.min(args.balance, cap, args.payable)));
+  return m >= settings.points_min_redeem ? m : 0;
+}
+
+// ── เครื่องมือแอดมิน: ตรวจสอบ / จำลอง / ย้อนหลัง ────────────────────────────────
+
+export interface SimRow {
+  userId: string;
+  closedTickets: number;      // ตั๋วปิดยอดที่เข้าเกณฑ์
+  wouldEarn: number;          // คะแนนที่ "ควรมี" ถ้าให้ทุกใบที่ปิดยอดแล้ว
+  earned: number;             // ที่ให้ไปแล้วจริง (แถว earn)
+  missing: number;            // ควรได้แต่ยังไม่มีแถว (ตั๋วปิดยอดก่อนเปิดระบบ / เซฟล้ม)
+  balance: number;
+  lifetime: number;
+}
+
+/** จำลองทั้งร้าน: ใครควรมีกี่คะแนน เทียบกับที่ให้ไปจริง — หัวใจของหน้าพรีวิวแอดมิน */
+export function simulateAll(db: Database): SimRow[] {
+  const rows = new Map<string, SimRow>();
+  const get = (uid: string) => {
+    let r = rows.get(uid);
+    if (!r) { r = { userId: uid, closedTickets: 0, wouldEarn: 0, earned: 0, missing: 0, balance: balanceOf(db, uid), lifetime: lifetimeOf(db, uid) }; rows.set(uid, r); }
+    return r;
+  };
+  for (const t of db.tickets) {
+    if (!ticketEarnEligible(db, t).ok) continue;
+    const pts = pointsForAmount(db.settings, ticketPaid(t));
+    if (pts <= 0) continue;
+    const r = get(t.owner_id);
+    r.closedTickets += 1;
+    r.wouldEarn += pts;
+    if (hasEarned(db, t.id)) r.earned += pts; else r.missing += pts;
+  }
+  // คนที่มีแถวในสมุดแต่ตั๋วถูกลบไปแล้ว ก็ต้องโผล่ (ยอดคงเหลือ/หนี้)
+  for (const e of db.pointLedger) get(e.user_id);
+  return [...rows.values()].sort((a, b) => b.wouldEarn - a.wouldEarn || b.balance - a.balance);
+}
+
+/** ตั๋วที่ปิดยอดแล้ว เข้าเกณฑ์ แต่ยังไม่มีแถวคะแนน (ใช้กับปุ่ม "ให้คะแนนย้อนหลัง") */
+export function ticketsMissingEarn(db: Database): PreorderTicket[] {
+  return db.tickets.filter((t) => ticketEarnEligible(db, t).ok && pointsForAmount(db.settings, ticketPaid(t)) > 0 && !hasEarned(db, t.id));
+}
+
+export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji: string }> = {
+  earn_ticket: { label: 'ได้คะแนน · ปิดยอด', emoji: '✨' },
+  reverse_ticket: { label: 'ดึงคืน · ตั๋วถูกลบ', emoji: '↩️' },
+  redeem_order: { label: 'ใช้ลด · ซื้อพร้อมส่ง', emoji: '🛒' },
+  redeem_remaining: { label: 'ใช้ลด · ส่วนต่าง', emoji: '🎟️' },
+  refund: { label: 'คืนคะแนน · สลิปไม่ผ่าน', emoji: '↩️' },
+  expire: { label: 'หมดอายุ', emoji: '⌛' },
+  admin_adjust: { label: 'แอดมินปรับ', emoji: '🛠️' },
+};

@@ -104,7 +104,7 @@ async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unkn
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, settings] =
       await Promise.all([
         fetchAll(sb, 'users'),
         fetchAll(sb, 'categories'),
@@ -148,6 +148,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         fetchAll(sb, 'auction_bids'),
         fetchAll(sb, 'auction_watch'),
         fetchAll(sb, 'auction_entries'),
+        // คะแนนสะสม (v66) — ยังไม่รัน migration = ตารางไม่มี → degrade เป็น [] (ไม่อยู่ใน fatal list)
+        fetchAll(sb, 'point_ledger'),
         fetchAll(sb, 'shop_settings'),
       ]);
 
@@ -208,6 +210,7 @@ export const supabaseAdapter: PersistenceAdapter = {
       auctionBids: (auctionBids.data ?? []) as Database['auctionBids'],
       auctionWatch: (auctionWatch.data ?? []) as Database['auctionWatch'],
       auctionEntries: (auctionEntries.data ?? []) as Database['auctionEntries'],
+      pointLedger: (pointLedger.data ?? []) as Database['pointLedger'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -226,6 +229,13 @@ export const supabaseAdapter: PersistenceAdapter = {
             rank_gold_deposit_pct: Number(s.rank_gold_deposit_pct ?? SEED_DATABASE.settings.rank_gold_deposit_pct),
             instock_disc_gold_type: (s.instock_disc_gold_type ?? SEED_DATABASE.settings.instock_disc_gold_type) as 'percent' | 'baht',
             instock_disc_gold_value: Number(s.instock_disc_gold_value ?? SEED_DATABASE.settings.instock_disc_gold_value),
+            // คะแนนสะสม (v66) — คอลัมน์ยังไม่มีก่อนรัน migration → ใช้ค่าตั้งต้น (ปิดอยู่)
+            points_enabled: Boolean(s.points_enabled ?? SEED_DATABASE.settings.points_enabled),
+            points_per_100baht: Number(s.points_per_100baht ?? SEED_DATABASE.settings.points_per_100baht),
+            points_min_redeem: Number(s.points_min_redeem ?? SEED_DATABASE.settings.points_min_redeem),
+            points_max_per_piece_pre: Number(s.points_max_per_piece_pre ?? SEED_DATABASE.settings.points_max_per_piece_pre),
+            points_max_per_piece_instock: Number(s.points_max_per_piece_instock ?? SEED_DATABASE.settings.points_max_per_piece_instock),
+            points_expire_months: Number(s.points_expire_months ?? SEED_DATABASE.settings.points_expire_months),
             hero_product_id: (s.hero_product_id ?? undefined) as string | undefined,
             hero_image_url: (s.hero_image_url ?? undefined) as string | undefined,
             announcements: (Array.isArray(s.announcements) ? s.announcements : []) as Database['settings']['announcements'],
@@ -304,12 +314,21 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
     await step('ticket_transfers', () => syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]));
     await step('rank_tiers', () => syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name'));
+    // คะแนนสะสม (v66): เขียนเพิ่มอย่างเดียว (append-only) — แถวไม่ถูกแก้/ลบ, id ผูกตั๋ว → ส่งซ้ำ = ON CONFLICT DO NOTHING
+    // วางท้ายสุด: ถ้าตั๋ว/สลิปยังไม่ขึ้น คะแนนต้องไม่ขึ้นก่อน (ด่านก่อนเงิน, เงินก่อนของแถม)
+    await step('point_ledger', () => syncAppendOnly(sb, 'point_ledger', next.pointLedger as unknown as Row[], base.pointLedger as unknown as Row[]));
 
     // Only write settings when they actually changed — otherwise every customer
     // save would try to upsert shop_settings, which RLS blocks for non-admins.
     if (JSON.stringify(next.settings) !== JSON.stringify(base.settings)) {
       await step('shop_settings', async () => {
-        const { error } = await sb.from('shop_settings').upsert({ id: 'default', ...next.settings });
+        // คะแนนสะสม (v66): คอลัมน์ points_* ยังไม่มีจนกว่าจะรัน migration — ถ้าแอดมินแก้แบนเนอร์/บัญชี
+        // ก่อนรัน v66 แล้วส่ง points_* ไปด้วย = upsert ทั้งก้อนล้ม (ตั้งค่าอื่นเซฟไม่ได้ทั้งร้าน)
+        // → ส่ง points_* เฉพาะตอนที่มันเปลี่ยนจริง (แก้จากหน้า /admin/points ซึ่งต้องรัน v66 ก่อนอยู่แล้ว)
+        const row: Row = { id: 'default', ...next.settings };
+        const b = base.settings as unknown as Row;
+        for (const k of Object.keys(row)) if (k.startsWith('points_') && JSON.stringify(row[k]) === JSON.stringify(b[k])) delete row[k];
+        const { error } = await sb.from('shop_settings').upsert(row);
         if (error) throw error;
       });
     }

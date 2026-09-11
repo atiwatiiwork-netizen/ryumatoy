@@ -441,6 +441,13 @@ export interface ShopSettings {
   rank_gold_deposit_pct: number; // 50 — Gold pays this % of the standard deposit (rest rolls into remaining; total unchanged)
   instock_disc_gold_type: 'percent' | 'baht'; // Gold in-stock discount kind
   instock_disc_gold_value: number; // 0 by default
+  // ระบบคะแนนสะสม (v66 · ryuma-points-spec) — ทุกจุดที่คิดคะแนนต้องอ่านผ่าน domain/services/points.ts
+  points_enabled: boolean; // false = โหมดพรีวิว (ยังไม่ให้คะแนนจริง)
+  points_per_100baht: number; // 1 — ทุก 100฿ ที่จ่ายจริง ได้กี่คะแนน
+  points_min_redeem: number; // 50 — ใช้ขั้นต่ำต่อครั้ง (เฟสใช้คะแนน)
+  points_max_per_piece_pre: number; // 100 — เพดานลดต่อชิ้น ส่วนต่างใบพรี
+  points_max_per_piece_instock: number; // 200 — เพดานลดต่อชิ้น ซื้อพร้อมส่ง
+  points_expire_months: number; // 12 — หมดอายุเมื่อไม่มีความเคลื่อนไหว (ตัวกวาดยังไม่เปิด)
   // homepage hero banner (admin-controlled)
   hero_product_id?: string; // featured product; empty = auto-pick first open pre-order
   hero_image_url?: string; // custom banner image; empty = product image / placeholder
@@ -626,6 +633,7 @@ export interface Database {
   auctionBids: AuctionBid[];      // โหมดทดลอง/แอดมินเท่านั้น — ลูกค้าอ่านผ่าน RPC ที่ปิดชื่อ
   auctionWatch: AuctionWatch[];
   auctionEntries: AuctionEntry[];
+  pointLedger: PointLedgerEntry[]; // สมุดคะแนนสะสม (v66) — บวก/ลบ ไม่แก้แถวเก่า
   settings: ShopSettings;
 }
 
@@ -764,4 +772,19 @@ export interface AuctionEntry {
   created_at: string;
   approved_at?: string;
   used_at?: string;
+}
+
+/** สมุดคะแนนสะสม (migration v66 · ryuma-points-spec) — เขียนเพิ่มอย่างเดียว ยอดคงเหลือ = sum(delta).
+ *  แถว "ได้คะแนน" ผูก id กับตั๋ว (pl-earn-<ticket_id>) เสมอ → มินต์ซ้ำจากคนละเครื่อง = แถวเดิม ไม่ใช่แถวใหม่. */
+export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
+export interface PointLedgerEntry {
+  id: string;
+  user_id: string;
+  delta: number;            // +ได้ / -ใช้
+  kind: PointLedgerKind;
+  ref_type?: 'ticket' | 'order' | 'remaining_payment';
+  ref_id?: string;
+  note?: string;            // ข้อความไทยพร้อมอ่าน (เลขตั๋ว/ชื่อสินค้า/เหตุผลที่ปรับ)
+  created_by?: string;      // 'system' | admin user id
+  created_at: string;
 }
