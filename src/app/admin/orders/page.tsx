@@ -17,7 +17,8 @@ import { ticketSourceOf } from '@/domain/services/ticketSource';
 import { cx } from '@/components/ui';
 import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
-import type { PreorderTicket } from '@/domain/entities';
+import { pendingRpGroups, type RpGroup } from '@/domain/services/payments';
+import type { PreorderTicket, RemainingPayment } from '@/domain/entities';
 
 /** ศูนย์การเงินออเดอร์: สลิปมัดจำ + ส่วนต่าง + รอถึงไทย. งานจัดส่งทั้งหมดย้ายไปแท็บ "จัดส่ง"
  *  (/admin/shipping — เจ้าของ 2026-07-23) เหลือแบนเนอร์ลิงก์ไว้ที่นี่. */
@@ -39,6 +40,64 @@ export default function OrdersHubPage() {
   const pendingOrders = db.orders.filter((o) => o.status === 'pending_approval');
   // §2 pending remaining-balance slips
   const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
+  const rpGroups = pendingRpGroups(db);
+
+  /** อนุมัติสลิปส่วนต่าง 1 กลุ่ม (1 ใบหรือหลายใบที่ใช้สลิปเดียวกัน) — เงินเข้า-หนี้ลด ต้องเกิดครั้งเดียวต่อใบ */
+  const approveRps = async (rps: RemainingPayment[]) => {
+    if (rpBusy) return; // กันกดรัวระหว่างรอเซฟ
+    setRpBusy('group');
+    try {
+      const applied: RemainingPayment[] = [];
+      let allFull = true;
+      for (const r of rps) {
+        dispatch(approveRemainingPayment(r.id));
+        // read-back ต่อใบ: mutation no-op ได้ (อีกเครื่องอนุมัติไปแล้ว) + ยอดอาจยังไม่ครบจริง (แก้มัดจำระหว่างรอตรวจ)
+        let ok = false;
+        dispatch((d) => {
+          ok = d.remainingPayments.find((x) => x.id === r.id)?.status === 'approved';
+          const x = d.tickets.find((t2) => t2.id === r.ticket_id);
+          if (!(x && x.remaining_paid >= x.remaining_amount)) allFull = false;
+          return d;
+        });
+        if (ok) applied.push(r);
+      }
+      if (applied.length === 0) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "รับยอดแล้ว" — push ที่ออกไปเรียกคืนไม่ได้
+      if (await store.flush()) return flash('อนุมัติแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+      const nos = applied.map((r) => ticketOf(r.ticket_id)?.ticket_no ?? '').filter(Boolean);
+      const first = ticketOf(applied[0].ticket_id);
+      if (pushEnabled(db, 'rp_approved'))
+        sendPush(subsForUsers(db, [applied[0].user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${nos.join(', ')} ${allFull ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: applied.length === 1 && first ? `/wallet/${encodeURIComponent(first.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
+      const total = applied.reduce((s, r) => s + r.amount, 0);
+      dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง ${applied.length > 1 ? `${applied.length} ใบ ` : ''}(${userName(applied[0].user_id)})`, { targetId: applied[0].ticket_id, targetLabel: nos.join(' '), amount: total }));
+      flash(applied.length > 1 ? `อนุมัติส่วนต่างแล้ว ${applied.length} ใบ` : 'อนุมัติส่วนต่างแล้ว');
+    } finally { setRpBusy(null); }
+  };
+
+  /** ปฏิเสธสลิปส่วนต่าง (ทั้งกลุ่ม หรือบางใบ) — คืนคูปอง ยอดหนี้คงเดิม (audit 2026-07-25: เดิมไม่มีทางนี้ สลิปปลอมค้างคิวถาวร) */
+  const rejectRps = async (rps: RemainingPayment[]) => {
+    if (rpBusy) return;
+    const total = rps.reduce((s, r) => s + r.amount, 0);
+    if (!confirm(`ปฏิเสธสลิปส่วนต่าง${rps.length > 1 ? ` ${rps.length} ใบ` : 'นี้'}? (${baht(total)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
+    setRpBusy('group');
+    try {
+      const applied: RemainingPayment[] = [];
+      for (const r of rps) {
+        dispatch(rejectRemainingPayment(r.id));
+        let ok = false;
+        dispatch((d) => { ok = !d.remainingPayments.some((x) => x.id === r.id); return d; });
+        if (ok) applied.push(r);
+      }
+      if (applied.length === 0) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "สลิปไม่ผ่าน ส่งใหม่" — ถ้าเซฟไม่ขึ้น ลูกค้าส่งใหม่ไม่ได้ (สลิปเดิมยังค้าง)
+      if (await store.flush()) return flash('ปฏิเสธแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+      const nos = applied.map((r) => ticketOf(r.ticket_id)?.ticket_no ?? '').filter(Boolean);
+      if (pushEnabled(db, 'order_rejected'))
+        sendPush(subsForUsers(db, [applied[0].user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${nos.join(', ')} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: '/wallet' }, dispatch).catch(() => {});
+      dispatch(logActivity(adminId, 'reject_rp', `ปฏิเสธสลิปส่วนต่าง ${applied.length > 1 ? `${applied.length} ใบ ` : ''}(${userName(applied[0].user_id)})`, { targetId: applied[0].ticket_id, targetLabel: nos.join(' '), amount: applied.reduce((s, r) => s + r.amount, 0) }));
+      flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
+    } finally { setRpBusy(null); }
+  };
   // §3 paid, still producing/travelling — info only (จ่ายครบแล้วแต่ของยังไม่ถึงไทย ทั้งขาผลิต+ขาเดินทาง)
   const waitingArrival = db.tickets.filter((t) => ['production', 'shipping'].includes(t.product_status) && paidFull(t) && t.status !== 'shipped');
   // งานจัดส่ง (ย้ายไป /admin/shipping) — นับไว้โชว์บนแบนเนอร์
@@ -77,67 +136,15 @@ export default function OrdersHubPage() {
       </Section>
 
       {/* §2 remaining-balance slips */}
-      <Section icon="payments" title="ส่วนต่างรอตรวจ" count={pendingRP.length} tone="amber">
-        {pendingRP.length === 0 ? <Empty text="ไม่มีส่วนต่างค้างตรวจ" /> : (
+      {/* สลิปเดียวจ่ายหลายใบ (เจ้าของ 2026-09-12): แถว rp ที่ใช้สลิปเดียวกันโชว์เป็น "กลุ่ม" อนุมัติ/ปฏิเสธทั้งกลุ่มในคลิกเดียว
+          หรือปฏิเสธเฉพาะบางใบ (✕ ท้ายบรรทัด) — ตรวจยอดโอนรวมกับสลิปครั้งเดียว ไม่ต้องเห็นสลิปเดิมซ้ำ 3 รอบ */}
+      <Section icon="payments" title="ส่วนต่างรอตรวจ" count={rpGroups.length} tone="amber" sub={pendingRP.length > rpGroups.length ? `${pendingRP.length} ใบ ใน ${rpGroups.length} สลิป` : undefined}>
+        {rpGroups.length === 0 ? <Empty text="ไม่มีส่วนต่างค้างตรวจ" /> : (
           <div className="flex flex-col gap-2.5">
-            {pendingRP.map((r) => {
-              const tk = ticketOf(r.ticket_id);
-              return (
-                <div key={r.id} className="flex items-center gap-3 rounded-xl border border-subtle bg-surface-3 p-3">
-                  {r.slip_url && /^https?:|^data:/.test(r.slip_url)
-                    ? <a href={r.slip_url} target="_blank" rel="noreferrer"><img src={r.slip_url} alt="สลิป" className="h-12 w-12 rounded-lg object-cover" /></a>
-                    : <div className="grid h-12 w-12 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold">{userName(r.user_id)} · {baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(r.coupon_discount)}</span> : null}</div>
-                    <div className="font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</div>
-                  </div>
-                  <button disabled={rpBusy === r.id} onClick={async () => {
-                    if (rpBusy) return; // เงินเข้า-หนี้ลด ต้องเกิดครั้งเดียว — กันกดรัวระหว่างรอเซฟ
-                    setRpBusy(r.id);
-                    try {
-                      dispatch(approveRemainingPayment(r.id));
-                      // read-back: mutation no-op ได้ (อีกเครื่องอนุมัติไปแล้ว) + ยอดอาจยังไม่ครบจริง
-                      // (แก้มัดจำย้อนหลังระหว่างรอตรวจ) — ห้ามขึ้น ✓/push/บอก "ชำระครบ" มั่ว
-                      let applied = false;
-                      let full = false;
-                      dispatch((d) => {
-                        applied = d.remainingPayments.find((x) => x.id === r.id)?.status === 'approved';
-                        const x = d.tickets.find((t2) => t2.id === r.ticket_id);
-                        full = !!x && x.remaining_paid >= x.remaining_amount;
-                        return d;
-                      });
-                      if (!applied) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
-                      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "รับยอดแล้ว" — push ที่ออกไปเรียกคืนไม่ได้
-                      if (await store.flush()) return flash('อนุมัติแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
-                      if (pushEnabled(db, 'rp_approved'))
-                        sendPush(subsForUsers(db, [r.user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${tk?.ticket_no ?? ''} ${full ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
-                      dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
-                      flash('อนุมัติส่วนต่างแล้ว');
-                    } finally { setRpBusy(null); }
-                  }} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50">Approve</button>
-                  {/* ปฏิเสธสลิปส่วนต่าง (audit 2026-07-25): เดิมไม่มีทางนี้ → สลิปปลอมค้างคิวถาวร
-                      + คูปองลูกค้าหายฟรี. ปฏิเสธ = คืนคูปอง ยอดหนี้คงเดิม */}
-                  <button disabled={rpBusy === r.id} onClick={async () => {
-                    if (rpBusy) return;
-                    if (!confirm(`ปฏิเสธสลิปส่วนต่างนี้? (${baht(r.amount)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
-                    setRpBusy(r.id);
-                    try {
-                      dispatch(rejectRemainingPayment(r.id));
-                      let applied = false;
-                      dispatch((d) => { applied = !d.remainingPayments.some((x) => x.id === r.id); return d; });
-                      if (!applied) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
-                      // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "สลิปไม่ผ่าน ส่งใหม่" — ถ้าเซฟไม่ขึ้น
-                      // ลูกค้าส่งใหม่ไม่ได้ (สลิปเดิมยังค้างบนเซิร์ฟเวอร์) = งงทั้งคู่
-                      if (await store.flush()) return flash('ปฏิเสธแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
-                      if (pushEnabled(db, 'order_rejected'))
-                        sendPush(subsForUsers(db, [r.user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${tk?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: tk ? `/wallet/${encodeURIComponent(tk.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
-                      dispatch(logActivity(adminId, 'reject_rp', `ปฏิเสธสลิปส่วนต่าง (${userName(r.user_id)})`, { targetId: r.ticket_id, targetLabel: tk?.ticket_no, amount: r.amount }));
-                      flash('ปฏิเสธสลิปส่วนต่างแล้ว · คืนคูปองให้ลูกค้า');
-                    } finally { setRpBusy(null); }
-                  }} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171] disabled:opacity-50">ปฏิเสธ</button>
-                </div>
-              );
-            })}
+            {rpGroups.map((g) => (
+              <RpGroupCard key={g.key} g={g} busy={rpBusy !== null} userName={userName} ticketOf={ticketOf} nameOf={(t) => productOf(t)?.series_name ?? '(สินค้าถูกลบ)'}
+                onApprove={() => approveRps(g.rps)} onRejectAll={() => rejectRps(g.rps)} onRejectOne={(r) => rejectRps([r])} />
+            ))}
           </div>
         )}
       </Section>
@@ -275,4 +282,48 @@ function Section({ icon, title, count, tone, sub, children }: {
 }
 function Empty({ text }: { text: string }) {
   return <div className="py-3 text-[13px] text-ink-faint">{text}</div>;
+}
+
+/** การ์ดสลิปส่วนต่าง 1 กลุ่ม (1 สลิป = 1..n ใบ) — ระดับบนสุดตาม DNA react-state */
+function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectAll, onRejectOne }: {
+  g: RpGroup; busy: boolean;
+  userName: (uid: string) => string; ticketOf: (tid: string) => PreorderTicket | undefined; nameOf: (t: PreorderTicket) => string;
+  onApprove: () => void; onRejectAll: () => void; onRejectOne: (r: RemainingPayment) => void;
+}) {
+  const multi = g.rps.length > 1;
+  return (
+    <div className={cx('rounded-xl border bg-surface-3 p-3', multi ? 'border-[#d4af37]/40' : 'border-subtle')}>
+      <div className="flex items-center gap-3">
+        {g.slipUrl && /^https?:|^data:/.test(g.slipUrl)
+          ? <a href={g.slipUrl} target="_blank" rel="noreferrer"><img src={g.slipUrl} alt="สลิป" className="h-12 w-12 rounded-lg object-cover" /></a>
+          : <div className="grid h-12 w-12 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 text-sm font-semibold">
+            <span>{userName(g.userId)}</span>
+            <span>· ยอดโอน <span className="text-primary-soft">{baht(g.total)}</span></span>
+            {g.couponOff > 0 && <span className="text-[#4ade80]">· คูปอง −{baht(g.couponOff)}</span>}
+            {multi && <span className="rounded-md bg-[#d4af37]/[0.16] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#f1d27a]">สลิปรวม {g.rps.length} ใบ</span>}
+          </div>
+          {!multi && <div className="font-mono text-[11px] text-ink-faint">{ticketOf(g.rps[0].ticket_id)?.ticket_no ?? g.rps[0].ticket_id}</div>}
+        </div>
+        <button disabled={busy} onClick={onApprove} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50">{multi ? `Approve ${g.rps.length} ใบ` : 'Approve'}</button>
+        <button disabled={busy} onClick={onRejectAll} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171] disabled:opacity-50">ปฏิเสธ</button>
+      </div>
+      {multi && (
+        <div className="mt-2 divide-y divide-hair rounded-lg border border-hair bg-surface-2/60">
+          {g.rps.map((r) => {
+            const tk = ticketOf(r.ticket_id);
+            return (
+              <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[12.5px]">
+                <span className="w-[130px] shrink-0 font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</span>
+                <span className="min-w-0 flex-1 truncate">{tk ? nameOf(tk) : ''}</span>
+                <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}</span>
+                <button disabled={busy} onClick={() => onRejectOne(r)} title="ปฏิเสธเฉพาะใบนี้" className="grid h-6 w-6 place-items-center rounded-md border border-[#f87171]/40 text-[#f87171] disabled:opacity-40">×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }

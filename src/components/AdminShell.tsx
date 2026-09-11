@@ -10,6 +10,7 @@ import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
 import { needsClose } from '@/domain/services/auctions';
+import { pendingRpGroups } from '@/domain/services/payments';
 import { markPlanReminded } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
@@ -69,7 +70,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // lock the admin panel to admin Facebook accounts on live (preview/dev stays open)
   if (canLogin && !isAdmin) return <AdminLock isLoggedIn={isLoggedIn} onLogin={signInFacebook} />;
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
-  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending').length;
+  // นับเป็น "สลิป" ไม่ใช่แถว: สลิปเดียวจ่ายหลายใบ (2026-09-12) = 1 งาน
+  const pendingRP = pendingRpGroups(db).length;
   // งานจัดส่งทั้งหมด (รอลูกค้าเลือกวิธีรับ + คำขอรอรับเรื่อง + รอใส่เลขพัสดุ + รถเข้ารับ/มารับเอง) — badge แท็บ "จัดส่ง"
   const shippingJobs = awaitingChoice(db).length + deliveryRequests(db).length + parcelQueue(db).length + handoffQueue(db).length;
   // badge "งานค้างวันนี้" = งานด่วน (ทำก่อน) + นัดชำระที่ถึงกำหนด + ปัญหาข้อมูลที่ต้องแก้

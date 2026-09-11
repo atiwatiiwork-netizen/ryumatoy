@@ -15,6 +15,7 @@ import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipp
 import { warehouseEtaLabel } from '@/domain/services/warehouse';
 import { submitRemainingPayment, chooseDelivery } from '@/data/mutations';
 import { deliveryReady, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
+import { ticketPayable } from '@/domain/services/payments';
 import { store } from '@/data/store';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
@@ -80,7 +81,7 @@ export default function TicketDetailPage() {
   const whEta = ticket.product_status === 'shipping' && ticket.warehouse_at ? warehouseEtaLabel(db, ticket) : '';
 
   // remaining-balance payment: available once the lot is shipping onward
-  const canPay = due > 0 && ['shipping', 'arrived', 'delivered'].includes(ticket.product_status);
+  const canPay = ticketPayable(ticket); // กติกาเดียวกับแท็บ "รอชำระ" (payments.ts)
   const pendingRP = db.remainingPayments.find((r) => r.ticket_id === ticket.id && r.status === 'pending');
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
