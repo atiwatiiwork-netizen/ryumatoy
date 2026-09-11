@@ -6,7 +6,8 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { BackBar, ProgressBar, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { useSmartBack } from '@/lib/nav';
-import { balanceOf, lifetimeOf, ledgerOf, milestoneProgress, MILESTONES, KIND_LABEL, rawPointsForTicket, pointsRates, ticketEarnEligible, hasEarned } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, milestoneProgress, MILESTONES, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned } from '@/domain/services/points';
+import { isAdminUser } from '@/domain/services/admins';
 import { ticketDue } from '@/domain/services/money';
 import { productLabel } from '@/domain/services/catalog';
 
@@ -24,6 +25,9 @@ export default function PointsPage() {
   const goBack = useSmartBack('/profile');
   const s = db.settings;
   const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
+  // เจ้าของ 2026-09-12: ซ่อนจากลูกค้าจนกว่าจะเปิดสวิตช์ · เฟสนี้ลูกค้าเห็นแค่ "คะแนน" (ด่าน milestone ยังไม่บังคับใช้ → แอดมินเห็นเป็นพรีวิวเท่านั้น)
+  const visible = pointsVisibleTo(db, uid);
+  const adminPreview = isAdminUser(db, uid);
 
   const balance = balanceOf(db, uid);
   const lifetime = lifetimeOf(db, uid);
@@ -45,6 +49,14 @@ export default function PointsPage() {
     <div className="mx-auto max-w-[640px]">
       <BackBar title="คะแนนสะสม" onBack={goBack} />
 
+      {!visible && (
+        <div className="rounded-card border border-subtle bg-surface-2 p-8 text-center">
+          <div className="text-[34px]">⭐</div>
+          <div className="mt-2 text-[15px] font-bold">ระบบคะแนนสะสมกำลังจะมา</div>
+          <div className="mt-1 text-[12.5px] text-ink-muted2">ร้านจะประกาศวันเริ่มใช้อีกครั้ง</div>
+        </div>
+      )}
+      {visible && <>
       {!s.points_enabled && (
         <div className="mb-3 rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.10] px-3.5 py-2.5 text-[12.5px] text-[#fbbf24]">
           🔧 ระบบคะแนนอยู่ในช่วงทดสอบ — ตัวเลขที่เห็นเป็นพรีวิว ร้านจะประกาศวันเริ่มใช้จริงอีกครั้ง
@@ -61,14 +73,14 @@ export default function PointsPage() {
               <span className="pb-1 text-[13px] text-ink-muted2">≈ ฿{num(balance)}</span>
             </div>
           </div>
-          {top ? (
+          {adminPreview && (top ? (
             <div className="rounded-xl border border-[#d4af37]/30 bg-black/20 px-3 py-2 text-center">
               <div className="text-[22px] leading-none">{top.emoji}</div>
               <div className="mt-1 text-[11px] font-bold text-[#f1d27a]">{top.label}</div>
             </div>
           ) : (
             <div className="rounded-xl border border-subtle bg-black/20 px-3 py-2 text-center text-[11px] text-ink-faint">ยังไม่ถึงด่านแรก</div>
-          )}
+          ))}
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
           <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">สะสมตลอดชีพ</div><b className="text-ink">{num(lifetime)}</b></div>
@@ -77,8 +89,9 @@ export default function PointsPage() {
         </div>
       </div>
 
-      {/* milestone track */}
-      <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4">
+      {/* milestone track — เฟสนี้แอดมินเห็นเป็นพรีวิวเท่านั้น (สิทธิ์ยังไม่บังคับใช้อัตโนมัติ) */}
+      {adminPreview && <div className="mb-4 rounded-card border border-dashed border-[#d4af37]/40 bg-surface-2 p-4">
+        <div className="mb-2 rounded-md bg-[#d4af37]/[0.12] px-2 py-1 text-[11px] font-bold text-[#f1d27a]">🔒 พรีวิวแอดมิน — ลูกค้ายังไม่เห็นส่วนนี้</div>
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[13.5px] font-bold">🏁 ด่านสะสม</span>
           {mp.next ? <span className="text-[11.5px] text-ink-faint">อีก {num(mp.need)} คะแนน → {mp.next.emoji} {mp.next.label}</span> : <span className="text-[11.5px] font-bold text-[#f1d27a]">ถึงด่านสูงสุดแล้ว</span>}
@@ -98,7 +111,7 @@ export default function PointsPage() {
           })}
         </div>
         <div className="mt-2 text-[11px] text-ink-faint">ด่านนับจากคะแนนที่ "เคยได้" ทั้งหมด — ใช้คะแนนไปแล้วด่านไม่ถอย</div>
-      </div>
+      </div>}
 
       {/* how to earn */}
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
@@ -163,6 +176,7 @@ export default function PointsPage() {
           </div>
         )}
       </div>
+      </>}
     </div>
   );
 }

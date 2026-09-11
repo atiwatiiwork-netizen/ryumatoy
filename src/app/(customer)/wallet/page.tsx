@@ -11,7 +11,7 @@ import { StatusBadge, cx } from '@/components/ui';
 import { manufacturerOf, productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketBadgeKey, ticketDone } from '@/domain/services/delivery';
 import { usableGrantsFor } from '@/domain/services/coupons';
-import { balanceOf } from '@/domain/services/points';
+import { balanceOf, pointsVisibleTo } from '@/domain/services/points';
 import { MyCoupons } from '@/components/CouponTicket';
 import type { PreorderTicket } from '@/domain/entities';
 
@@ -60,7 +60,7 @@ export default function WalletPage() {
   return (
     <div className="mx-auto max-w-[640px]">
       <div className="text-[26px] font-extrabold">กระเป๋าพรี</div>
-      <div className="mb-4 mt-1 text-[13px] text-ink-muted">{mine.length} ใบ · ค้างชำระรวม <span className="font-bold text-primary-soft">{baht(totalDue)}</span> · <Link href="/points" className="font-bold text-[#f1d27a]">⭐ {points.toLocaleString('en-US')} คะแนน</Link></div>
+      <div className="mb-4 mt-1 text-[13px] text-ink-muted">{mine.length} ใบ · ค้างชำระรวม <span className="font-bold text-primary-soft">{baht(totalDue)}</span>{pointsVisibleTo(db, CURRENT_USER_ID) && <> · <Link href="/points" className="font-bold text-[#f1d27a]">⭐ {points.toLocaleString('en-US')} คะแนน</Link></>}</div>
 
       <div className="mb-[18px] flex items-center gap-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">

@@ -1,6 +1,7 @@
 import type { Database, PointLedgerEntry, PreorderTicket, ShopSettings } from '../entities';
 import { ticketPaid, ticketDue, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
+import { isAdminUser } from './admins';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -220,3 +221,7 @@ export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji
   expire: { label: 'หมดอายุ', emoji: '⌛' },
   admin_adjust: { label: 'แอดมินปรับ', emoji: '🛠️' },
 };
+
+/** ฝั่งลูกค้าเห็นระบบคะแนนไหม (เจ้าของ 2026-09-12: ซ่อนไว้จนกว่าจะพร้อมประกาศ) —
+ *  เปิดสวิตช์แล้ว = ทุกคนเห็น · ยังปิด = เฉพาะแอดมินเห็น (พรีวิวหน้าลูกค้าด้วยบัญชีตัวเอง) */
+export const pointsVisibleTo = (db: Database, userId: string) => db.settings.points_enabled || isAdminUser(db, userId);
