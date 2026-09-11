@@ -5,7 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned } from '@/domain/services/points';
-import { monthlyConfig, monthlyPieces, tierFor, currentYm, ymLabel } from '@/domain/services/monthly';
+import { monthlyConfig, monthlyPieces, tierFor, currentYm, ymLabel, monthlyRewardsFor } from '@/domain/services/monthly';
 import { isAdminUser } from '@/domain/services/admins';
 import { ticketDue } from '@/domain/services/money';
 import { productLabel } from '@/domain/services/catalog';
@@ -20,9 +20,11 @@ const num = (n: number) => n.toLocaleString('en-US');
  * DNA: ห้ามก๊อปปี้ UI ไปวาดใหม่ในแอดมิน — แก้ที่นี่ที่เดียว ทั้งสองที่เปลี่ยนพร้อมกันเสมอ
  * DNA: ตัวเลขทุกตัวมาจาก points.ts / monthly.ts — คอมโพเนนต์นี้ไม่คำนวณเอง
  *
- * ธีม (เจ้าของ 2026-09-12): "จัดเต็ม Effect สไตล์ Elden Ring" สี แดง-ทอง-ดำ ให้เข้ากับโลโก้เพจ —
- *   ป้ายหัวเรื่องเผยตัวแบบ letter-spacing หด (eldenReveal) · เส้นทองงอกใต้ป้าย (lineGrow) · ตัวเลขทองไหล
- *   (goldShine) · ถ่านไฟลอย (ember) · การ์ดด่านที่ถึงแล้วเรืองทอง (tierGlow) · ทุกเอฟเฟกต์ปิดเมื่อ prefers-reduced-motion
+ * Wording (เจ้าของ 2026-09-12): "ยอดสะสม" · "ใบพรี: x ใบ" · "แลกใช้ได้: ส่วนลดส่วนต่างใบพรี / ของพร้อมส่ง" ·
+ *   ยศ Bronze/Silver/Gold (5/10/20 ใบ → +100/+250/+600) · วิธีได้คะแนน 4 ทาง (ปิดใบพรี / ซื้อพร้อมส่ง /
+ *   รางวัลประจำเดือน / รางวัลสะสม)
+ * ธีม: "จัดเต็ม Effect สไตล์ Elden Ring" แดง-ทอง-ดำ — ป้ายเผยตัว (eldenReveal) · เส้นทองงอก (lineGrow) ·
+ *   ตัวเลขทองไหล (goldShine) · ถ่านไฟลอย (ember) · การ์ดยศที่ถึงแล้วเรืองทอง (tierGlow) · ปิดเมื่อ reduced-motion
  */
 export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   userId: string;
@@ -34,7 +36,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const db = useDatabase();
   const uid = userId;
   const s = db.settings;
-  const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
+  const rate = pointsRates(s); // อัตราต่อใบ (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
   const simulating = mode === 'preview' && simulateEnabled === true;
   const enabled = simulating ? true : s.points_enabled;
   // เจ้าของ 2026-09-12: ซ่อนจากลูกค้าจนกว่าจะเปิดสวิตช์
@@ -45,21 +47,23 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const lifetime = lifetimeOf(db, uid);
   const rows = ledgerOf(db, uid);
 
-  // รางวัลรายเดือน (monthly.ts) — ลูกค้าเห็นเมื่อเปิดใช้ · แอดมิน/พรีวิวจำลอง เห็นเสมอ (มีป้ายบอก)
+  // รางวัลประจำเดือน / ยศ (monthly.ts) — ลูกค้าเห็นเมื่อเปิดใช้ · แอดมิน/พรีวิวจำลอง เห็นเสมอ (มีป้ายบอก)
   const mcfg = monthlyConfig(db);
   const ym = currentYm();
   const pieces = monthlyPieces(db, uid, ym, mcfg);
   const tier = tierFor(mcfg, pieces);
+  const rewards = monthlyRewardsFor(db, uid, ym, mcfg);
+  const rewardDue = rewards.filter((r) => !r.paid).reduce((a, r) => a + r.tier.points, 0);
   const showMonthly = mcfg.enabled || adminPreview || simulating;
 
-  // ตั๋วที่ยังค้าง → "จะได้" เท่าไหร่เมื่อปิดยอด (คะแนนคงที่ต่อชิ้น × qty)
+  // ใบพรีที่ยังค้าง → "จะได้" เท่าไหร่เมื่อปิดใบ (คะแนนคงที่ต่อใบ × qty)
   const pending = db.tickets
     .filter((t) => t.owner_id === uid && ticketDue(t) > 0 && ticketEarnEligible(db, { ...t, remaining_paid: t.remaining_amount }).ok)
     .map((t) => ({ t, pts: rawPointsForTicket(s, t), due: ticketDue(t) }))
     .filter((x) => x.pts > 0)
     .sort((a, b) => a.due - b.due);
   const pendingPts = pending.reduce((a, x) => a + x.pts, 0);
-  // ตั๋วปิดยอดแล้วแต่ยังไม่ได้ (ก่อนเปิดระบบ) — โชว์เป็น "รอร้านยืนยัน" ไม่ใช่ตัวเลขคงเหลือ
+  // ใบที่ปิดแล้วแต่ยังไม่ได้ (ก่อนเปิดระบบ) — โชว์เป็น "รอร้านยืนยัน" ไม่ใช่ตัวเลขคงเหลือ
   const awaiting = db.tickets.filter((t) => t.owner_id === uid && ticketEarnEligible(db, t).ok && !hasEarned(db, t.id) && rawPointsForTicket(s, t) > 0);
 
   if (!visible) {
@@ -104,30 +108,32 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
           </div>
           {showMonthly && (
             <div className={cx('rounded-xl border px-3 py-2 text-center', tier.reached ? 'border-[#d4af37]/50 bg-black/40 motion-safe:animate-tierGlow' : 'border-subtle bg-black/30')}>
+              <div className="text-[10px] tracking-[.12em] text-ink-faint">ยศเดือนนี้</div>
               <div className="text-[22px] leading-none">{tier.reached?.emoji ?? '🕯️'}</div>
-              <div className={cx('mt-1 text-[11px] font-bold', tier.reached ? 'text-[#f1d27a]' : 'text-ink-faint')}>{tier.reached?.label ?? 'ยังไม่ถึงด่าน'}</div>
-              <div className="text-[10px] text-ink-faint">เดือนนี้</div>
+              <div className={cx('mt-1 text-[11px] font-bold', tier.reached ? 'text-[#f1d27a]' : 'text-ink-faint')}>{tier.reached?.label ?? 'ยังไม่มียศ'}</div>
             </div>
           )}
         </div>
         <div className="relative mt-4 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
-          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">สะสมตลอดชีพ</div><b className="text-[#f1d27a]">{num(lifetime)}</b></div>
-          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดยอด</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
-          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-ink">เร็วๆ นี้</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">ยอดสะสม</div><b className="text-[#f1d27a]">{num(lifetime)}</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดใบ</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-[11px] leading-tight text-ink">ส่วนลดส่วนต่างใบพรี / ของพร้อมส่ง</b></div>
         </div>
       </div>
 
-      {/* ── รางวัลรายเดือน: พรีครบ X ชิ้น/เดือน → ด่าน (monthly.ts) ── */}
+      {/* ── รางวัลประจำเดือน: พรีครบ X ใบ/เดือน → ยศ + คะแนนโบนัส (monthly.ts) ── */}
       {showMonthly && (
         <div className={cx('relative mb-4 overflow-hidden rounded-card border bg-[#0d0909] p-4', mcfg.enabled ? 'border-[#d4af37]/30' : 'border-dashed border-[#d4af37]/40')}>
           {!mcfg.enabled && <div className="mb-2 rounded-md bg-[#d4af37]/[0.12] px-2 py-1 text-[11px] font-bold text-[#f1d27a]">🔒 พรีวิวแอดมิน — ลูกค้ายังไม่เห็นส่วนนี้ (เปิดที่ /admin/points/monthly)</div>}
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[13.5px] font-bold text-[#f1d27a]">🏆 รางวัลรายเดือน · {ymLabel(ym)}</span>
-            <span className="text-[11.5px] text-ink-faint">พรีแล้ว <b className="text-ink">{pieces}</b> ชิ้น</span>
+            <span className="text-[13.5px] font-bold text-[#f1d27a]">🏆 รางวัลประจำเดือน · {ymLabel(ym)}</span>
+            <span className="text-[11.5px] text-ink-faint">ใบพรี: <b className="text-ink">{pieces}</b> ใบ</span>
           </div>
           <div className="mb-2 text-[11.5px] text-ink-faint">
-            {tier.next ? <>อีก <b className="text-[#fbbf24]">{tier.next.pieces - pieces}</b> ชิ้น → {tier.next.emoji} {tier.next.label}</> : <span className="font-bold text-[#f1d27a]">ถึงด่านสูงสุดของเดือนแล้ว</span>}
-            <span className="ml-1 text-ink-faint">· รีเซ็ตทุกต้นเดือน</span>
+            {tier.next
+              ? <>อีก <b className="text-[#fbbf24]">{tier.next.pieces - pieces}</b> ใบ → {tier.next.emoji} {tier.next.label} <b className="text-[#4ade80]">+{num(tier.next.points)} คะแนน</b></>
+              : <span className="font-bold text-[#f1d27a]">ถึงยศสูงสุดของเดือนแล้ว</span>}
+            <span className="ml-1">· นับใหม่ทุกต้นเดือน</span>
           </div>
           {/* แถบความคืบหน้า ทองไหล */}
           <div className="h-2 overflow-hidden rounded-full border border-[#d4af37]/25 bg-black/60">
@@ -136,27 +142,32 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
           <div className="mt-3 grid grid-cols-3 gap-2">
             {mcfg.tiers.map((m) => {
               const got = pieces >= m.pieces;
+              const paid = rewards.find((r) => r.tier.pieces === m.pieces)?.paid;
               return (
                 <div key={m.pieces} className={cx('relative rounded-xl border p-2.5 text-center', got ? 'border-[#d4af37]/50 bg-[#d4af37]/[0.10] motion-safe:animate-tierGlow' : 'border-white/10 bg-black/30 opacity-75')}>
-                  <div className={cx('text-[20px] leading-none', got && 'drop-shadow-[0_0_10px_rgba(212,175,55,.7)]')}>{m.emoji}</div>
-                  <div className={cx('mt-1 text-[12px] font-extrabold', got ? 'text-[#f1d27a]' : 'text-ink-muted2')}>{m.label}</div>
-                  <div className="text-[10.5px] text-ink-faint">{m.pieces} ชิ้น/เดือน</div>
-                  <div className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] text-ink-muted2">{m.perks.map((p) => <span key={p}>• {p}</span>)}</div>
+                  <div className={cx('text-[22px] leading-none', got && 'drop-shadow-[0_0_10px_rgba(212,175,55,.7)]')}>{m.emoji}</div>
+                  <div className={cx('mt-1 text-[12.5px] font-extrabold tracking-wide', got ? 'text-[#f1d27a]' : 'text-ink-muted2')}>{m.label}</div>
+                  <div className="text-[10.5px] text-ink-faint">{m.pieces} ใบ</div>
+                  {m.points > 0 && <div className={cx('mt-1 text-[12px] font-extrabold', got ? 'text-[#4ade80]' : 'text-ink-muted2')}>+{num(m.points)} คะแนน</div>}
+                  {got && <div className="mt-0.5 text-[10px] text-ink-faint">{paid ? '✓ รับแล้ว' : 'รอร้านจ่าย'}</div>}
+                  {m.perks.length > 0 && <div className="mt-1 flex flex-col gap-0.5 text-[10px] text-ink-muted2">{m.perks.map((p) => <span key={p}>• {p}</span>)}</div>}
                 </div>
               );
             })}
           </div>
+          {rewardDue > 0 && <div className="mt-2 text-[11px] text-[#fbbf24]">โบนัสยศเดือนนี้รอร้านจ่าย <b>+{num(rewardDue)}</b> คะแนน (จ่ายหลังสิ้นเดือน)</div>}
         </div>
       )}
 
       {/* how to earn */}
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
         <div className="mb-1.5 text-[13.5px] font-bold text-ink">วิธีได้คะแนน</div>
-        <div className="flex flex-col gap-1">
-          <span>✨ คะแนนคิด <b className="text-ink">ต่อชิ้น</b> ไม่ขึ้นกับราคาของ (1 คะแนน = 1฿)</span>
-          <span>📝 ใบพรี: <b className="text-ink">{rate.pre} คะแนน/ชิ้น</b> ได้ตอน <b className="text-ink">จ่ายส่วนต่างครบ</b></span>
-          <span>🛒 ของพร้อมส่ง: <b className="text-ink">{rate.instock} คะแนน/ชิ้น</b> ได้ทันทีที่ร้านยืนยันสลิป</span>
-          <span>🎟️ เร็วๆ นี้: ใช้ลดได้ตอนจ่ายส่วนต่าง หรือซื้อของพร้อมส่ง (ไม่ใช้กับมัดจำ) · 1 คะแนน = 1฿</span>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (จ่ายส่วนต่างครบ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — พรีครบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `+${num(t.points)}`).join(' / ')}</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">💎</span><span className="flex-1">รางวัลสะสม</span><span className="rounded-md bg-surface-3 px-2 py-0.5 text-[10.5px] text-ink-faint">เร็วๆ นี้</span></div>
+          <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · แลกเป็นส่วนลดส่วนต่างใบพรี / ของพร้อมส่ง (ไม่ใช้กับมัดจำ) — เปิดให้แลกเร็วๆ นี้</div>
         </div>
       </div>
 
@@ -164,7 +175,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
       {pending.length > 0 && (
         <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[13.5px] font-bold">⏳ จะได้เมื่อปิดยอด</span>
+            <span className="text-[13.5px] font-bold">⏳ จะได้เมื่อปิดใบ</span>
             <span className="text-[12px] font-bold text-[#fbbf24]">+{num(pendingPts)} คะแนน</span>
           </div>
           <div className="flex flex-col divide-y divide-hair">
@@ -190,7 +201,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
 
       {awaiting.length > 0 && (
         <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px]">
-          <div className="mb-1 text-[13.5px] font-bold">🕰️ ตั๋วที่ปิดยอดแล้ว {awaiting.length} ใบ</div>
+          <div className="mb-1 text-[13.5px] font-bold">🕰️ ใบพรีที่ปิดแล้ว {awaiting.length} ใบ</div>
           <div className="text-ink-muted2">รอร้านยืนยันคะแนนย้อนหลัง (รวม <b className="text-ink">{num(awaiting.reduce((a, t) => a + rawPointsForTicket(s, t), 0))}</b> คะแนน)</div>
         </div>
       )}
@@ -199,7 +210,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
       <div className="mb-6 rounded-card border border-subtle bg-surface-2 p-4">
         <div className="mb-2 text-[13.5px] font-bold">📒 ประวัติคะแนน</div>
         {rows.length === 0 ? (
-          <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีประวัติ — ปิดยอดใบพรีหรือซื้อของพร้อมส่งเพื่อเริ่มสะสม</div>
+          <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีประวัติ — ปิดใบพรีหรือซื้อของพร้อมส่งเพื่อเริ่มสะสม</div>
         ) : (
           <div className="flex flex-col divide-y divide-hair">
             {rows.map((e) => {

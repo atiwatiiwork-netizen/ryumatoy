@@ -27,7 +27,7 @@ import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
 import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn } from '../domain/services/points';
-import { MONTHLY_KEY, type MonthlyConfig } from '../domain/services/monthly';
+import { MONTHLY_KEY, monthlyRewardRows, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -2347,3 +2347,13 @@ export const setMonthlyConfig = (cfg: MonthlyConfig) => (db: Database): Database
   ...db,
   appConfig: [{ key: MONTHLY_KEY, value: cfg as unknown as Record<string, unknown> }, ...db.appConfig.filter((c) => c.key !== MONTHLY_KEY)],
 });
+
+/** จ่ายโบนัสยศประจำเดือน ym ให้ทุกคนที่ถึงยศแล้วและยังไม่ได้รับ — id แถวผูก เดือน+คน+ยศ → กดซ้ำไม่จ่ายซ้ำ.
+ *  ทำงานแม้ระบบคะแนนยังปิด (แอดมินตัดสินใจเอง) — แนะนำกดหลังสิ้นเดือนเมื่อยอดตั๋วนิ่งแล้ว */
+export const payMonthlyRewards = (actorId: string, ym: string) => (db: Database): Database => {
+  const rows = monthlyRewardRows(db, ym, actorId);
+  if (!rows.length) return db;
+  const total = rows.reduce((s, r) => s + r.delta, 0);
+  const people = new Set(rows.map((r) => r.user_id)).size;
+  return logActivity(actorId, 'pay_monthly_rewards', `จ่ายโบนัสยศ ${ymLabel(ym)} · ${people} คน · ${rows.length} ยศ · รวม ${total} คะแนน`, { amount: total })({ ...db, pointLedger: [...rows, ...db.pointLedger] });
+};

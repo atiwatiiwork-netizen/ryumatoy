@@ -128,10 +128,10 @@ export const ledgerOf = (db: Database, userId: string) =>
 export const balanceOf = (db: Database, userId: string) =>
   Math.max(0, db.pointLedger.filter((e) => e.user_id === userId).reduce((s, e) => s + e.delta, 0));
 
-/** สะสมตลอดชีพ = ผลรวมแถวบวกที่เป็น "ได้จริง" (ไม่นับแอดมินเติม/คืน) หัก reverse — ใช้กับ milestone */
+/** ยอดสะสม = ผลรวมคะแนนที่ "ได้จริง" (ปิดตั๋ว + รางวัลยศรายเดือน) หัก reverse — ไม่นับแอดมินเติม/คืน */
 export const lifetimeOf = (db: Database, userId: string) =>
   Math.max(0, db.pointLedger
-    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket'))
+    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket' || e.kind === 'monthly_reward'))
     .reduce((s, e) => s + e.delta, 0));
 
 /** วันที่เคลื่อนไหวล่าสุด (ใช้กับกติกาหมดอายุ 12 เดือน — ตัวกวาดยังไม่เปิด) */
@@ -215,6 +215,7 @@ export function ticketsMissingEarn(db: Database): PreorderTicket[] {
 export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji: string }> = {
   earn_ticket: { label: 'ได้คะแนน · ปิดยอด', emoji: '✨' },
   reverse_ticket: { label: 'ดึงคืน · ตั๋วถูกลบ', emoji: '↩️' },
+  monthly_reward: { label: 'รางวัลยศประจำเดือน', emoji: '🏆' },
   redeem_order: { label: 'ใช้ลด · ซื้อพร้อมส่ง', emoji: '🛒' },
   redeem_remaining: { label: 'ใช้ลด · ส่วนต่าง', emoji: '🎟️' },
   refund: { label: 'คืนคะแนน · สลิปไม่ผ่าน', emoji: '↩️' },

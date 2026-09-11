@@ -777,13 +777,13 @@ export interface AuctionEntry {
 
 /** สมุดคะแนนสะสม (migration v66 · ryuma-points-spec) — เขียนเพิ่มอย่างเดียว ยอดคงเหลือ = sum(delta).
  *  แถว "ได้คะแนน" ผูก id กับตั๋ว (pl-earn-<ticket_id>) เสมอ → มินต์ซ้ำจากคนละเครื่อง = แถวเดิม ไม่ใช่แถวใหม่. */
-export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
+export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'monthly_reward' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
 export interface PointLedgerEntry {
   id: string;
   user_id: string;
   delta: number;            // +ได้ / -ใช้
   kind: PointLedgerKind;
-  ref_type?: 'ticket' | 'order' | 'remaining_payment';
+  ref_type?: 'ticket' | 'order' | 'remaining_payment' | 'monthly'; // monthly = รางวัลยศประจำเดือน (ref_id = ym|user|pieces)
   ref_id?: string;
   note?: string;            // ข้อความไทยพร้อมอ่าน (เลขตั๋ว/ชื่อสินค้า/เหตุผลที่ปรับ)
   created_by?: string;      // 'system' | admin user id
