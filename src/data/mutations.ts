@@ -341,10 +341,12 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
     const withRewards = mintRewards ? grantAllCampaignRewards(order.user_id)(updated) : updated;
 
     // คะแนนสะสม (v66): ตั๋วที่ "เกิดมาปิดยอดแล้ว" (พร้อมส่ง / รอบจ่ายเต็ม) ได้คะแนนตอนนี้เลย —
+    // ส่งทุกรายการของออเดอร์ (ไม่ใช่แค่ newTickets): กดอนุมัติซ้ำหลังเซฟล้มกลางคัน ตั๋วที่ขึ้นไปแล้วถูกข้ามใน newTickets
+    // แต่ earnRowForTicket กันซ้ำด้วย id อยู่แล้ว → ครอบคลุมทุกใบโดยไม่จ่ายซ้ำ (audit 2026-09-12)
     // ใบพรีปกติยังค้างส่วนต่าง จะได้ตอน approveRemainingPayment งวดสุดท้าย. ผูกกับ mintRewards
     // ด้วยเหตุผลเดียวกับคูปอง Event: RLS ห้ามลูกค้าเขียน point_ledger → ทาง Diamond auto-approve
     // (customer session) ต้องไม่แตะ ไม่งั้น flush ทั้งก้อนล้มและตั๋วหาย
-    const withPoints = mintRewards ? mintPointsForTickets(newTickets.map((t) => t.id))(withRewards) : withRewards;
+    const withPoints = mintRewards ? mintPointsForTickets(order.items.map((it) => orderTicketId(it.id)))(withRewards) : withRewards;
 
     // rank progress counts APPROVED pieces → auto-raise a request when a threshold is crossed
     const user = db.users.find((u) => u.id === order.user_id);

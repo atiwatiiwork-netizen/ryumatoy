@@ -1,4 +1,4 @@
-import type { Database, PointLedgerEntry, PreorderTicket, ShopSettings } from '../entities';
+import type { Database, OrderItem, PointLedgerEntry, PreorderTicket, ShopSettings } from '../entities';
 import { ticketPaid, ticketDue, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
 import { isAdminUser } from './admins';
@@ -31,9 +31,34 @@ import { isAdminUser } from './admins';
 export const earnIdFor = (ticketId: string) => `pl-earn-${ticketId}`;
 export const reverseIdFor = (ticketId: string) => `pl-rev-${ticketId}`;
 
-/** ตั๋ว "จ่ายเต็มตั้งแต่เกิด" (พร้อมส่ง / รอบจ่ายเต็ม) = remaining_amount 0 ตั้งแต่ออก — ใช้อัตราพร้อมส่ง.
- *  ⚠ ห้ามดู product.is_stock: SKU พรีที่ถูก convert เป็นพร้อมส่งทีหลัง จะทำให้ตั๋วพรีเก่าถูกตีเป็นพร้อมส่ง */
-export const ticketIsFullPay = (t: PreorderTicket) => (t.remaining_amount ?? 0) === 0;
+/** ตั๋ว "จ่ายเต็มตั้งแต่เกิด" (พร้อมส่ง / รอบจ่ายเต็ม) → ใช้อัตราพร้อมส่ง + ไม่นับเป็น "ใบพรี" รายเดือน.
+ *  ตัดสินจาก **snapshot ของรายการในออเดอร์** (unit_deposit ≥ unit_price) ไม่ใช่สภาพตั๋วปัจจุบัน — เพราะ
+ *   · คูปองที่ครอบส่วนต่างทั้งก้อน / แอดมินแก้มัดจำเป็นเต็มราคา ทำให้ remaining_amount กลายเป็น 0 ทีหลัง
+ *     (audit 2026-09-12: ใบพรีจริงถูกตีเป็น "พร้อมส่ง" → ได้ 30 แทน 20 และหลุดจากยอดพรีรายเดือน)
+ *   · ห้ามดู product.is_stock: SKU พรีที่ถูก convert เป็นพร้อมส่งทีหลัง จะทำให้ตั๋วพรีเก่าถูกตีเป็นพร้อมส่ง
+ *  ตั๋วมอบ/legacy (ไม่มีรายการออเดอร์คู่): จ่ายเต็ม = ไม่มีส่วนต่างตั้งแต่เกิด และไม่เคยมีสลิปส่วนต่านอนุมัติ */
+export function ticketIsFullPay(db: Database, t: PreorderTicket): boolean {
+  if (t.id.startsWith('t-')) {
+    const it = orderItemIndex(db).get(t.id.slice(2));
+    if (it && it.unit_price != null && it.unit_deposit != null) return it.unit_deposit >= it.unit_price;
+    // แถวรุ่นเก่าไม่มี snapshot → ใช้ fallback ด้านล่าง
+  }
+  return (t.remaining_amount ?? 0) === 0 && (t.remaining_paid ?? 0) === 0
+    && !db.remainingPayments.some((r) => r.ticket_id === t.id && r.status === 'approved');
+}
+
+/** ดัชนี order_item ตาม id — แคชต่อ db (WeakMap) เพราะ ticketIsFullPay ถูกเรียกต่อตั๋ว×ต่อคนในกระดาน/จำลอง
+ *  (ไล่สแกน orders ทุกครั้ง = O(ตั๋ว×ออเดอร์×คน) หน้าแอดมินจะหน่วงเมื่อร้านโต) */
+const itemIndexCache = new WeakMap<Database, Map<string, OrderItem>>();
+function orderItemIndex(db: Database): Map<string, OrderItem> {
+  let m = itemIndexCache.get(db);
+  if (!m) {
+    m = new Map();
+    for (const o of db.orders) for (const it of o.items) m.set(it.id, it);
+    itemIndexCache.set(db, m);
+  }
+  return m;
+}
 
 /** อัตราคะแนนต่อชิ้น (พรี / พร้อมส่ง) — ตัวเดียวที่หน้าจอใช้โชว์ตัวเลข.
  *  fallback 20/30 เมื่อ settings มาจากสแนปช็อตเก่าที่ยังไม่มีคีย์ (กัน NaN/0 เงียบๆ) */
@@ -43,13 +68,13 @@ export function pointsRates(settings: ShopSettings): { pre: number; instock: num
 }
 
 /** อัตราคะแนนต่อชิ้นของตั๋วใบนี้ */
-export function ratePerPiece(settings: ShopSettings, t: PreorderTicket): number {
-  const r = pointsRates(settings);
-  return ticketIsFullPay(t) ? r.instock : r.pre;
+export function ratePerPiece(db: Database, t: PreorderTicket): number {
+  const r = pointsRates(db.settings);
+  return ticketIsFullPay(db, t) ? r.instock : r.pre;
 }
 
 /** คะแนน "เต็มใบ" ตามสูตร (ไม่ดูเกณฑ์/ปิดยอด) — ใช้โชว์ "จะได้เมื่อปิดยอด" */
-export const rawPointsForTicket = (settings: ShopSettings, t: PreorderTicket) => ratePerPiece(settings, t) * Math.max(1, t.qty ?? 1);
+export const rawPointsForTicket = (db: Database, t: PreorderTicket) => ratePerPiece(db, t) * Math.max(1, t.qty ?? 1);
 
 /** ตั๋วใบนี้ "ปิดยอดแล้ว" (จ่ายครบ + มีเงินจริง) */
 export const ticketClosed = (t: PreorderTicket) => ticketDue(t) === 0 && ticketPaid(t) > 0;
@@ -71,8 +96,8 @@ export function ticketEarnEligible(db: Database, t: PreorderTicket): { ok: boole
 }
 
 /** คะแนนที่ตั๋วใบนี้ "ควรได้" ตอนนี้ — 0 ถ้าไม่เข้าเกณฑ์/ยังไม่ปิดยอด */
-export function pointsForTicket(db: Database, settings: ShopSettings, t: PreorderTicket): number {
-  return ticketEarnEligible(db, t).ok ? rawPointsForTicket(settings, t) : 0;
+export function pointsForTicket(db: Database, t: PreorderTicket): number {
+  return ticketEarnEligible(db, t).ok ? rawPointsForTicket(db, t) : 0;
 }
 
 export const hasEarned = (db: Database, ticketId: string) => db.pointLedger.some((e) => e.id === earnIdFor(ticketId));
@@ -84,10 +109,10 @@ export const hasEarned = (db: Database, ticketId: string) => db.pointLedger.some
 export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorId?: string; now?: string; force?: boolean; note?: string } = {}): PointLedgerEntry | null {
   if (!opts.force && !db.settings.points_enabled) return null;
   if (hasEarned(db, t.id)) return null;
-  const pts = pointsForTicket(db, db.settings, t);
+  const pts = pointsForTicket(db, t);
   if (pts <= 0) return null;
   const product = db.products.find((p) => p.id === t.product_id);
-  const kindLabel = ticketIsFullPay(t) ? 'พร้อมส่ง' : 'ใบพรี';
+  const kindLabel = ticketIsFullPay(db, t) ? 'พร้อมส่ง' : 'ใบพรี';
   return {
     id: earnIdFor(t.id),
     user_id: t.owner_id,
@@ -95,7 +120,7 @@ export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorI
     kind: 'earn_ticket',
     ref_type: 'ticket',
     ref_id: t.id,
-    note: opts.note ?? `ปิดยอด ${t.ticket_no} · ${product?.series_name ?? 'สินค้า'}${t.qty > 1 ? ` ×${t.qty}` : ''} · ${kindLabel} ${ratePerPiece(db.settings, t)}/ชิ้น`,
+    note: opts.note ?? `ปิดยอด ${t.ticket_no} · ${product?.series_name ?? 'สินค้า'}${t.qty > 1 ? ` ×${t.qty}` : ''} · ${kindLabel} ${ratePerPiece(db, t)}/ใบ`,
     created_by: opts.actorId ?? 'system',
     created_at: opts.now ?? new Date().toISOString(),
   };
@@ -193,7 +218,7 @@ export function simulateAll(db: Database): SimRow[] {
     return r;
   };
   for (const t of db.tickets) {
-    const pts = pointsForTicket(db, db.settings, t);
+    const pts = pointsForTicket(db, t);
     if (pts <= 0) continue;
     const r = get(t.owner_id);
     r.closedTickets += 1;
@@ -209,7 +234,7 @@ export function simulateAll(db: Database): SimRow[] {
 
 /** ตั๋วที่ปิดยอดแล้ว เข้าเกณฑ์ แต่ยังไม่มีแถวคะแนน (ใช้กับปุ่ม "ให้คะแนนย้อนหลัง") */
 export function ticketsMissingEarn(db: Database): PreorderTicket[] {
-  return db.tickets.filter((t) => pointsForTicket(db, db.settings, t) > 0 && !hasEarned(db, t.id));
+  return db.tickets.filter((t) => pointsForTicket(db, t) > 0 && !hasEarned(db, t.id));
 }
 
 export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji: string }> = {

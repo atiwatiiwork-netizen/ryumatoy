@@ -15,7 +15,8 @@ import { setSuspended } from '@/data/mutations';
 import { CouponTierPill } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import { ticketsBySource } from '@/domain/services/ticketSource';
-import { balanceOf, lifetimeOf, milestoneProgress } from '@/domain/services/points';
+import { balanceOf, lifetimeOf } from '@/domain/services/points';
+import { monthlyConfig, monthlyPieces, tierFor, currentYm } from '@/domain/services/monthly';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 const fbUrl = (s: string) => (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://www.facebook.com/search/top?q=${encodeURIComponent(s.trim())}`);
@@ -46,7 +47,10 @@ export default function CustomerPage() {
   // คะแนนสะสม (v66) — สูตรกลาง points.ts
   const points = balanceOf(db, u.id);
   const lifetimePts = lifetimeOf(db, u.id);
-  const mpTop = milestoneProgress(lifetimePts).reached.slice(-1)[0];
+  // ยศประจำเดือน (monthly.ts) — ใบพรีเดือนนี้ → Bronze/Silver/Gold
+  const mcfg = monthlyConfig(db);
+  const monthPieces = monthlyPieces(db, u.id, currentYm(), mcfg);
+  const monthTier = tierFor(mcfg, monthPieces).reached;
 
   return (
     <div>
@@ -88,7 +92,7 @@ export default function CustomerPage() {
           <Kpi label="ค้างชำระรวม" value={baht(totalDue)} tone={totalDue > 0 ? 'red' : 'green'} />
           <Kpi label="จ่ายแล้วรวม" value={baht(totalPaid)} />
           <Kpi label="คูปองใช้ได้" value={`${usableCoupons} ใบ`} />
-          <Kpi label="คะแนนสะสม" value={`⭐ ${points.toLocaleString('en-US')}`} sub={`${mpTop ? `${mpTop.emoji} ${mpTop.label} · ` : ''}สะสมชีพ ${lifetimePts.toLocaleString('en-US')}`} />
+          <Kpi label="คะแนนสะสม" value={`⭐ ${points.toLocaleString('en-US')}`} sub={`ยอดสะสม ${lifetimePts.toLocaleString('en-US')} · เดือนนี้ ${monthPieces} ใบ${monthTier ? ` ${monthTier.emoji} ${monthTier.label}` : ''}`} />
         </div>
       </div>
 

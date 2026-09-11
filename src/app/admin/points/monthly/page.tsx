@@ -30,7 +30,7 @@ export default function AdminMonthlyPage() {
   const [ym, setYm] = useState(currentYm());
   const board = useMemo(() => monthlyBoard(db, ym, cfg), [db, ym, cfg]);
   const name = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '(ไม่พบ)';
-  const reachedCount = board.filter((r) => r.tier).length;
+  const reachedCount = board.filter((r) => r.top).length;
   const dueTotal = board.reduce((s, r) => s + r.due, 0);
   const paidTotal = board.reduce((s, r) => s + r.paid, 0);
   const isCurrent = ym === currentYm();
@@ -42,8 +42,13 @@ export default function AdminMonthlyPage() {
         <span className="text-2xl font-extrabold">รางวัลประจำเดือน · ยศ</span>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', cfg.enabled ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{cfg.enabled ? '● ลูกค้าเห็นแล้ว' : '○ ซ่อนจากลูกค้า (พรีวิว)'}</span>
       </div>
-      <div className="mb-5 text-[13px] text-ink-faint">นับ "ใบ" ที่พรีในเดือนนั้น (ตั๋วเกิดเดือนไหนนับเดือนนั้น) · นับใหม่ทุกต้นเดือน · ถึงยศไหนได้คะแนนโบนัสของยศนั้น (สะสมต่อกัน: Gold = ได้ทั้ง 3 ก้อน) · ไม่นับตั๋วหาของ · แยกจากคะแนนปิดใบ (ยังได้ตามปกติ)</div>
+      <div className="mb-5 text-[13px] text-ink-faint">นับ "ใบ" ที่พรีในเดือนนั้น (ตั๋วเกิดเดือนไหนนับเดือนนั้น) · นับใหม่ทุกต้นเดือน · ได้โบนัสของ "ยศสูงสุดที่ถึง" ก้อนเดียว (ถึง Gold = 600 ไม่ใช่ 950 · จ่าย Bronze ไปก่อนแล้วขึ้น Gold → จ่ายเพิ่มแค่ส่วนต่าง) · ไม่นับตั๋วหาของ · แยกจากคะแนนปิดใบ (ยังได้ตามปกติ)</div>
 
+      {cfg.enabled && !db.settings.points_enabled && (
+        <div className="mb-4 rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.10] px-3.5 py-2.5 text-[12.5px] text-[#fbbf24]">
+          ⚠ เปิดรางวัลประจำเดือนแล้ว แต่ "คะแนนสะสม" ยังปิดอยู่ — ลูกค้ายังไม่เห็นหน้าคะแนนเลย (เปิดสวิตช์ที่แท็บ ⭐ คะแนนสะสม ก่อน)
+        </div>
+      )}
       <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
         <ConfigPanel cfg={cfg} />
         <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
@@ -70,17 +75,18 @@ export default function AdminMonthlyPage() {
                   <span className="w-5 text-right text-[11px] text-ink-faint">{i + 1}</span>
                   <Link href={`/admin/customers/${r.userId}`} className="min-w-0 flex-1 truncate font-semibold hover:underline">{name(r.userId)}</Link>
                   <span className="w-12 text-right tabular-nums">{r.pieces} ใบ</span>
-                  <span className={cx('w-[92px] truncate rounded-md px-2 py-0.5 text-center text-[11.5px] font-bold', r.tier ? 'bg-[#d4af37]/[0.14] text-[#f1d27a]' : 'text-ink-faint')}>{r.tier ? `${r.tier.emoji} ${r.tier.label}` : '—'}</span>
-                  <span className="w-[86px] text-right text-[11.5px] tabular-nums">
-                    {r.due > 0 && <span className="font-bold text-[#fbbf24]">ค้าง +{num(r.due)}</span>}
-                    {r.due === 0 && r.paid > 0 && <span className="text-[#4ade80]">✓ +{num(r.paid)}</span>}
-                    {r.due === 0 && r.paid === 0 && <span className="text-ink-faint">—</span>}
+                  <span className={cx('w-[92px] truncate rounded-md px-2 py-0.5 text-center text-[11.5px] font-bold', r.top ? 'bg-[#d4af37]/[0.14] text-[#f1d27a]' : 'text-ink-faint')}>{r.top ? `${r.top.emoji} ${r.top.label}` : '—'}</span>
+                  <span className="w-[110px] text-right text-[11.5px] tabular-nums">
+                    {r.over > 0 && <span className="font-bold text-primary-soft" title="จ่ายไปแล้วมากกว่าที่ควรได้ (ตั๋วถูกลบ/ลดคะแนนยศหลังจ่าย) — หักมือที่แท็บคะแนนสะสม">⚠ จ่ายเกิน {num(r.over)}</span>}
+                    {r.over === 0 && r.due > 0 && <span className="font-bold text-[#fbbf24]">ค้าง +{num(r.due)}{r.paid > 0 ? ` (จ่ายแล้ว ${num(r.paid)})` : ''}</span>}
+                    {r.over === 0 && r.due === 0 && r.paid > 0 && <span className="text-[#4ade80]">✓ +{num(r.paid)}</span>}
+                    {r.over === 0 && r.due === 0 && r.paid === 0 && <span className="text-ink-faint">—</span>}
                   </span>
                 </div>
               ))}
             </div>
           )}
-          <div className="mt-2 text-[11px] text-ink-faint">แนะนำกดจ่ายหลังสิ้นเดือนเมื่อยอดตั๋วนิ่ง · ถ้าตั๋วถูกลบหลังจ่ายแล้ว ใช้ "เติม/หักมือ" ที่แท็บคะแนนสะสมปรับคืน</div>
+          <div className="mt-2 text-[11px] text-ink-faint">แนะนำกดจ่ายหลังสิ้นเดือนเมื่อยอดตั๋วนิ่ง · จ่ายกลางเดือนแล้วลูกค้าขึ้นยศ → กดอีกครั้งจ่ายเฉพาะส่วนต่าง · "⚠ จ่ายเกิน" = ตั๋วถูกลบ/ลดคะแนนยศหลังจ่าย → หักมือที่แท็บคะแนนสะสม</div>
         </div>
       </div>
 
@@ -127,7 +133,8 @@ function ConfigPanel({ cfg }: { cfg: MonthlyConfig }) {
         <button onClick={() => { if (confirm('คืนค่ายศเป็นค่าเริ่มต้น Bronze 5/+100 · Silver 10/+250 · Gold 20/+600?')) { save({ ...cfg, tiers: DEFAULT_MONTHLY.tiers }); flash('คืนค่าเริ่มต้นแล้ว'); } }} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold text-ink-muted2">คืนค่าเริ่มต้น</button>
       </div>
       <div className="mt-3 rounded-xl border border-subtle bg-surface-3/40 p-3 text-[11.5px] text-ink-muted2">
-        ต้นทุน: big spender 20 ใบ/เดือน ได้โบนัสครบ 3 ยศ = <b className="text-ink">{num(cfg.tiers.reduce((s, t) => s + t.points, 0))} คะแนน</b>/เดือน ≈ {Math.round(cfg.tiers.reduce((s, t) => s + t.points, 0) / Math.max(1, cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 1))}฿ ต่อใบ บวกจากคะแนนปิดใบ 20 · กำไร 200/ใบ เหลือราว {200 - 20 - Math.round(cfg.tiers.reduce((s, t) => s + t.points, 0) / Math.max(1, cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 1))}฿
+        ต้นทุน (ไม่สะสมต่อกัน): {cfg.tiers.map((t) => `${t.label} ${t.pieces} ใบ → +${num(t.points)} (≈${Math.round(t.points / Math.max(1, t.pieces))}฿/ใบ)`).join(' · ')}
+        <br />big spender {cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 0} ใบ/เดือน: โบนัส {num(cfg.tiers[cfg.tiers.length - 1]?.points ?? 0)} + ปิดใบ {20 * (cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 0)} = <b className="text-ink">{num((cfg.tiers[cfg.tiers.length - 1]?.points ?? 0) + 20 * (cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 0))} คะแนน</b> · กำไร 200/ใบ เหลือราว {200 - 20 - Math.round((cfg.tiers[cfg.tiers.length - 1]?.points ?? 0) / Math.max(1, cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 1))}฿/ใบ ({Math.round(((200 - 20 - Math.round((cfg.tiers[cfg.tiers.length - 1]?.points ?? 0) / Math.max(1, cfg.tiers[cfg.tiers.length - 1]?.pieces ?? 1))) / 200) * 100)}%)
       </div>
     </div>
   );

@@ -9,9 +9,11 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
 import { updateSettings, adjustPoints, backfillPoints } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, MILESTONES, milestoneProgress, rawPointsForTicket, pointsRates } from '@/domain/services/points';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates } from '@/domain/services/points';
 import type { ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
+import { currentYm, monthlyConfig, monthlyStatus } from '@/domain/services/monthly';
+import { ymOf } from '@/domain/services/analytics';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -29,15 +31,16 @@ export default function AdminPointsPage() {
   const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
   const on = s.points_enabled;
   const missing = useMemo(() => ticketsMissingEarn(db), [db]);
-  const missingPts = missing.reduce((a, t) => a + rawPointsForTicket(s, t), 0);
+  const missingPts = missing.reduce((a, t) => a + rawPointsForTicket(db, t), 0);
   const liab = pointsLiability(db);
   const sim = useMemo(() => simulateAll(db), [db]);
-  const monthKey = new Date().toISOString().slice(0, 7);
-  const earnedThisMonth = db.pointLedger.filter((e) => e.kind === 'earn_ticket' && e.created_at.slice(0, 7) === monthKey).reduce((a, e) => a + e.delta, 0);
+  // เดือนตามเวลาเครื่อง (ไทย) — เดิมใช้ UTC slice → ช่วง 00:00-07:00 วันที่ 1 ยังนับเป็นเดือนก่อน (audit 2026-09-12)
+  const monthKey = currentYm();
+  const earnedThisMonth = db.pointLedger.filter((e) => e.kind === 'earn_ticket' && ymOf(e.created_at) === monthKey).reduce((a, e) => a + e.delta, 0);
 
   return (
     <div>
-      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }, { href: '/admin/points/monthly', label: '🏆 รางวัลรายเดือน' }]} />
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }, { href: '/admin/points/monthly', label: '🏆 รางวัลประจำเดือน' }]} />
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-2xl font-extrabold">คะแนนสะสม</span>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', on ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{on ? '● เปิดใช้งาน' : '○ โหมดพรีวิว (ยังไม่ให้คะแนนจริง)'}</span>
@@ -109,11 +112,11 @@ function SettingsPanel() {
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2 text-[11.5px]">
-        {MILESTONES.map((m) => (
-          <span key={m.threshold} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1 text-ink-muted2">{m.emoji} {num(m.threshold)} · {m.label} → {m.perks.join(' + ')}</span>
+        {monthlyConfig(db).tiers.map((m) => (
+          <span key={m.pieces} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1 text-ink-muted2">{m.emoji} {m.label} · {m.pieces} ใบ/เดือน → +{num(m.points)}</span>
         ))}
       </div>
-      <div className="mt-1 text-[11px] text-ink-faint">Milestone นับ "สะสมตลอดชีพ" รางวัลเป็นสิทธิ์ (ยังไม่บังคับใช้อัตโนมัติในเฟสนี้ — แอดมินดูป้ายแล้วจัดให้)</div>
+      <div className="mt-1 text-[11px] text-ink-faint">ยศประจำเดือน (ไม่สะสมต่อกัน ได้ก้อนของยศสูงสุด) — ตั้งค่า/จ่ายที่แท็บ 🏆 รางวัลประจำเดือน</div>
     </div>
   );
 }
@@ -128,7 +131,7 @@ function BackfillPanel({ missingCount, missingPts }: { missingCount: number; mis
   const missing = useMemo(() => ticketsMissingEarn(db), [db]);
   const byUser = useMemo(() => {
     const m = new Map<string, { n: number; pts: number }>();
-    for (const t of missing) { const r = m.get(t.owner_id) ?? { n: 0, pts: 0 }; r.n += 1; r.pts += rawPointsForTicket(db.settings, t); m.set(t.owner_id, r); }
+    for (const t of missing) { const r = m.get(t.owner_id) ?? { n: 0, pts: 0 }; r.n += 1; r.pts += rawPointsForTicket(db, t); m.set(t.owner_id, r); }
     return [...m.entries()].sort((a, b) => b[1].pts - a[1].pts);
   }, [missing, db.settings]);
   const name = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? uid;
@@ -197,14 +200,13 @@ function SimulationTable({ rows }: { rows: ReturnType<typeof simulateAll> }) {
               <th className="px-2 text-right">ให้แล้ว</th>
               <th className="px-2 text-right">ยังไม่ให้</th>
               <th className="px-2 text-right">คงเหลือ</th>
-              <th className="px-2 text-right">สะสมชีพ</th>
-              <th className="pl-2">Milestone</th>
+              <th className="px-2 text-right">ยอดสะสม</th>
+              <th className="pl-2">ยศเดือนนี้</th>
             </tr>
           </thead>
           <tbody>
             {shown.map((r) => {
-              const mp = milestoneProgress(r.wouldEarn); // พรีวิว: ถ้าให้ครบทุกใบ จะอยู่ด่านไหน
-              const reached = mp.reached[mp.reached.length - 1];
+              const ms = monthlyStatus(db, r.userId, currentYm()); // ยศประจำเดือนนี้ (monthly.ts) — แทนด่านตลอดชีพเดิม
               return (
                 <tr key={r.userId} className="border-b border-hair">
                   <td className="py-2 pr-2"><Link href={`/admin/customers/${r.userId}`} className="font-semibold hover:underline">{name(r.userId)}</Link></td>
@@ -215,8 +217,8 @@ function SimulationTable({ rows }: { rows: ReturnType<typeof simulateAll> }) {
                   <td className="px-2 text-right font-bold tabular-nums text-primary-soft">{num(r.balance)}</td>
                   <td className="px-2 text-right tabular-nums text-ink-muted2">{num(r.lifetime)}</td>
                   <td className="pl-2 text-[11.5px]">
-                    {reached ? <span className="rounded-md bg-surface-3 px-1.5 py-0.5 font-bold">{reached.emoji} {reached.label}</span> : <span className="text-ink-faint">—</span>}
-                    {mp.next && <span className="ml-1 text-ink-faint">อีก {num(mp.need)} → {mp.next.emoji}</span>}
+                    {ms.top ? <span className="rounded-md bg-surface-3 px-1.5 py-0.5 font-bold">{ms.top.emoji} {ms.top.label}</span> : <span className="text-ink-faint">—</span>}
+                    <span className="ml-1 text-ink-faint">{ms.pieces} ใบ{ms.due > 0 ? ` · ค้าง +${num(ms.due)}` : ''}</span>
                   </td>
                 </tr>
               );
