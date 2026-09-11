@@ -11,6 +11,7 @@ import { cx } from '@/components/ui';
 import { updateSettings, adjustPoints, backfillPoints } from '@/data/mutations';
 import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, MILESTONES, milestoneProgress, rawPointsForTicket, pointsRates } from '@/domain/services/points';
 import type { ShopSettings } from '@/domain/entities';
+import { PointsPanel } from '@/components/PointsPanel';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -56,6 +57,7 @@ export default function AdminPointsPage() {
         <BackfillPanel missingCount={missing.length} missingPts={missingPts} />
       </div>
 
+      <div className="mt-4"><CustomerPreviewPanel rows={sim} /></div>
       <div className="mt-4"><SimulationTable rows={sim} /></div>
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.4fr]">
         <AdjustPanel />
@@ -313,5 +315,56 @@ function NumField({ s, k, label, hint, onChange }: { s: ShopSettings; k: keyof S
       <input type="number" className={inputCls} value={Number(s[k] ?? 0)} onChange={(e) => onChange({ [k]: Math.max(0, Number(e.target.value) || 0) } as Partial<ShopSettings>)} />
       {hint && <div className="mt-0.5 text-[11px] text-ink-faint">{hint}</div>}
     </label>
+  );
+}
+
+// ── พรีวิวหน้าลูกค้า ───────────────────────────────────────────────────────────
+/** เรนเดอร์ <PointsPanel> ตัวเดียวกับหน้า /points จริง (mode 'preview' = มุมลูกค้าล้วน ไม่มีส่วนแอดมิน)
+ *  → แก้ UI ฝั่งลูกค้าที่ไหน พรีวิวนี้เปลี่ยนตามทันทีโดยไม่ต้องแก้ซ้ำ (เจ้าของ 2026-09-12) */
+function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }) {
+  const db = useDatabase();
+  const adminId = useCurrentUserId();
+  const customers = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin');
+  const firstWithPoints = rows.find((r) => r.wouldEarn > 0 || r.balance > 0)?.userId;
+  const [uid, setUid] = useState<string>(firstWithPoints ?? customers[0]?.id ?? adminId);
+  const [q, setQ] = useState('');
+  const [simOn, setSimOn] = useState(true);
+  const u = db.users.find((x) => x.id === uid);
+  const matches = q ? customers.filter((c) => c.display_name.toLowerCase().includes(q.toLowerCase()) || (c.member_code ?? '').includes(q)).slice(0, 8) : [];
+  const enabledNow = db.settings.points_enabled;
+  return (
+    <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <span className="font-bold">👀 พรีวิวหน้าลูกค้า</span>
+        <span className="text-[11.5px] text-ink-faint">หน้าจอเดียวกับที่ลูกค้าเห็นที่ /points — ใช้คอมโพเนนต์ตัวเดียวกัน แก้ฝั่งลูกค้าที่นี่เปลี่ยนตามอัตโนมัติ</span>
+      </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <input className={cx(inputCls, 'w-[240px] !py-1.5')} placeholder={u ? `ดูเป็น: ${u.display_name}` : 'ค้นชื่อลูกค้า'} value={q} onChange={(e) => setQ(e.target.value)} />
+          {matches.length > 0 && (
+            <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-subtle bg-surface-2 shadow-lg">
+              {matches.map((c) => <button key={c.id} onClick={() => { setUid(c.id); setQ(''); }} className="block w-full border-b border-hair px-3 py-2 text-left text-[12.5px] last:border-0 hover:bg-surface-3">{c.display_name} <span className="text-ink-faint">{c.member_code ?? ''}</span></button>)}
+            </div>
+          )}
+        </div>
+        <label className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px]">
+          <input type="checkbox" checked={simOn} onChange={(e) => setSimOn(e.target.checked)} />
+          จำลองว่า "เปิดระบบแล้ว"
+        </label>
+        <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-bold', (simOn || enabledNow) ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>
+          {enabledNow ? 'ตอนนี้ลูกค้าเห็นแบบนี้จริง' : simOn ? 'ลูกค้าจะเห็นแบบนี้ "หลังกดเปิด"' : 'ตอนนี้ลูกค้าเห็นแบบนี้ (ระบบปิด)'}
+        </span>
+      </div>
+      {/* กรอบมือถือ 375px = ขนาดจริงที่ลูกค้าส่วนใหญ่ใช้ */}
+      <div className="mx-auto w-[375px] max-w-full overflow-hidden rounded-[28px] border-[6px] border-black/60 bg-base shadow-2xl">
+        <div className="flex items-center gap-3 border-b border-hair px-4 py-3">
+          <span className="grid h-8 w-8 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">‹</span>
+          <span className="text-[15px] font-bold">คะแนนสะสม</span>
+        </div>
+        <div className="max-h-[720px] overflow-y-auto p-4 text-ink">
+          {u ? <PointsPanel userId={u.id} mode="preview" simulateEnabled={simOn ? true : undefined} /> : <div className="py-8 text-center text-ink-faint">ยังไม่มีลูกค้า</div>}
+        </div>
+      </div>
+    </div>
   );
 }
