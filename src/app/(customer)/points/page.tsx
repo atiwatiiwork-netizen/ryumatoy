@@ -85,7 +85,7 @@ export default function PointsPage() {
         <div className="mt-3 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
           <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">สะสมตลอดชีพ</div><b className="text-ink">{num(lifetime)}</b></div>
           <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดยอด</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
-          <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">ใช้ได้ที่</div><b className="text-ink">ส่วนต่าง · พร้อมส่ง</b></div>
+          <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-ink">เร็วๆ นี้</b></div>
         </div>
       </div>
 
@@ -120,7 +120,7 @@ export default function PointsPage() {
           <span>✨ คะแนนคิด <b className="text-ink">ต่อชิ้น</b> ไม่ขึ้นกับราคาของ (1 คะแนน = 1฿)</span>
           <span>📝 ใบพรี: <b className="text-ink">{rate.pre} คะแนน/ชิ้น</b> ได้ตอน <b className="text-ink">จ่ายส่วนต่างครบ</b></span>
           <span>🛒 ของพร้อมส่ง: <b className="text-ink">{rate.instock} คะแนน/ชิ้น</b> ได้ทันทีที่ร้านยืนยันสลิป</span>
-          <span>🎟️ ใช้ลดได้ตอนจ่ายส่วนต่าง หรือซื้อของพร้อมส่ง (ไม่ใช้กับมัดจำ)</span>
+          <span>🎟️ เร็วๆ นี้: ใช้ลดได้ตอนจ่ายส่วนต่าง หรือซื้อของพร้อมส่ง (ไม่ใช้กับมัดจำ) · 1 คะแนน = 1฿</span>
         </div>
       </div>
 
