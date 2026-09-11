@@ -22,7 +22,10 @@ export const localStorageAdapter: PersistenceAdapter = {
       if (!raw) return structuredClone(SEED_DATABASE);
       const parsed = JSON.parse(raw) as Partial<Database>;
       if (!parsed || !Array.isArray(parsed.products)) return structuredClone(SEED_DATABASE);
-      return { ...structuredClone(SEED_DATABASE), ...parsed } as Database;
+      // ⚠ settings ต้อง merge ทีละคีย์ — สแนปช็อตเก่าใน localStorage ไม่มีคีย์ที่เพิ่มทีหลัง (เช่น points_* v66)
+      //   spread ชั้นเดียวจะทับ settings ทั้งก้อน → ค่าใหม่เป็น undefined → หน้าจอโชว์ NaN (เจอตอนพรีวิว 2026-09-11)
+      const seed = structuredClone(SEED_DATABASE);
+      return { ...seed, ...parsed, settings: { ...seed.settings, ...(parsed.settings ?? {}) } } as Database;
     } catch {
       return structuredClone(SEED_DATABASE);
     }

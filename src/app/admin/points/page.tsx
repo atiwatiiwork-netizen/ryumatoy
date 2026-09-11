@@ -9,8 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
 import { updateSettings, adjustPoints, backfillPoints } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, MILESTONES, milestoneProgress, pointsForAmount, POINT_BAHT_UNIT } from '@/domain/services/points';
-import { ticketPaid } from '@/domain/services/money';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, MILESTONES, milestoneProgress, rawPointsForTicket, pointsRates } from '@/domain/services/points';
 import type { ShopSettings } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -26,9 +25,10 @@ const num = (n: number) => n.toLocaleString('en-US');
 export default function AdminPointsPage() {
   const db = useDatabase();
   const s = db.settings;
+  const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
   const on = s.points_enabled;
   const missing = useMemo(() => ticketsMissingEarn(db), [db]);
-  const missingPts = missing.reduce((a, t) => a + pointsForAmount(s, ticketPaid(t)), 0);
+  const missingPts = missing.reduce((a, t) => a + rawPointsForTicket(s, t), 0);
   const liab = pointsLiability(db);
   const sim = useMemo(() => simulateAll(db), [db]);
   const monthKey = new Date().toISOString().slice(0, 7);
@@ -41,7 +41,7 @@ export default function AdminPointsPage() {
         <span className="text-2xl font-extrabold">คะแนนสะสม</span>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', on ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{on ? '● เปิดใช้งาน' : '○ โหมดพรีวิว (ยังไม่ให้คะแนนจริง)'}</span>
       </div>
-      <div className="mb-5 text-[13px] text-ink-faint">ทุก {POINT_BAHT_UNIT}฿ ที่จ่ายจริง = {s.points_per_100baht} คะแนน · ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ใบพรี = งวดสุดท้ายอนุมัติ · พร้อมส่ง = อนุมัติออเดอร์) · 1 คะแนน = 1฿ · ไม่ให้ตอนมัดจำ / ตั๋วหาของ / ประมูล</div>
+      <div className="mb-5 text-[13px] text-ink-faint">คะแนน "คงที่ต่อชิ้น" (กำไรร้าน fix ต่อชิ้น ไม่ขึ้นกับราคา): ใบพรี <b className="text-ink">{rate.pre}</b> · พร้อมส่ง/จ่ายเต็ม <b className="text-ink">{rate.instock}</b> · ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ใบพรี = งวดสุดท้ายอนุมัติ · พร้อมส่ง = อนุมัติออเดอร์) · 1 คะแนน = 1฿ · ไม่ให้ตอนมัดจำ / ตั๋วหาของ / ประมูล</div>
 
       {/* KPIs */}
       <div className="mb-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
@@ -71,6 +71,7 @@ function SettingsPanel() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const s = db.settings;
+  const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
   const set = (patch: Partial<ShopSettings>) => { dispatch(updateSettings(patch)); };
   // DNA react-state: ช่องตัวเลขเป็นคอมโพเนนต์ระดับบนสุด (NumField) — ถ้าประกาศในฟังก์ชันนี้จะ remount ทุกครั้งที่พิมพ์ → โฟกัสหลุด
   return (
@@ -90,7 +91,8 @@ function SettingsPanel() {
       </button>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <NumField s={s} onChange={set} k="points_per_100baht" label={`คะแนนต่อทุก ${POINT_BAHT_UNIT}฿`} hint="1 = ~1% ของยอดจ่าย (กำไร 200/ชิ้น เหลือ ~180)" />
+        <NumField s={s} onChange={set} k="points_per_piece_pre" label="คะแนน/ชิ้น · ใบพรี" hint="กำไร 200-250/ชิ้น → 20 = ~10% ทุกราคา" />
+        <NumField s={s} onChange={set} k="points_per_piece_instock" label="คะแนน/ชิ้น · พร้อมส่ง / จ่ายเต็ม" hint="กำไร in-stock สูงกว่า (ราคาบวก 200-400)" />
         <NumField s={s} onChange={set} k="points_min_redeem" label="ใช้ขั้นต่ำต่อครั้ง" hint="เฟสใช้คะแนน" />
         <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="เพดานลด/ชิ้น · ส่วนต่างใบพรี" hint="กันชิ้นเดียวกำไรติดลบ" />
         <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="เพดานลด/ชิ้น · พร้อมส่ง" hint="ราคา in-stock บวกจากพรี 200-400" />
@@ -98,8 +100,10 @@ function SettingsPanel() {
       </div>
 
       <div className="mt-4 rounded-xl border border-subtle bg-surface-3/40 p-3 text-[12px] text-ink-muted2">
-        <div className="mb-1 font-bold text-ink">ตัวอย่างสินค้า 1,650 · กำไร 200</div>
-        ลูกค้าได้ <b className="text-ink">{pointsForAmount(s, 1650)} คะแนน</b> ต่อชิ้น (≈{((pointsForAmount(s, 1650) / 1650) * 100).toFixed(1)}%) · ร้านเหลือกำไร <b className="text-[#4ade80]">{200 - pointsForAmount(s, 1650)} ฿ ({Math.round(((200 - pointsForAmount(s, 1650)) / 200) * 100)}%)</b> ทุกขนาดลูกค้าเท่ากัน
+        <div className="mb-1 font-bold text-ink">ตัวอย่าง กำไร 200/ชิ้น (ไม่ว่าของราคา 800 หรือ 4,000)</div>
+        ใบพรี: ลูกค้าได้ <b className="text-ink">{rate.pre}</b>/ชิ้น · ร้านเหลือ <b className="text-[#4ade80]">{200 - rate.pre} ฿ ({Math.round(((200 - rate.pre) / 200) * 100)}%)</b>
+        <br />พร้อมส่ง (กำไร ~400): ได้ <b className="text-ink">{rate.instock}</b>/ชิ้น · ร้านเหลือ <b className="text-[#4ade80]">{400 - rate.instock} ฿ ({Math.round(((400 - rate.instock) / 400) * 100)}%)</b>
+        <br />เท่ากันทุกราคา ทุกขนาดลูกค้า · ด่าน 500/1,000/2,000 = {Math.ceil(500 / Math.max(1, rate.pre))}/{Math.ceil(1000 / Math.max(1, rate.pre))}/{Math.ceil(2000 / Math.max(1, rate.pre))} ชิ้นพรี
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2 text-[11.5px]">
@@ -122,7 +126,7 @@ function BackfillPanel({ missingCount, missingPts }: { missingCount: number; mis
   const missing = useMemo(() => ticketsMissingEarn(db), [db]);
   const byUser = useMemo(() => {
     const m = new Map<string, { n: number; pts: number }>();
-    for (const t of missing) { const r = m.get(t.owner_id) ?? { n: 0, pts: 0 }; r.n += 1; r.pts += pointsForAmount(db.settings, ticketPaid(t)); m.set(t.owner_id, r); }
+    for (const t of missing) { const r = m.get(t.owner_id) ?? { n: 0, pts: 0 }; r.n += 1; r.pts += rawPointsForTicket(db.settings, t); m.set(t.owner_id, r); }
     return [...m.entries()].sort((a, b) => b[1].pts - a[1].pts);
   }, [missing, db.settings]);
   const name = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? uid;

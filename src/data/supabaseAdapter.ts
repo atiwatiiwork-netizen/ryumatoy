@@ -231,7 +231,8 @@ export const supabaseAdapter: PersistenceAdapter = {
             instock_disc_gold_value: Number(s.instock_disc_gold_value ?? SEED_DATABASE.settings.instock_disc_gold_value),
             // คะแนนสะสม (v66) — คอลัมน์ยังไม่มีก่อนรัน migration → ใช้ค่าตั้งต้น (ปิดอยู่)
             points_enabled: Boolean(s.points_enabled ?? SEED_DATABASE.settings.points_enabled),
-            points_per_100baht: Number(s.points_per_100baht ?? SEED_DATABASE.settings.points_per_100baht),
+            points_per_piece_pre: Number(s.points_per_piece_pre ?? SEED_DATABASE.settings.points_per_piece_pre),
+            points_per_piece_instock: Number(s.points_per_piece_instock ?? SEED_DATABASE.settings.points_per_piece_instock),
             points_min_redeem: Number(s.points_min_redeem ?? SEED_DATABASE.settings.points_min_redeem),
             points_max_per_piece_pre: Number(s.points_max_per_piece_pre ?? SEED_DATABASE.settings.points_max_per_piece_pre),
             points_max_per_piece_instock: Number(s.points_max_per_piece_instock ?? SEED_DATABASE.settings.points_max_per_piece_instock),

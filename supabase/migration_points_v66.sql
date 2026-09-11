@@ -3,7 +3,7 @@
 -- วางใน SQL Editor แล้วกด Run ได้เลย · รันซ้ำได้ · ไม่ทำข้อมูลเสีย
 --
 -- กติกา (เจ้าของ 2026-09-10/11):
---   · ทุก 100฿ ที่จ่ายจริง = 1 คะแนน (ปัดลง) · 1 คะแนน = 1฿
+--   · คะแนน "คงที่ต่อชิ้น" (กำไรร้าน fix 200-250/ชิ้น ไม่ขึ้นกับราคา — เจ้าของ 2026-09-11): ใบพรี 20 · พร้อมส่ง 30 · 1 คะแนน = 1฿
 --   · ใบพรี/รอบพิเศษ: ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ส่วนต่างงวดสุดท้ายอนุมัติ) ไม่ใช่ตอนมัดจำ
 --   · พร้อมส่ง: ตั๋วเกิดมาปิดยอดอยู่แล้ว → ได้ตอนแอดมินอนุมัติออเดอร์
 --   · ตั๋วหาของ / ประมูล ไม่ให้ในเฟสนี้
@@ -33,7 +33,8 @@ create unique index if not exists point_ledger_kind_ref_uq on point_ledger(kind,
 
 -- ตั้งค่าใน shop_settings (แอดมินแก้ได้จากหน้า /admin/points)
 alter table shop_settings add column if not exists points_enabled boolean default false;
-alter table shop_settings add column if not exists points_per_100baht int default 1;
+alter table shop_settings add column if not exists points_per_piece_pre int default 20;      -- คะแนน/ชิ้น ใบพรี (กำไร 200-250 → ~10%)
+alter table shop_settings add column if not exists points_per_piece_instock int default 30;  -- คะแนน/ชิ้น พร้อมส่ง/จ่ายเต็ม (กำไรสูงกว่า)
 alter table shop_settings add column if not exists points_min_redeem int default 50;
 alter table shop_settings add column if not exists points_max_per_piece_pre int default 100;
 alter table shop_settings add column if not exists points_max_per_piece_instock int default 200;

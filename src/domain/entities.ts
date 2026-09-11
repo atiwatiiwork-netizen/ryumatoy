@@ -443,7 +443,8 @@ export interface ShopSettings {
   instock_disc_gold_value: number; // 0 by default
   // ระบบคะแนนสะสม (v66 · ryuma-points-spec) — ทุกจุดที่คิดคะแนนต้องอ่านผ่าน domain/services/points.ts
   points_enabled: boolean; // false = โหมดพรีวิว (ยังไม่ให้คะแนนจริง)
-  points_per_100baht: number; // 1 — ทุก 100฿ ที่จ่ายจริง ได้กี่คะแนน
+  points_per_piece_pre: number; // 20 — คะแนนต่อชิ้น ตั๋วใบพรี/รอบพิเศษ ตอนปิดยอด (กำไร fix 200-250 → ~10%)
+  points_per_piece_instock: number; // 30 — คะแนนต่อชิ้น ของพร้อมส่ง/จ่ายเต็ม (กำไรสูงกว่า)
   points_min_redeem: number; // 50 — ใช้ขั้นต่ำต่อครั้ง (เฟสใช้คะแนน)
   points_max_per_piece_pre: number; // 100 — เพดานลดต่อชิ้น ส่วนต่างใบพรี
   points_max_per_piece_instock: number; // 200 — เพดานลดต่อชิ้น ซื้อพร้อมส่ง

@@ -6,8 +6,8 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { BackBar, ProgressBar, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { useSmartBack } from '@/lib/nav';
-import { balanceOf, lifetimeOf, ledgerOf, milestoneProgress, MILESTONES, KIND_LABEL, pointsForAmount, POINT_BAHT_UNIT, ticketEarnEligible, hasEarned } from '@/domain/services/points';
-import { ticketPaid, ticketDue } from '@/domain/services/money';
+import { balanceOf, lifetimeOf, ledgerOf, milestoneProgress, MILESTONES, KIND_LABEL, rawPointsForTicket, pointsRates, ticketEarnEligible, hasEarned } from '@/domain/services/points';
+import { ticketDue } from '@/domain/services/money';
 import { productLabel } from '@/domain/services/catalog';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -23,6 +23,7 @@ export default function PointsPage() {
   const uid = useCurrentUserId();
   const goBack = useSmartBack('/profile');
   const s = db.settings;
+  const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
 
   const balance = balanceOf(db, uid);
   const lifetime = lifetimeOf(db, uid);
@@ -30,15 +31,15 @@ export default function PointsPage() {
   const mp = milestoneProgress(lifetime);
   const top = mp.reached[mp.reached.length - 1];
 
-  // ตั๋วที่ยังค้าง → "จะได้" เท่าไหร่เมื่อปิดยอด (คิดจากยอดเต็มใบ = มัดจำ + ค้าง)
+  // ตั๋วที่ยังค้าง → "จะได้" เท่าไหร่เมื่อปิดยอด (คะแนนคงที่ต่อชิ้น × qty)
   const pending = db.tickets
     .filter((t) => t.owner_id === uid && ticketDue(t) > 0 && ticketEarnEligible(db, { ...t, remaining_paid: t.remaining_amount }).ok)
-    .map((t) => ({ t, pts: pointsForAmount(s, ticketPaid(t) + ticketDue(t)), due: ticketDue(t) }))
+    .map((t) => ({ t, pts: rawPointsForTicket(s, t), due: ticketDue(t) }))
     .filter((x) => x.pts > 0)
     .sort((a, b) => a.due - b.due);
   const pendingPts = pending.reduce((a, x) => a + x.pts, 0);
   // ตั๋วปิดยอดแล้วแต่ยังไม่ได้ (ก่อนเปิดระบบ) — โชว์เป็น "รอร้านยืนยัน" ไม่ใช่ตัวเลขคงเหลือ
-  const awaiting = db.tickets.filter((t) => t.owner_id === uid && ticketEarnEligible(db, t).ok && !hasEarned(db, t.id) && pointsForAmount(s, ticketPaid(t)) > 0);
+  const awaiting = db.tickets.filter((t) => t.owner_id === uid && ticketEarnEligible(db, t).ok && !hasEarned(db, t.id) && rawPointsForTicket(s, t) > 0);
 
   return (
     <div className="mx-auto max-w-[640px]">
@@ -103,9 +104,9 @@ export default function PointsPage() {
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
         <div className="mb-1.5 text-[13.5px] font-bold text-ink">วิธีได้คะแนน</div>
         <div className="flex flex-col gap-1">
-          <span>✨ ทุก <b className="text-ink">{POINT_BAHT_UNIT}฿</b> ที่จ่ายจริง = <b className="text-ink">{s.points_per_100baht} คะแนน</b> (1 คะแนน = 1฿)</span>
-          <span>📝 ใบพรี: ได้ตอน <b className="text-ink">จ่ายส่วนต่างครบ</b> (คิดจากยอดเต็มใบ ทั้งมัดจำ + ส่วนต่าง)</span>
-          <span>🛒 ของพร้อมส่ง: ได้ทันทีที่ร้านยืนยันสลิป</span>
+          <span>✨ คะแนนคิด <b className="text-ink">ต่อชิ้น</b> ไม่ขึ้นกับราคาของ (1 คะแนน = 1฿)</span>
+          <span>📝 ใบพรี: <b className="text-ink">{rate.pre} คะแนน/ชิ้น</b> ได้ตอน <b className="text-ink">จ่ายส่วนต่างครบ</b></span>
+          <span>🛒 ของพร้อมส่ง: <b className="text-ink">{rate.instock} คะแนน/ชิ้น</b> ได้ทันทีที่ร้านยืนยันสลิป</span>
           <span>🎟️ ใช้ลดได้ตอนจ่ายส่วนต่าง หรือซื้อของพร้อมส่ง (ไม่ใช้กับมัดจำ)</span>
         </div>
       </div>
@@ -135,7 +136,7 @@ export default function PointsPage() {
       {awaiting.length > 0 && (
         <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px]">
           <div className="mb-1 text-[13.5px] font-bold">🕰️ ตั๋วที่ปิดยอดแล้ว {awaiting.length} ใบ</div>
-          <div className="text-ink-muted2">รอร้านยืนยันคะแนนย้อนหลัง (รวม <b className="text-ink">{num(awaiting.reduce((a, t) => a + pointsForAmount(s, ticketPaid(t)), 0))}</b> คะแนน)</div>
+          <div className="text-ink-muted2">รอร้านยืนยันคะแนนย้อนหลัง (รวม <b className="text-ink">{num(awaiting.reduce((a, t) => a + rawPointsForTicket(s, t), 0))}</b> คะแนน)</div>
         </div>
       )}
 
