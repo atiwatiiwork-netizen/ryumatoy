@@ -317,7 +317,10 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('rank_tiers', () => syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name'));
     // คะแนนสะสม (v66): เขียนเพิ่มอย่างเดียว (append-only) — แถวไม่ถูกแก้/ลบ, id ผูกตั๋ว → ส่งซ้ำ = ON CONFLICT DO NOTHING
     // วางท้ายสุด: ถ้าตั๋ว/สลิปยังไม่ขึ้น คะแนนต้องไม่ขึ้นก่อน (ด่านก่อนเงิน, เงินก่อนของแถม)
-    await step('point_ledger', () => syncAppendOnly(sb, 'point_ledger', next.pointLedger as unknown as Row[], base.pointLedger as unknown as Row[]));
+    // v67: แถว pl-redeem-*/pl-refund-* เป็นของ DB (trigger สร้างตอน insert/delete แถวเงิน) — แอปใส่สำเนาไว้โชว์ล่วงหน้า
+    // แต่ห้ามส่งขึ้น: เซสชันลูกค้า insert point_ledger ไม่ได้ (RLS) จะทำ flush ล้มทั้งก้อน และ id ชนของจริงอยู่แล้ว
+    const DB_OWNED = /^pl-(redeem|refund)-/;
+    await step('point_ledger', () => syncAppendOnly(sb, 'point_ledger', (next.pointLedger as unknown as Row[]).filter((r) => !DB_OWNED.test(String(r.id))), base.pointLedger as unknown as Row[]));
 
     // Only write settings when they actually changed — otherwise every customer
     // save would try to upsert shop_settings, which RLS blocks for non-admins.

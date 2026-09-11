@@ -26,7 +26,7 @@ import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orpha
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
-import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn } from '../domain/services/points';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId } from '../domain/services/points';
 import { MONTHLY_KEY, monthlyRewardRows, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -66,7 +66,7 @@ function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
 /** Submit a cart as an order. Normally it awaits admin approval (PRD §9 step 5). When `autoApprove`
  *  is set — used for zero-payment orders, e.g. a Diamond member whose deposit is 0 — there is no slip
  *  to verify, so the order is approved and the tickets are issued immediately (customer gets ตั๋วเลย). */
-export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply, startNos?: TicketNoStart) {
+export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, reservationIds?: string[], autoApprove = false, coupon?: CouponApply, startNos?: TicketNoStart, points?: number) {
   return (db: Database): Database => {
     // Gate รอบพิเศษ (เจ้าของ 2026-07-23): มีรายการ batch แต่ไม่เคยมีใบพรี + ตะกร้านี้ไม่มีพรีปกติพ่วง
     // → ปัดตกทั้งออเดอร์ (authoritative guard — UI กันไว้ชั้นนอกแล้ว, กันยิงตรง/ตะกร้าค้างข้ามเครื่อง)
@@ -159,19 +159,28 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
       discount = tpl && tpl.active && !couponExpired(tpl, new Date()) ? couponDiscount(tpl, Math.min(base, grossDeposit)) : 0;
       if (discount <= 0) validGrant = undefined; // nothing valid to discount → don't burn the grant
     }
+    // แต้ม (v67): ใช้ได้กับ "บรรทัดพร้อมส่ง" เท่านั้น ≤ 400/ออเดอร์ ≤ ยอด in-stock หลังคูปอง ≤ คงเหลือ — ไม่เข้าเกณฑ์ = ตัดลง/0
+    // (ไม่ปัดตกออเดอร์ทั้งใบ) · ด่านจริงคือ trigger ryuma_points_hold_order ตอน insert (ล็อกต่อคน กัน 2 เครื่อง)
+    const instockBase = items.reduce((s, i) => s + ((db.products.find((x) => x.id === i.product_id)?.is_stock ?? false) ? i.deposit_amount : 0), 0);
+    const usePoints = clampRedeem(db, userId, 'instock', Math.max(0, instockBase - discount), points ?? 0);
     const now = new Date().toISOString();
     const order: Order = {
       id: orderId,
       user_id: userId,
-      total_deposit: grossDeposit - discount,
+      total_deposit: grossDeposit - discount - usePoints,
       slip_url: slipUrl,
       status: 'pending_approval',
       created_at: now,
       reservation_ids: reservationIds && reservationIds.length ? reservationIds : undefined,
       coupon_grant_id: validGrant ? validGrant.id : undefined,
       coupon_discount: validGrant ? discount : undefined,
+      points_redeemed: usePoints > 0 ? usePoints : undefined,
       items,
     };
+    // สำเนาแถว "จองแต้ม" (id เดียวกับที่ DB trigger จะสร้าง — adapter ไม่ส่งขึ้น) ให้ยอดคงเหลือลดทันทีบนหน้าจอ
+    const pointLedger = usePoints > 0
+      ? [holdRow(userId, orderId, 'redeem_order', usePoints, `ใช้แต้มลดของพร้อมส่ง ${usePoints} แต้ม (รอตรวจสลิป)`), ...db.pointLedger]
+      : db.pointLedger;
     // consume the coupon now (single use); rejectOrder returns it if the slip is refused
     const couponGrants = validGrant
       ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, order_id: orderId, discount_amount: discount } : g))
@@ -182,7 +191,7 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     const auctions = paidAuctionIds.size
       ? db.auctions.map((a) => (paidAuctionIds.has(a.id) ? { ...a, pay_order_id: orderId, status: 'awarded' as const } : a))
       : db.auctions;
-    const withOrder = { ...db, orders: [order, ...db.orders], couponGrants, auctions };
+    const withOrder = { ...db, orders: [order, ...db.orders], couponGrants, auctions, pointLedger };
     // zero-payment (Diamond) → nothing to verify → approve now + issue tickets in the same step.
     // mintRewards:false — this runs in the CUSTOMER session, which RLS forbids from minting event
     // coupons/awards; minting here would abort the whole flush and lose the tickets. Their rewards
@@ -322,6 +331,19 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
         left -= off;
       }
     }
+    // แต้ม (v67): หักออกจาก deposit_paid ของตั๋วพร้อมส่งก่อน (เหมือนคูปอง) — ถ้ายังเหลือ (client ปลอมใช้แต้มกับมัดจำพรี
+    // ซึ่ง DB ตรวจไม่ได้ตอน insert เพราะยังไม่มี order_items) ค่อยหักจากตั๋วพรี **ไม่คืนแต้ม** เพราะ total_deposit
+    // ถูกลดไปแล้ว = ลูกค้าโอนเงินน้อยลงจริง คืนแต้มซ้ำจะได้ 2 ต่อ · เพดาน 400/ออเดอร์ที่ DB คุมจำกัดความเสียหาย
+    if (order.points_redeemed) {
+      let left = order.points_redeemed;
+      const byStockFirst = [...newTickets].sort((a, b) => Number(db.products.find((p) => p.id === b.product_id)?.is_stock ?? false) - Number(db.products.find((p) => p.id === a.product_id)?.is_stock ?? false));
+      for (const t of byStockFirst) {
+        if (left <= 0) break;
+        const off = Math.min(left, t.deposit_paid);
+        t.deposit_paid -= off;
+        left -= off;
+      }
+    }
 
     const updated: Database = {
       ...db,
@@ -367,6 +389,10 @@ export const rejectOrder = (orderId: string) => (db: Database): Database => {
   return {
     ...db,
     orders: db.orders.map((o) => (o.id === orderId ? { ...o, status: 'rejected' as const } : o)),
+    // แต้มที่จองไว้คืน (v67) — DB trigger คืนจริงตอน status→rejected; นี่คือสำเนาโชว์ล่วงหน้า (id เดียวกัน adapter ไม่ส่ง)
+    pointLedger: order.points_redeemed && db.pointLedger.some((e) => e.id === redeemHoldId(orderId)) && !db.pointLedger.some((e) => e.id === refundRow(order.user_id, orderId, 'order', 0, '').id)
+      ? [refundRow(order.user_id, orderId, 'order', order.points_redeemed, `คืนแต้ม ${order.points_redeemed} — สลิปไม่ผ่าน`), ...db.pointLedger]
+      : db.pointLedger,
     couponGrants: order?.coupon_grant_id
       ? db.couponGrants.map((g) => (g.id === order.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, discount_amount: undefined } : g))
       : db.couponGrants,
@@ -897,7 +923,7 @@ export const editBatch = (batchId: string, patch: { price?: number; qty?: number
 /** Customer submits a remaining-balance payment (slip) awaiting admin approval. A pre-order coupon
  *  applied here permanently reduces the ticket's remaining_amount (so `amount` = the discounted due)
  *  and consumes the grant (single use). */
-export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply) => (db: Database): Database => {
+export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply, opts: { points?: number; groupId?: string } = {}) => (db: Database): Database => {
   const now = new Date().toISOString();
   const ticket = db.tickets.find((t) => t.id === ticketId);
   // guards (money audit F8): ต้องเป็นตั๋วของตัวเอง · ยังค้างจริง · ไม่มีสลิปค้างตรวจอยู่แล้ว
@@ -918,7 +944,10 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
   }
   // ⚠ ยอดที่บันทึกคำนวณจากส่วนลดที่ "ผ่านการตรวจจริง" เสมอ (money audit F7): เดิมใช้ค่า amount จากหน้าจอ
   // ถ้าคูปองถูกใช้ที่อื่นไปแล้วระหว่างนั้น ลูกค้าจะโอนตามยอดลด แต่ระบบไม่ลดให้ = ค้างเงินงงๆ
-  const payAmount = Math.max(0, Math.min(due - discount, amount || due - discount));
+  // แต้ม (v67): ≤ 200/ใบ ≤ ยอดค้างหลังคูปอง ≤ คงเหลือ ≥ ขั้นต่ำ — ไม่เข้าเกณฑ์ = ตัดลง/0 · ด่านจริง = trigger ryuma_points_hold_rp
+  const usePoints = clampRedeem(db, userId, 'pre', Math.max(0, due - discount), opts.points ?? 0);
+  const payAmount = Math.max(0, Math.min(due - discount - usePoints, amount || due - discount - usePoints));
+  const rpId = id('rp');
   return {
     ...db,
     // ⚠ ไม่แตะ remaining_amount ตอนนี้ (money/status audit F3/F14): ส่วนลดจะถูกหักตอน "อนุมัติ" เท่านั้น
@@ -927,9 +956,13 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
       ? db.couponGrants.map((g) => (g.id === validGrant.id ? { ...g, status: 'used' as const, used_at: now, ticket_id: ticketId, discount_amount: discount } : g))
       : db.couponGrants,
     remainingPayments: [
-      { id: id('rp'), ticket_id: ticketId, user_id: userId, amount: payAmount, slip_url: slipUrl, status: 'pending', created_at: now, coupon_grant_id: validGrant ? validGrant.id : undefined, coupon_discount: validGrant ? discount : undefined },
+      { id: rpId, ticket_id: ticketId, user_id: userId, amount: payAmount, slip_url: slipUrl, status: 'pending', created_at: now, coupon_grant_id: validGrant ? validGrant.id : undefined, coupon_discount: validGrant ? discount : undefined, points_redeemed: usePoints > 0 ? usePoints : undefined, group_id: opts.groupId },
       ...db.remainingPayments,
     ],
+    // สำเนาแถว "จองแต้ม" (id เดียวกับที่ DB trigger สร้าง — adapter ไม่ส่งขึ้น) ยอดคงเหลือลดทันทีบนหน้าจอ
+    pointLedger: usePoints > 0
+      ? [holdRow(userId, rpId, 'redeem_remaining', usePoints, `ใช้แต้มลดส่วนต่าง ${usePoints} แต้ม · ${ticket.ticket_no} (รอตรวจสลิป)`), ...db.pointLedger]
+      : db.pointLedger,
   };
 };
 
@@ -942,8 +975,8 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
     tickets: db.tickets.map((t) => {
       if (t.id !== pay.ticket_id) return t;
-      // ส่วนลดคูปองมาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
-      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0));
+      // ส่วนลดคูปอง + แต้ม (v67) มาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
+      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - (pay.points_redeemed ?? 0));
       const paid = Math.min(remaining, t.remaining_paid + pay.amount);
       return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
@@ -963,6 +996,10 @@ export const rejectRemainingPayment = (paymentId: string) => (db: Database): Dat
     couponGrants: pay.coupon_grant_id
       ? db.couponGrants.map((g) => (g.id === pay.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, ticket_id: undefined, discount_amount: undefined } : g))
       : db.couponGrants,
+    // แต้มที่จองไว้คืน (v67) — DB trigger คืนจริงตอนแถวถูกลบ (AFTER DELETE); นี่คือสำเนาโชว์ล่วงหน้า (adapter ไม่ส่ง)
+    pointLedger: pay.points_redeemed && db.pointLedger.some((e) => e.id === redeemHoldId(paymentId)) && !db.pointLedger.some((e) => e.id === refundRow(pay.user_id, paymentId, 'remaining_payment', 0, '').id)
+      ? [refundRow(pay.user_id, paymentId, 'remaining_payment', pay.points_redeemed, `คืนแต้ม ${pay.points_redeemed} — สลิปส่วนต่างไม่ผ่าน`), ...db.pointLedger]
+      : db.pointLedger,
   };
 };
 

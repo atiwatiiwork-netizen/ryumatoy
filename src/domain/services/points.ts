@@ -190,11 +190,50 @@ export function milestoneProgress(lifetime: number): { reached: Milestone[]; nex
 
 // ── ใช้คะแนน (เฟสหน้า — เตรียมสูตรกลางไว้ให้ checkout / wallet เรียก) ───────────
 
-/** ยอดคะแนนที่ใช้ได้กับรายการนี้ = min(คงเหลือ, เพดาน×qty, ยอดค้างหลังคูปอง) และต้อง ≥ ขั้นต่ำ */
-export function maxRedeemable(settings: ShopSettings, args: { balance: number; isStock: boolean; qty: number; payable: number }): number {
-  const cap = (args.isStock ? settings.points_max_per_piece_instock : settings.points_max_per_piece_pre) * Math.max(1, args.qty);
-  const m = Math.max(0, Math.floor(Math.min(args.balance, cap, args.payable)));
-  return m >= settings.points_min_redeem ? m : 0;
+/** ขั้นของปุ่มเลือกแต้ม (50 / 100 / 150 …) */
+export const POINT_STEP = 50;
+export type RedeemKind = 'pre' | 'instock';
+
+/** เพดาน/ขั้นต่ำการใช้แต้ม (เจ้าของ 2026-09-12): ปิดใบพรี 200 **ต่อใบ** · พร้อมส่ง 400 **ต่อออเดอร์** · ขั้นต่ำ 50
+ *  (คอลัมน์ยังชื่อ *_per_piece จาก v66 แต่ความหมายคือ "ต่อรายการ" ไม่คูณ qty — DB trigger v67 ใช้ค่าเดียวกัน) */
+export function redeemRules(settings: ShopSettings, kind: RedeemKind): { cap: number; min: number } {
+  const n = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : d);
+  return { cap: n(kind === 'instock' ? settings.points_max_per_piece_instock : settings.points_max_per_piece_pre, kind === 'instock' ? 400 : 200), min: n(settings.points_min_redeem, 50) };
+}
+
+/** แต้มสูงสุดที่ใช้ได้กับรายการนี้ = min(คงเหลือ, เพดาน, ยอดค้างหลังคูปอง) ปัดลงเป็นขั้น 50 · ต่ำกว่าขั้นต่ำ = 0 */
+export function maxRedeemable(settings: ShopSettings, args: { balance: number; kind: RedeemKind; payable: number }): number {
+  const { cap, min } = redeemRules(settings, args.kind);
+  const raw = Math.max(0, Math.floor(Math.min(args.balance, cap, args.payable)));
+  const stepped = Math.floor(raw / POINT_STEP) * POINT_STEP;
+  return stepped >= min ? stepped : 0;
+}
+
+/** ปุ่มเลือก: 50, 100, … ถึงเพดานที่ใช้ได้ */
+export function redeemPicks(max: number, min = 50, step = POINT_STEP): number[] {
+  const out: number[] = [];
+  for (let v = Math.max(min, step); v <= max; v += step) out.push(v);
+  return out;
+}
+
+/** ตัวเลขแต้มที่ "ใช้จริง" ตามที่ลูกค้าขอ — ด่านฝั่งแอป (DB trigger v67 เป็นด่านจริงอีกชั้น):
+ *  ระบบปิด / ต่ำกว่าขั้นต่ำ / เกินเพดาน / เกินยอดค้าง / เกินคงเหลือ → ตัดลงหรือ 0 (ไม่ปัดตกทั้งรายการ) */
+export function clampRedeem(db: Database, userId: string, kind: RedeemKind, payable: number, requested: number): number {
+  if (!db.settings.points_enabled) return 0;
+  const { cap, min } = redeemRules(db.settings, kind);
+  const r = Math.max(0, Math.trunc(requested || 0));
+  if (r < min) return 0;
+  return Math.max(0, Math.floor(Math.min(r, cap, payable, balanceOf(db, userId))));
+}
+
+// ── แถว "จองแต้ม/คืนแต้ม" (v67) — DB trigger เป็นคนสร้างจริง; แอปใส่สำเนา id เดียวกันไว้โชว์ล่วงหน้า (adapter ไม่ส่งขึ้น) ──
+export const redeemHoldId = (rowId: string) => `pl-redeem-${rowId}`;
+export const refundId = (rowId: string) => `pl-refund-${rowId}`;
+export function holdRow(userId: string, rowId: string, kind: 'redeem_remaining' | 'redeem_order', points: number, note: string): PointLedgerEntry {
+  return { id: redeemHoldId(rowId), user_id: userId, delta: -points, kind, ref_type: kind === 'redeem_order' ? 'order' : 'remaining_payment', ref_id: rowId, note, created_by: 'system', created_at: new Date().toISOString() };
+}
+export function refundRow(userId: string, rowId: string, refType: 'order' | 'remaining_payment', points: number, note: string): PointLedgerEntry {
+  return { id: refundId(rowId), user_id: userId, delta: points, kind: 'refund', ref_type: refType, ref_id: rowId, note, created_by: 'system', created_at: new Date().toISOString() };
 }
 
 // ── เครื่องมือแอดมิน: ตรวจสอบ / จำลอง / ย้อนหลัง ────────────────────────────────

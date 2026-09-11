@@ -98,9 +98,9 @@ function SettingsPanel() {
       <div className="grid gap-3 sm:grid-cols-2">
         <NumField s={s} onChange={set} k="points_per_piece_pre" label="คะแนน/ชิ้น · ใบพรี" hint="กำไร 200-250/ชิ้น → 20 = ~10% ทุกราคา" />
         <NumField s={s} onChange={set} k="points_per_piece_instock" label="คะแนน/ชิ้น · พร้อมส่ง / จ่ายเต็ม" hint="กำไร in-stock สูงกว่า (ราคาบวก 200-400)" />
-        <NumField s={s} onChange={set} k="points_min_redeem" label="ใช้ขั้นต่ำต่อครั้ง" hint="เฟสใช้คะแนน" />
-        <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="เพดานลด/ชิ้น · ส่วนต่างใบพรี" hint="กันชิ้นเดียวกำไรติดลบ" />
-        <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="เพดานลด/ชิ้น · พร้อมส่ง" hint="ราคา in-stock บวกจากพรี 200-400" />
+        <NumField s={s} onChange={set} k="points_min_redeem" label="ใช้แต้มขั้นต่ำต่อครั้ง" hint="50 · ปุ่มเลือกขั้นละ 50" />
+        <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="ใช้แต้มสูงสุด · ปิดใบพรี (ต่อใบ)" hint="เจ้าของ 2026-09-12: 200 ต่อใบ" />
+        <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="ใช้แต้มสูงสุด · พร้อมส่ง (ต่อออเดอร์)" hint="เจ้าของ 2026-09-12: 400 ต่อออเดอร์" />
         <NumField s={s} onChange={set} k="points_expire_months" label="หมดอายุเมื่อไม่เคลื่อนไหว (เดือน)" hint="ตัวกวาดยังไม่เปิด — ปีแรกไม่มีใครถึง" />
       </div>
 

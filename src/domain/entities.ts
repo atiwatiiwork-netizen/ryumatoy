@@ -200,6 +200,7 @@ export interface Order {
   reservation_ids?: string[]; // stock holds to confirm on approve / release on reject
   coupon_grant_id?: string; // an in-stock coupon applied at checkout (returned if the order is rejected)
   coupon_discount?: number; // baht discounted by that coupon (already subtracted from total_deposit)
+  points_redeemed?: number; // แต้มที่ใช้ลดของพร้อมส่ง (v67, already subtracted from total_deposit) — จอง pl-redeem-<id>
   items: OrderItem[];
 }
 
@@ -264,6 +265,8 @@ export interface RemainingPayment {
   approved_at?: string;
   coupon_grant_id?: string; // a pre-order coupon applied on this final payment
   coupon_discount?: number; // baht discounted (already removed from the ticket's remaining_amount)
+  points_redeemed?: number; // แต้มที่ใช้ลดส่วนต่างงวดนี้ (v67) — จองใน point_ledger ตอนส่งสลิป (pl-redeem-<id>) หักจากหนี้ตอนอนุมัติ
+  group_id?: string;        // สลิปเดียวจ่ายหลายใบ (v67) — แถวของใบต่างๆ ที่ส่งพร้อมกันใช้ group_id เดียวกัน
 }
 
 export interface TicketTransfer {
