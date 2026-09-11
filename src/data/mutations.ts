@@ -27,6 +27,7 @@ import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
 import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn } from '../domain/services/points';
+import { MONTHLY_KEY, type MonthlyConfig } from '../domain/services/monthly';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -2340,3 +2341,9 @@ export const backfillPoints = (actorId: string) => (db: Database): Database => {
   const total = rows.reduce((s, r) => s + r.delta, 0);
   return logActivity(actorId, 'backfill_points', `ให้คะแนนย้อนหลัง ${rows.length} ใบ รวม ${total} คะแนน`, { amount: total })({ ...db, pointLedger: [...rows, ...db.pointLedger] });
 };
+
+/** รางวัลรายเดือน (แท็บใน /admin/points): กติกาเก็บใน app_config key 'points_monthly' — ไม่ต้องรัน migration */
+export const setMonthlyConfig = (cfg: MonthlyConfig) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: MONTHLY_KEY, value: cfg as unknown as Record<string, unknown> }, ...db.appConfig.filter((c) => c.key !== MONTHLY_KEY)],
+});

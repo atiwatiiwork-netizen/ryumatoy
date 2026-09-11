@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
-import { ProgressBar, cx } from '@/components/ui';
+import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, milestoneProgress, MILESTONES, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned } from '@/domain/services/points';
+import { monthlyConfig, monthlyPieces, tierFor, currentYm, ymLabel } from '@/domain/services/monthly';
 import { isAdminUser } from '@/domain/services/admins';
 import { ticketDue } from '@/domain/services/money';
 import { productLabel } from '@/domain/services/catalog';
@@ -17,7 +18,11 @@ const num = (n: number) => n.toLocaleString('en-US');
  *   · /points (ลูกค้าจริง)                → mode 'live'
  *   · /admin/points "พรีวิวหน้าลูกค้า"    → mode 'preview' (เลือกลูกค้าได้ + จำลองว่าเปิดระบบแล้ว)
  * DNA: ห้ามก๊อปปี้ UI ไปวาดใหม่ในแอดมิน — แก้ที่นี่ที่เดียว ทั้งสองที่เปลี่ยนพร้อมกันเสมอ
- * DNA: ตัวเลขทุกตัวมาจาก points.ts — คอมโพเนนต์นี้ไม่คำนวณเอง
+ * DNA: ตัวเลขทุกตัวมาจาก points.ts / monthly.ts — คอมโพเนนต์นี้ไม่คำนวณเอง
+ *
+ * ธีม (เจ้าของ 2026-09-12): "จัดเต็ม Effect สไตล์ Elden Ring" สี แดง-ทอง-ดำ ให้เข้ากับโลโก้เพจ —
+ *   ป้ายหัวเรื่องเผยตัวแบบ letter-spacing หด (eldenReveal) · เส้นทองงอกใต้ป้าย (lineGrow) · ตัวเลขทองไหล
+ *   (goldShine) · ถ่านไฟลอย (ember) · การ์ดด่านที่ถึงแล้วเรืองทอง (tierGlow) · ทุกเอฟเฟกต์ปิดเมื่อ prefers-reduced-motion
  */
 export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   userId: string;
@@ -30,16 +35,22 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const uid = userId;
   const s = db.settings;
   const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
-  const enabled = mode === 'preview' && simulateEnabled !== undefined ? simulateEnabled : s.points_enabled;
-  // เจ้าของ 2026-09-12: ซ่อนจากลูกค้าจนกว่าจะเปิดสวิตช์ · เฟสนี้ลูกค้าเห็นแค่ "คะแนน" (ด่าน milestone ยังไม่บังคับใช้ → แอดมินเห็นเป็นพรีวิวเท่านั้น)
+  const simulating = mode === 'preview' && simulateEnabled === true;
+  const enabled = simulating ? true : s.points_enabled;
+  // เจ้าของ 2026-09-12: ซ่อนจากลูกค้าจนกว่าจะเปิดสวิตช์
   const visible = mode === 'preview' ? enabled : pointsVisibleTo(db, uid);
   const adminPreview = mode === 'live' && isAdminUser(db, uid);
 
   const balance = balanceOf(db, uid);
   const lifetime = lifetimeOf(db, uid);
   const rows = ledgerOf(db, uid);
-  const mp = milestoneProgress(lifetime);
-  const top = mp.reached[mp.reached.length - 1];
+
+  // รางวัลรายเดือน (monthly.ts) — ลูกค้าเห็นเมื่อเปิดใช้ · แอดมิน/พรีวิวจำลอง เห็นเสมอ (มีป้ายบอก)
+  const mcfg = monthlyConfig(db);
+  const ym = currentYm();
+  const pieces = monthlyPieces(db, uid, ym, mcfg);
+  const tier = tierFor(mcfg, pieces);
+  const showMonthly = mcfg.enabled || adminPreview || simulating;
 
   // ตั๋วที่ยังค้าง → "จะได้" เท่าไหร่เมื่อปิดยอด (คะแนนคงที่ต่อชิ้น × qty)
   const pending = db.tickets
@@ -53,10 +64,11 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
 
   if (!visible) {
     return (
-      <div className="rounded-card border border-subtle bg-surface-2 p-8 text-center">
-        <div className="text-[34px]">⭐</div>
-        <div className="mt-2 text-[15px] font-bold">ระบบคะแนนสะสมกำลังจะมา</div>
-        <div className="mt-1 text-[12.5px] text-ink-muted2">ร้านจะประกาศวันเริ่มใช้อีกครั้ง</div>
+      <div className="relative overflow-hidden rounded-card border border-[#d4af37]/25 bg-[#0b0708] p-8 text-center">
+        <Embers count={6} />
+        <div className="relative text-[34px] drop-shadow-[0_0_12px_rgba(212,175,55,.6)]">⭐</div>
+        <div className="relative mt-2 text-[15px] font-bold tracking-[.18em] text-[#f1d27a] motion-safe:animate-eldenReveal">ระบบคะแนนสะสมกำลังจะมา</div>
+        <div className="relative mt-1 text-[12.5px] text-ink-muted2">ร้านจะประกาศวันเริ่มใช้อีกครั้ง</div>
       </div>
     );
   }
@@ -69,55 +81,73 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
         </div>
       )}
 
-      {/* balance card */}
-      <div className="mb-4 overflow-hidden rounded-2xl border border-[#d4af37]/30 bg-gradient-to-br from-[#2a2410] via-surface-2 to-surface-2 p-5">
-        <div className="flex items-start justify-between">
+      {/* ── ป้ายหัวเรื่องแบบ Elden Ring: เผยตัวช้าๆ + เส้นทองงอก ── */}
+      <div className="mb-3 text-center">
+        <div className="text-[11px] font-bold uppercase tracking-[.18em] text-[#f1d27a]/90 motion-safe:animate-eldenReveal">✦ RYUMA POINTS ✦</div>
+        <div className="mx-auto mt-1.5 h-px w-40 origin-center bg-gradient-to-r from-transparent via-[#d4af37] to-transparent motion-safe:animate-lineGrow" />
+      </div>
+
+      {/* ── การ์ดคะแนน: ดำ-แดงเรือง ขอบทองซ้อน มุมรูน ถ่านไฟลอย ── */}
+      <div className="relative mb-4 overflow-hidden rounded-2xl border border-[#d4af37]/40 bg-[#0b0708] p-5 shadow-[inset_0_0_0_1px_rgba(0,0,0,.6),inset_0_0_0_3px_rgba(212,175,55,.12),0_18px_50px_-20px_rgba(185,28,28,.55)]">
+        <div className="pointer-events-none absolute -left-16 -top-24 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(185,28,28,.42),transparent_65%)]" />
+        <div className="pointer-events-none absolute -bottom-28 -right-10 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(212,175,55,.22),transparent_65%)]" />
+        <Embers count={10} />
+        <Rune className="left-2 top-1.5" /><Rune className="right-2 top-1.5" /><Rune className="bottom-1.5 left-2" /><Rune className="bottom-1.5 right-2" />
+
+        <div className="relative flex items-start justify-between">
           <div>
-            <div className="text-[12px] font-semibold text-[#f1d27a]/80">คะแนนใช้ได้</div>
+            <div className="text-[11px] font-bold tracking-[.14em] text-[#f1d27a]/75">คะแนนใช้ได้</div>
             <div className="mt-0.5 flex items-end gap-2">
-              <span className="text-[38px] font-extrabold leading-none text-[#f1d27a]">{num(balance)}</span>
-              <span className="pb-1 text-[13px] text-ink-muted2">≈ ฿{num(balance)}</span>
+              <span className="bg-[linear-gradient(90deg,#b8860b,#f7e39b,#d4af37,#fff2b8,#b8860b)] bg-[length:200%_100%] bg-clip-text text-[44px] font-extrabold leading-none text-transparent drop-shadow-[0_0_14px_rgba(212,175,55,.45)] motion-safe:animate-goldShine">{num(balance)}</span>
+              <span className="pb-1.5 text-[13px] text-ink-muted2">≈ ฿{num(balance)}</span>
             </div>
           </div>
-          {adminPreview && (top ? (
-            <div className="rounded-xl border border-[#d4af37]/30 bg-black/20 px-3 py-2 text-center">
-              <div className="text-[22px] leading-none">{top.emoji}</div>
-              <div className="mt-1 text-[11px] font-bold text-[#f1d27a]">{top.label}</div>
+          {showMonthly && (
+            <div className={cx('rounded-xl border px-3 py-2 text-center', tier.reached ? 'border-[#d4af37]/50 bg-black/40 motion-safe:animate-tierGlow' : 'border-subtle bg-black/30')}>
+              <div className="text-[22px] leading-none">{tier.reached?.emoji ?? '🕯️'}</div>
+              <div className={cx('mt-1 text-[11px] font-bold', tier.reached ? 'text-[#f1d27a]' : 'text-ink-faint')}>{tier.reached?.label ?? 'ยังไม่ถึงด่าน'}</div>
+              <div className="text-[10px] text-ink-faint">เดือนนี้</div>
             </div>
-          ) : (
-            <div className="rounded-xl border border-subtle bg-black/20 px-3 py-2 text-center text-[11px] text-ink-faint">ยังไม่ถึงด่านแรก</div>
-          ))}
+          )}
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
-          <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">สะสมตลอดชีพ</div><b className="text-ink">{num(lifetime)}</b></div>
-          <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดยอด</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
-          <div className="rounded-lg bg-black/20 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-ink">เร็วๆ นี้</b></div>
+        <div className="relative mt-4 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">สะสมตลอดชีพ</div><b className="text-[#f1d27a]">{num(lifetime)}</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดยอด</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-ink">เร็วๆ นี้</b></div>
         </div>
       </div>
 
-      {/* milestone track — เฟสนี้แอดมินเห็นเป็นพรีวิวเท่านั้น (สิทธิ์ยังไม่บังคับใช้อัตโนมัติ) */}
-      {adminPreview && <div className="mb-4 rounded-card border border-dashed border-[#d4af37]/40 bg-surface-2 p-4">
-        <div className="mb-2 rounded-md bg-[#d4af37]/[0.12] px-2 py-1 text-[11px] font-bold text-[#f1d27a]">🔒 พรีวิวแอดมิน — ลูกค้ายังไม่เห็นส่วนนี้</div>
-        <div className="mb-1 flex items-center justify-between">
-          <span className="text-[13.5px] font-bold">🏁 ด่านสะสม</span>
-          {mp.next ? <span className="text-[11.5px] text-ink-faint">อีก {num(mp.need)} คะแนน → {mp.next.emoji} {mp.next.label}</span> : <span className="text-[11.5px] font-bold text-[#f1d27a]">ถึงด่านสูงสุดแล้ว</span>}
+      {/* ── รางวัลรายเดือน: พรีครบ X ชิ้น/เดือน → ด่าน (monthly.ts) ── */}
+      {showMonthly && (
+        <div className={cx('relative mb-4 overflow-hidden rounded-card border bg-[#0d0909] p-4', mcfg.enabled ? 'border-[#d4af37]/30' : 'border-dashed border-[#d4af37]/40')}>
+          {!mcfg.enabled && <div className="mb-2 rounded-md bg-[#d4af37]/[0.12] px-2 py-1 text-[11px] font-bold text-[#f1d27a]">🔒 พรีวิวแอดมิน — ลูกค้ายังไม่เห็นส่วนนี้ (เปิดที่ /admin/points/monthly)</div>}
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[13.5px] font-bold text-[#f1d27a]">🏆 รางวัลรายเดือน · {ymLabel(ym)}</span>
+            <span className="text-[11.5px] text-ink-faint">พรีแล้ว <b className="text-ink">{pieces}</b> ชิ้น</span>
+          </div>
+          <div className="mb-2 text-[11.5px] text-ink-faint">
+            {tier.next ? <>อีก <b className="text-[#fbbf24]">{tier.next.pieces - pieces}</b> ชิ้น → {tier.next.emoji} {tier.next.label}</> : <span className="font-bold text-[#f1d27a]">ถึงด่านสูงสุดของเดือนแล้ว</span>}
+            <span className="ml-1 text-ink-faint">· รีเซ็ตทุกต้นเดือน</span>
+          </div>
+          {/* แถบความคืบหน้า ทองไหล */}
+          <div className="h-2 overflow-hidden rounded-full border border-[#d4af37]/25 bg-black/60">
+            <div className="h-full rounded-full bg-[linear-gradient(90deg,#7f1d1d,#d4af37,#f7e39b,#d4af37)] bg-[length:200%_100%] motion-safe:animate-goldShine" style={{ width: `${tier.pct}%` }} />
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {mcfg.tiers.map((m) => {
+              const got = pieces >= m.pieces;
+              return (
+                <div key={m.pieces} className={cx('relative rounded-xl border p-2.5 text-center', got ? 'border-[#d4af37]/50 bg-[#d4af37]/[0.10] motion-safe:animate-tierGlow' : 'border-white/10 bg-black/30 opacity-75')}>
+                  <div className={cx('text-[20px] leading-none', got && 'drop-shadow-[0_0_10px_rgba(212,175,55,.7)]')}>{m.emoji}</div>
+                  <div className={cx('mt-1 text-[12px] font-extrabold', got ? 'text-[#f1d27a]' : 'text-ink-muted2')}>{m.label}</div>
+                  <div className="text-[10.5px] text-ink-faint">{m.pieces} ชิ้น/เดือน</div>
+                  <div className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] text-ink-muted2">{m.perks.map((p) => <span key={p}>• {p}</span>)}</div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <ProgressBar pct={mp.pct} fill="#f1d27a" />
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          {MILESTONES.map((m) => {
-            const got = lifetime >= m.threshold;
-            return (
-              <div key={m.threshold} className={cx('rounded-xl border p-2.5 text-center', got ? 'border-[#d4af37]/40 bg-[#d4af37]/[0.10]' : 'border-subtle bg-surface-3/40 opacity-70')}>
-                <div className="text-[20px] leading-none">{m.emoji}</div>
-                <div className={cx('mt-1 text-[12px] font-extrabold', got ? 'text-[#f1d27a]' : 'text-ink-muted2')}>{m.label}</div>
-                <div className="text-[10.5px] text-ink-faint">{num(m.threshold)} คะแนน</div>
-                <div className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] text-ink-muted2">{m.perks.map((p) => <span key={p}>• {p}</span>)}</div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="mt-2 text-[11px] text-ink-faint">ด่านนับจากคะแนนที่ "เคยได้" ทั้งหมด — ใช้คะแนนไปแล้วด่านไม่ถอย</div>
-      </div>}
+      )}
 
       {/* how to earn */}
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
@@ -190,4 +220,31 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
       </div>
     </>
   );
+}
+
+/** ถ่านไฟลอย (ember) — จุดทอง/แดงเล็กๆ ลอยขึ้นแล้วจาง · ตำแหน่ง/ดีเลย์กระจายแบบคงที่ (ไม่สุ่มตอน render กัน hydration mismatch) */
+function Embers({ count }: { count: number }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden motion-reduce:hidden" aria-hidden>
+      {Array.from({ length: count }).map((_, i) => {
+        const left = ((i * 37) % 97) + 1;           // %
+        const delay = (i * 0.47) % 3.4;              // s
+        const dur = 3 + ((i * 0.83) % 2.2);          // s
+        const size = 2 + (i % 3);                    // px
+        const gold = i % 3 !== 0;
+        return (
+          <span
+            key={i}
+            className="absolute bottom-2 block rounded-full animate-ember"
+            style={{ left: `${left}%`, width: size, height: size, animationDelay: `${delay}s`, animationDuration: `${dur}s`, background: gold ? '#f1d27a' : '#ef4444', boxShadow: gold ? '0 0 6px 1px rgba(241,210,122,.8)' : '0 0 6px 1px rgba(239,68,68,.7)' }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** มุมรูนทอง ✦ กระพริบช้า */
+function Rune({ className }: { className: string }) {
+  return <span aria-hidden className={cx('pointer-events-none absolute text-[10px] text-[#d4af37]/70 motion-safe:animate-runePulse', className)}>✦</span>;
 }

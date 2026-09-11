@@ -37,7 +37,7 @@ export default function AdminPointsPage() {
 
   return (
     <div>
-      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }]} />
+      <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }, { href: '/admin/points/monthly', label: '🏆 รางวัลรายเดือน' }]} />
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-2xl font-extrabold">คะแนนสะสม</span>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', on ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{on ? '● เปิดใช้งาน' : '○ โหมดพรีวิว (ยังไม่ให้คะแนนจริง)'}</span>

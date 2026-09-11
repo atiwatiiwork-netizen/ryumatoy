@@ -87,9 +87,42 @@ const config: Config = {
           '0%,100%': { opacity: '1' },
           '50%': { opacity: '.35' },
         },
+        // ── คะแนนสะสม ธีม Elden Ring แดง-ทอง-ดำ (PointsPanel) ──
+        ember: {
+          "0%": { transform: "translateY(0) scale(.6)", opacity: "0" },
+          "20%": { opacity: "1" },
+          "100%": { transform: "translateY(-70px) translateX(6px) scale(1.1)", opacity: "0" },
+        },
+        goldShine: {
+          "0%": { backgroundPosition: "0% 50%" },
+          "100%": { backgroundPosition: "200% 50%" },
+        },
+        eldenReveal: {
+          "0%": { opacity: "0", letterSpacing: ".7em", filter: "blur(6px)" },
+          "60%": { opacity: "1" },
+          "100%": { opacity: "1", letterSpacing: ".18em", filter: "blur(0)" },
+        },
+        lineGrow: {
+          "0%": { transform: "scaleX(0)", opacity: "0" },
+          "100%": { transform: "scaleX(1)", opacity: "1" },
+        },
+        tierGlow: {
+          "0%,100%": { boxShadow: "0 0 0 0 rgba(212,175,55,.0), inset 0 0 0 1px rgba(212,175,55,.35)" },
+          "50%": { boxShadow: "0 0 22px 2px rgba(212,175,55,.35), inset 0 0 0 1px rgba(212,175,55,.8)" },
+        },
+        runePulse: {
+          "0%,100%": { opacity: ".55" },
+          "50%": { opacity: "1" },
+        },
       },
       animation: {
         blink: 'blink 1.1s ease-in-out infinite',
+        ember: "ember 3.6s ease-out infinite",
+        goldShine: "goldShine 3.2s linear infinite",
+        eldenReveal: "eldenReveal 1.5s cubic-bezier(.2,.7,.2,1) both",
+        lineGrow: "lineGrow 1.1s ease-out .35s both",
+        tierGlow: "tierGlow 2.6s ease-in-out infinite",
+        runePulse: "runePulse 2.2s ease-in-out infinite",
         pulseGlow: 'pulseGlow 1.8s ease-in-out infinite',
         pulseRed: 'pulseRed 2.2s infinite',
         couponShine: 'couponShine 2.6s ease-in-out infinite',
