@@ -10,8 +10,8 @@ import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { StatusBadge, cx } from '@/components/ui';
 import { manufacturerOf, productLabel, lineImage } from '@/domain/services/catalog';
-import { ticketBadgeKey, ticketDone } from '@/domain/services/delivery';
-import { ticketPayable, pendingRpFor } from '@/domain/services/payments';
+import { ticketBadgeKey } from '@/domain/services/delivery';
+import { ticketPayable, pendingRpFor, walletTabOf } from '@/domain/services/payments';
 import { ticketDue } from '@/domain/services/money';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { balanceOf, pointsVisibleTo } from '@/domain/services/points';
@@ -25,16 +25,9 @@ type Tab = 'all' | 'preorder' | 'pay' | 'shipping' | 'done' | 'coupon';
 // และตั๋ว shipped/delivered ของ in-stock ไม่เข้าแท็บไหนเลย → ตัดสินด้วย "จบ/จ่ายครบ" ก่อนเสมอ
 // audit 2026-09-12: ใบถึงไทยที่ยังค้างจ่ายเคยโผล่ "เรียบร้อย" (ticketDone ถือ arrived = จบ) และใบเดินทางที่ค้างอยู่
 // "กำลังเดินทาง" → ใบที่เปิดให้จ่ายกระจาย 2 แท็บ ไม่มีที่รวม → เพิ่มแท็บ "รอชำระ" และให้ ticketPayable ตัดสินก่อน
-function matchTab(tab: Tab, t: PreorderTicket): boolean {
+function matchTab(db: Database, tab: Tab, t: PreorderTicket): boolean {
   if (tab === 'all') return true;
-  const payable = ticketPayable(t);
-  if (tab === 'pay') return payable;
-  // จ่ายครบแต่ของยังเดินทางอยู่ = "กำลังเดินทาง" อย่างเดียว (เคยโผล่ 2 แท็บพร้อมกัน audit 2026-07-23);
-  // ตั๋วจบงาน (shipped) อยู่ "เรียบร้อย" เสมอ
-  const inTransit = t.product_status === 'shipping' && t.status !== 'shipped';
-  if (tab === 'done') return ticketDone(t) && !inTransit && !payable;
-  if (tab === 'shipping') return inTransit && !payable;
-  return (t.product_status === 'open' || t.product_status === 'production') && !ticketDone(t); // ใบพรีที่ยังเดินอยู่
+  return walletTabOf(db, t) === tab; // กติกาเดียวใน payments.ts (มีเทสต์คลุม)
 }
 
 export default function WalletPage() {
@@ -53,7 +46,7 @@ export default function WalletPage() {
   const payCount = mine.filter(ticketPayable).length;
 
   const filtered = mine
-    .filter((t) => matchTab(tab, t))
+    .filter((t) => matchTab(db, tab, t))
     .sort((a, b) => (newest ? (a.created_at < b.created_at ? 1 : -1) : a.created_at < b.created_at ? -1 : 1));
 
   // group by ค่าย (maker), preserving the sorted order within each group

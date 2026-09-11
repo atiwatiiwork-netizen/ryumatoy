@@ -74,13 +74,13 @@ function PayInner() {
   };
 
   const submit = async () => {
-    if (!slip || busy || tickets.length === 0) return;
+    if ((!slip && total > 0) || busy || tickets.length === 0) return; // คูปองครอบทั้งยอด = ไม่ต้องมีสลิป
     setBusy(true);
     try {
       const before = db.remainingPayments.length;
       // สลิปเดียว = slip_url เดียวกันทุกแถว → แอดมินเห็นเป็นกลุ่ม (pendingRpGroups)
       for (const t of tickets) {
-        dispatch(submitRemainingPayment(t.id, uid, lineAmount(t), slip, couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined));
+        dispatch(submitRemainingPayment(t.id, uid, lineAmount(t), slip ?? '', couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined));
       }
       let after = before;
       dispatch((d) => { after = d.remainingPayments.length; return d; });
@@ -163,7 +163,7 @@ function PayInner() {
             </label>
             <div className="flex gap-2.5">
               <Button variant="ghost" onClick={goBack}>ยกเลิก</Button>
-              <Button disabled={!slip || busy} onClick={submit}>ส่งสลิป {tickets.length} ใบ · รอตรวจสอบ</Button>
+              <Button disabled={(!slip && total > 0) || busy} onClick={submit}>ส่งสลิป {tickets.length} ใบ · รอตรวจสอบ</Button>
             </div>
           </div>
         </>

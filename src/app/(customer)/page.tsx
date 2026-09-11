@@ -14,6 +14,7 @@ import { paidPercent } from '@/domain/services/tickets';
 import { ticketDue } from '@/domain/services/money';
 import { inClosedBoard } from '@/domain/services/catalog';
 import { ticketBadgeKey } from '@/domain/services/delivery';
+import { ticketPayable, pendingRpFor } from '@/domain/services/payments';
 
 /** Home — responsive (mobile phone layout ↔ desktop top-nav web, HANDOFF.md). */
 export default function HomePage() {
@@ -54,7 +55,9 @@ export default function HomePage() {
               const sub = badgeKey === 'shipped' ? 'เสร็จสิ้น รับของเรียบร้อย ✓'
                 : badgeKey === 'awaiting_ship' ? 'รอจัดส่ง — เลือกวิธีรับของแล้ว ✓'
                 : badgeKey === 'paid_full' || due <= 0 ? 'จ่ายครบแล้ว ✓'
-                : t.product_status === 'arrived' ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
+                // ส่งสลิปแล้ว = รอแอดมินตรวจ (เดิมยังบอก "รอชำระ" ทั้งที่จ่ายไปแล้ว — audit 2026-09-12) · เปิดให้จ่าย = กติกาเดียวกับแท็บ "รอชำระ"
+                : pendingRpFor(db, t.id) ? `ส่งสลิปแล้ว ${baht(pendingRpFor(db, t.id)!.amount)} · รอตรวจ`
+                : ticketPayable(t) ? `รอชำระส่วนต่าง ${baht(due)}` : `ค้างจ่าย ${baht(due)}`;
               return (
                 <Link key={t.id} href="/wallet" className="min-w-[168px] rounded-card border border-subtle bg-surface-2 p-4 lg:min-w-0">
                   <div className="mb-2.5 flex items-center justify-between">

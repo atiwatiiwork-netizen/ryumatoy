@@ -1,5 +1,7 @@
 import type { Database, PreorderTicket, RemainingPayment } from '../entities';
 import { ticketDue } from './money';
+import { ticketPaidFull } from './delivery';
+import { ticketIsFullPay } from './points';
 
 /**
  * ส่วนต่าง / "รอชำระ" — แหล่งความจริงเดียวว่าใบไหน "เปิดให้จ่ายแล้ว" และสลิปไหนอยู่กลุ่มเดียวกัน
@@ -57,4 +59,23 @@ export function pendingRpGroups(db: Database): RpGroup[] {
   }
   return [...m.values()].map((g) => ({ ...g, rps: [...g.rps].sort((a, b) => (a.created_at < b.created_at ? -1 : 1)) }))
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+// ── แท็บกระเป๋าพรี (ตัวเดียวที่ /wallet ใช้ — ทดสอบได้ใน scripts/audit/payments-audit.ts) ──────────────
+export type WalletTab = 'preorder' | 'pay' | 'shipping' | 'done';
+/**
+ * ใบนี้ควรอยู่แท็บไหน (ตัดสินตามลำดับ):
+ *  1. รอชำระ  = เปิดให้จ่ายแล้ว (ticketPayable)
+ *  2. กำลังเดินทาง = ของกำลังเดินทาง + จ่ายครบแล้ว
+ *  3. ใบพรี   = ของยังเปิดจอง/ผลิต — รวมใบที่ "จ่ายครบก่อนของออก" (แอดมินแก้มัดจำเป็นเต็ม/จ่ายล่วงหน้า)
+ *              ยกเว้นตั๋วที่จ่ายเต็มตั้งแต่เกิด (พร้อมส่ง/รอบจ่ายเต็ม) = ไม่มีอะไรต้องรอ → เรียบร้อย
+ *              (audit 2026-09-12: เดิม ticketDone ถือ paid_full = จบ → ใบพรีที่จ่ายครบแต่ของยังผลิตหายจาก "ใบพรี" ไปโผล่ "เรียบร้อย")
+ *  4. เรียบร้อย = ที่เหลือ (ถึงไทย/ส่งมอบ/เสร็จสิ้น จ่ายครบแล้ว)
+ */
+export function walletTabOf(db: Database, t: PreorderTicket): WalletTab {
+  if (ticketPayable(t)) return 'pay';
+  if (t.product_status === 'shipping' && t.status !== 'shipped') return 'shipping';
+  const live = (t.product_status === 'open' || t.product_status === 'production') && t.status !== 'shipped';
+  if (live && !(ticketPaidFull(t) && ticketIsFullPay(db, t))) return 'preorder';
+  return 'done';
 }
