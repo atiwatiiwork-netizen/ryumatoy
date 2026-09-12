@@ -31,8 +31,8 @@ export function MissionAdmin() {
   const { flash } = useToast();
   const saved = missionConfig(db);
   const [draft, setDraft] = useState<MissionConfig>(() => saved ?? {
-    title: 'ภารกิจนักสะสม — ทำ 3 อย่าง รับคูปอง 100 บาท',
-    blurb: 'พรี 1 ใบ + ลงแอปหน้าจอ + เปิดกระดิ่ง รับเลยคูปองส่วนลด 100 บาท',
+    title: 'ภารกิจนักสะสม — ทำ 3 อย่าง รับ 100 แต้ม',
+    blurb: 'พรี 1 ใบ + ลงแอปหน้าจอ + เปิดกระดิ่ง รับเลย 100 แต้มสะสม (1 แต้ม = 1฿ ใช้ลดตอนปิดใบพรี)',
     starts_at: today(), ends_at: plusDays(30), reward_coupon_id: '', active: false,
   });
   const set = <K extends keyof MissionConfig>(k: K, v: MissionConfig[K]) => setDraft((d) => ({ ...d, [k]: v }));
@@ -55,10 +55,11 @@ export function MissionAdmin() {
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const quickCreateReward = () => {
-    dispatch(createCoupon({ label: `Event ภารกิจ ${baht(100)}`, value: 100, scope: 'both' }));
+    // rework 2026-09-12 ค่ำ: รางวัลภารกิจ = คูปองแต้ม (เข้าคะแนนสะสมทันทีตอนอนุมัติ) ไม่ใช่ส่วนลดตรง
+    dispatch(createCoupon({ label: 'Event ภารกิจ · 100 แต้ม', value: 100, scope: 'points' }));
     let newest = '';
     dispatch((d) => { newest = d.coupons[0]?.id ?? ''; return d; }); // createCoupon prepends → [0] is ours
-    if (newest) { set('reward_coupon_id', newest); flash('สร้างคูปองรางวัล 100 บาทแล้ว ✓'); }
+    if (newest) { set('reward_coupon_id', newest); flash('สร้างรางวัล 100 แต้มแล้ว ✓'); }
   };
 
   const save = (active: boolean) => {
@@ -87,12 +88,14 @@ export function MissionAdmin() {
     if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ลองอนุมัติใหม่');
     const givenId = missionConfig(db)?.reward_coupon_id;
     const given = db.coupons.find((c) => c.id === givenId);
+    const pts = given?.scope === 'points';
+    const rewardText = pts ? `${given?.value ?? 100} แต้ม` : `คูปอง ${baht(given?.value ?? 100)}`;
     if (after > before) {
       if (pushEnabled(db, 'event_reward'))
-        sendPush(subsForUsers(db, [userId]), { title: '🏆 ภารกิจสำเร็จ!', body: `รับคูปอง ${baht(given?.value ?? 100)} แล้ว — อยู่ใน "คูปองของฉัน"`, url: '/missions' }, dispatch).catch(() => {});
-      flash(`อนุมัติ + ส่งคูปอง ${baht(given?.value ?? 100)} ให้ ${nameOf(userId)} ✓`);
+        sendPush(subsForUsers(db, [userId]), { title: '🏆 ภารกิจสำเร็จ!', body: pts ? `รับ ${rewardText} แล้ว — ดูใน "คะแนนสะสม"` : `รับ${rewardText} แล้ว — อยู่ใน "คูปองของฉัน"`, url: pts ? '/points' : '/missions' }, dispatch).catch(() => {});
+      flash(`อนุมัติ + ส่ง${rewardText} ให้ ${nameOf(userId)} ✓`);
     } else {
-      flash(`อนุมัติแล้ว ✓ — แต่ ${nameOf(userId)} มีคูปองใบนี้อยู่แล้ว จึงไม่ได้เพิ่มใบใหม่`);
+      flash(`อนุมัติแล้ว ✓ — แต่ ${nameOf(userId)} ได้รางวัลนี้ไปแล้ว จึงไม่ได้ให้ซ้ำ`);
     }
   };
 
@@ -131,9 +134,9 @@ export function MissionAdmin() {
             <div className="flex gap-2">
               <select className={inputCls} value={draft.reward_coupon_id} onChange={(e) => set('reward_coupon_id', e.target.value)}>
                 <option value="">— เลือกคูปอง —</option>
-                {db.coupons.filter((c) => c.active).map((c) => <option key={c.id} value={c.id}>{c.label} · {baht(c.value)}</option>)}
+                {db.coupons.filter((c) => c.active && !c.campaign_id).map((c) => <option key={c.id} value={c.id}>{c.scope === 'points' ? `⭐ ${c.value} แต้ม` : `🎟️ ลด ${baht(c.value)}`} · {c.label}</option>)}
               </select>
-              <button onClick={quickCreateReward} className="shrink-0 rounded-lg border border-subtle bg-surface-3 px-3 text-[12px] font-bold text-ink-muted2">＋ สร้าง 100฿</button>
+              <button onClick={quickCreateReward} className="shrink-0 rounded-lg border border-subtle bg-surface-3 px-3 text-[12px] font-bold text-ink-muted2">＋ สร้าง 100 แต้ม</button>
             </div>
           </Field>
           <div className="flex flex-wrap gap-2">
@@ -150,7 +153,7 @@ export function MissionAdmin() {
               <button key={k} onClick={() => setPv((p) => ({ ...p, [k]: !p[k] }))} className={cx('rounded-full border px-2 py-0.5 text-[10.5px] font-bold', pv[k] ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-faint')}>{['🎫 พรี', '📲 ลงจอ', '🔔 กระดิ่ง'][i]}</button>
             ))}
           </div>
-          <MissionQuestCard cfg={draft} rewardValue={reward?.value ?? 100} flags={pv} />
+          <MissionQuestCard cfg={draft} rewardValue={reward?.value ?? 100} rewardKind={reward && reward.scope !== 'points' ? 'baht' : 'points'} flags={pv} />
           {!saved?.active && (
             <button onClick={() => save(true)} className="mt-3 w-full rounded-xl bg-gradient-to-r from-[#b45309] to-[#d4af37] py-3 text-[14px] font-extrabold text-white">
               ✅ ตรวจพรีวิวแล้ว — เปิดใช้งาน Event

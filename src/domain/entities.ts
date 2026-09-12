@@ -288,7 +288,9 @@ export interface TicketTransfer {
  * Coupons are handed to specific customers via CouponGrant rows — there is no public code.
  * Legacy code/type/min_order/used_count kept nullable for column back-compat only. (ryuma-coupon-spec)
  */
-export type CouponScope = 'preorder' | 'instock' | 'both';
+/** 'points' = "คูปองแต้ม" (rework 2026-09-12 ค่ำ): มอบแล้วเข้าคะแนนสะสมทันที (value = แต้ม) ไม่ใช่ส่วนลดตรง —
+ *  ใช้ค่าใน scope (คอลัมน์ text ไม่มี check) เพื่อไม่ต้องรัน migration · Event: campaigns.reward_scope = 'points' ก็แบบเดียวกัน */
+export type CouponScope = 'preorder' | 'instock' | 'both' | 'points';
 export interface Coupon {
   id: string;
   label: string; // display name e.g. "ส่วนลด 200 สงกรานต์"
@@ -780,13 +782,13 @@ export interface AuctionEntry {
 
 /** สมุดคะแนนสะสม (migration v66 · ryuma-points-spec) — เขียนเพิ่มอย่างเดียว ยอดคงเหลือ = sum(delta).
  *  แถว "ได้คะแนน" ผูก id กับตั๋ว (pl-earn-<ticket_id>) เสมอ → มินต์ซ้ำจากคนละเครื่อง = แถวเดิม ไม่ใช่แถวใหม่. */
-export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'monthly_reward' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
+export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'monthly_reward' | 'coupon_reward' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
 export interface PointLedgerEntry {
   id: string;
   user_id: string;
   delta: number;            // +ได้ / -ใช้
   kind: PointLedgerKind;
-  ref_type?: 'ticket' | 'order' | 'remaining_payment' | 'monthly'; // monthly = รางวัลยศประจำเดือน (ref_id = ym|user|pieces)
+  ref_type?: 'ticket' | 'order' | 'remaining_payment' | 'monthly' | 'coupon_grant'; // coupon_grant = คูปองแต้ม (ref_id = grant id) // monthly = รางวัลยศประจำเดือน (ref_id = ym|user|pieces)
   ref_id?: string;
   note?: string;            // ข้อความไทยพร้อมอ่าน (เลขตั๋ว/ชื่อสินค้า/เหตุผลที่ปรับ)
   created_by?: string;      // 'system' | admin user id

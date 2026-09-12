@@ -145,6 +145,7 @@ export const SEED_DATABASE: Database = {
     { id: 'c-1', label: 'ส่วนลด 100 พร้อมส่ง', value: 100, scope: 'instock', active: true, created_at: '2026-07-01' },
     { id: 'c-2', label: 'ส่วนลด 200 พรีออเดอร์', value: 200, scope: 'preorder', active: true, created_at: '2026-07-01' },
     { id: 'c-3', label: 'ส่วนลด 300 ใช้ได้ทุกแบบ', value: 300, scope: 'both', active: true, created_at: '2026-07-01' },
+    { id: 'c-4', label: 'แต้มต้อนรับสมาชิกใหม่', value: 100, scope: 'points', active: true, created_at: '2026-09-12' }, // คูปองแต้ม (rework 2026-09-12)
   ],
 
   couponGrants: [],
@@ -159,13 +160,13 @@ export const SEED_DATABASE: Database = {
 
   campaigns: [
     {
-      id: 'ev-1', name: 'พรีครบ รับคูปอง', product_blurb: 'ยิ่งพรีเยอะ ยิ่งได้คูปองส่วนลดเยอะ — สะสมใบพรีในช่วงกิจกรรม รับคูปองอัตโนมัติ!',
+      id: 'ev-1', name: 'พรีครบ รับแต้ม', product_blurb: 'ยิ่งพรีเยอะ ยิ่งได้แต้มสะสมเยอะ — สะสมใบพรีในช่วงกิจกรรม รับคูปองอัตโนมัติ!',
       starts_at: '2026-07-01', ends_at: '2026-12-31', active: true,
       tiers: [
         { threshold: 5, coupon_value: 100, coupon_count: 1 },
         { threshold: 10, coupon_value: 200, coupon_count: 2 },
       ],
-      reward_scope: 'both', reward_expiry_days: 30, created_at: '2026-07-01',
+      reward_scope: 'points', reward_expiry_days: 30, created_at: '2026-07-01', // Event แบบแต้ม (rework 2026-09-12)
     },
   ],
   campaignAwards: [],

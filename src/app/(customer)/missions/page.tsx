@@ -78,13 +78,14 @@ export default function MissionsPage() {
               <img src={live.banner_url} alt={live.title} className="relative w-full rounded-2xl object-cover" />
               <span className="absolute left-2 top-2 animate-pulse rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-extrabold text-[#f1d27a] backdrop-blur-sm">✨ กิจกรรมพิเศษ</span>
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center bg-gradient-to-t from-black/70 to-transparent pb-2 pt-6">
-                <span className="animate-pulse text-[12.5px] font-bold text-white drop-shadow">👇 ทำภารกิจด้านล่าง รับคูปองเลย!</span>
+                <span className="animate-pulse text-[12.5px] font-bold text-white drop-shadow">👇 ทำภารกิจด้านล่าง รับรางวัลเลย!</span>
               </div>
             </div>
           )}
           <MissionQuestCard
             cfg={live}
             rewardValue={reward?.value ?? 0}
+            rewardKind={reward && reward.scope !== 'points' ? 'baht' : 'points'}
             flags={state}
             proofUrl={proofUrl}
             busy={busy}

@@ -161,7 +161,7 @@ export const balanceOf = (db: Database, userId: string) =>
 /** ยอดสะสม = ผลรวมคะแนนที่ "ได้จริง" (ปิดตั๋ว + รางวัลยศรายเดือน) หัก reverse — ไม่นับแอดมินเติม/คืน */
 export const lifetimeOf = (db: Database, userId: string) =>
   Math.max(0, db.pointLedger
-    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket' || e.kind === 'monthly_reward'))
+    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket' || e.kind === 'monthly_reward' || e.kind === 'coupon_reward'))
     .reduce((s, e) => s + e.delta, 0));
 
 /** วันที่เคลื่อนไหวล่าสุด (ใช้กับกติกาหมดอายุ 12 เดือน — ตัวกวาดยังไม่เปิด) */
@@ -285,6 +285,7 @@ export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji
   earn_ticket: { label: 'ได้คะแนน · ปิดยอด', emoji: '✨' },
   reverse_ticket: { label: 'ดึงคืน · ตั๋วถูกลบ', emoji: '↩️' },
   monthly_reward: { label: 'รางวัลยศประจำเดือน', emoji: '🏆' },
+  coupon_reward: { label: 'รางวัลแต้ม · คูปอง / Event / ภารกิจ', emoji: '🎁' },
   redeem_order: { label: 'ใช้ลด · ซื้อพร้อมส่ง', emoji: '🛒' },
   redeem_remaining: { label: 'ใช้ลด · ส่วนต่าง', emoji: '🎟️' },
   refund: { label: 'คืนคะแนน · สลิปไม่ผ่าน', emoji: '↩️' },
@@ -307,3 +308,21 @@ export function redeemFlag(db: Database): boolean {
 /** ลูกค้าใช้แต้มตัดยอดได้ไหม = ระบบคะแนนเปิด **และ** สวิตช์ใช้แต้มเปิด —
  *  ตัวเดียวที่ปุ่มเลือกแต้ม (หน้าตั๋ว / จ่ายรวม / checkout) และ clampRedeem ใช้ · ปิด = เห็นแต้ม แต่ยังใช้ลดไม่ได้ */
 export const redeemEnabled = (db: Database) => db.settings.points_enabled && redeemFlag(db);
+
+// ── คูปองแต้ม (rework 2026-09-12 ค่ำ: คูปอง / Event / ภารกิจ ให้เป็นแต้มแทนส่วนลดตรง) ──────────────
+/** id แถว "ได้แต้มจากคูปอง" ผูกกับ grant → มอบซ้ำ/เซฟล้มส่งซ้ำ = แถวเดิม (DB unique(kind, ref_id) อีกชั้น) */
+export const couponRewardId = (grantId: string) => `pl-coupon-${grantId}`;
+/** แถวแต้มของคูปองแต้ม — เกิดใน mutation เดียวกับ grant (grantCoupon / grantCampaignRewards) ทั้งหมดรันในเซสชันแอดมิน (RLS) */
+export function couponRewardRow(grant: { id: string; user_id: string; granted_at: string }, coupon: { label: string; value: number }, actorId = 'system'): PointLedgerEntry {
+  return {
+    id: couponRewardId(grant.id),
+    user_id: grant.user_id,
+    delta: Math.max(0, Math.trunc(coupon.value)),
+    kind: 'coupon_reward',
+    ref_type: 'coupon_grant',
+    ref_id: grant.id,
+    note: `คูปองแต้ม · ${coupon.label}`,
+    created_by: actorId,
+    created_at: grant.granted_at,
+  };
+}

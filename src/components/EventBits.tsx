@@ -15,7 +15,7 @@ export function useActiveCampaign() {
 
 /**
  * A customer's personal progress toward the next event reward — count so far, a bar within the
- * current loop cycle, and "อีก N ใบรับคูปอง Y". Renders nothing when there is no live event.
+ * current loop cycle, and "อีก N ใบรับ Y แต้ม" (Event แบบแต้ม) / "รับคูปอง Y" (แบบเก่า). Renders nothing when there is no live event.
  * `variant`: 'card' (home/profile) or 'inline' (product page).
  */
 export function EventProgress({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
@@ -31,7 +31,9 @@ export function EventProgress({ variant = 'card' }: { variant?: 'card' | 'inline
   const pct = next ? Math.min(100, Math.max(4, ((count - segStart) / (next.nextRequired - segStart)) * 100)) : 100;
 
   const line = next
-    ? <>พรีอีก <b className="text-primary-soft">{next.need}</b> รายการ รับคูปอง <b className="text-primary-soft">{baht(next.value)}</b></>
+    ? c.reward_scope === 'points'
+      ? <>พรีอีก <b className="text-primary-soft">{next.need}</b> รายการ รับ <b className="text-primary-soft">{next.total} แต้ม</b></>
+      : <>พรีอีก <b className="text-primary-soft">{next.need}</b> รายการ รับคูปอง <b className="text-primary-soft">{baht(next.value)}</b></>
     : <>เก็บครบทุกชั้นแล้ว 🎉</>;
 
   if (variant === 'inline') {

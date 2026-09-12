@@ -184,6 +184,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
           <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (จ่ายส่วนต่างครบ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
           {rate.instock > 0 && <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>}
           <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — ส่วนลดตอนปิดใบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `${num(sharePerPiece(t))}/ใบ`).join(' · ')}</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">🎁</span><span className="flex-1">รางวัลสะสม — Event พรีครบ / ภารกิจ / คูปองแต้มจากร้าน</span><b className="text-[#f1d27a]">เข้าแต้มทันที</b></div>
           <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · {canRedeem ? 'ใช้ลดได้' : 'เร็วๆ นี้ใช้ลดได้'}ตอนปิดใบพรี (สูงสุด {num(rules.pre.cap)}/ใบ) และซื้อของพร้อมส่ง (สูงสุด {num(rules.instock.cap)}/ครั้ง) · ครั้งละอย่างน้อย {rules.pre.min}{!canRedeem && ' — ร้านจะประกาศวันเปิดใช้แต้มอีกครั้ง'}</div>
         </div>
       </div>

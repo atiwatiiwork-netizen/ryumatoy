@@ -4,13 +4,13 @@ import { useEffect, useState } from 'react';
 import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
-import { couponTier, usableGrantsFor, couponExpired } from '@/domain/services/coupons';
+import { couponTier, usableGrantsFor, couponExpired, isPointsCoupon } from '@/domain/services/coupons';
 import type { CouponTier } from '@/domain/services/coupons';
 import type { Coupon } from '@/domain/entities';
 import { Icon } from './Icon';
 import { cx } from './ui';
 
-const SCOPE_LABEL: Record<string, string> = { preorder: 'พรีออเดอร์', instock: 'พร้อมส่ง', both: 'พรี & พร้อมส่ง' };
+const SCOPE_LABEL: Record<string, string> = { preorder: 'พรีออเดอร์', instock: 'พร้อมส่ง', both: 'พรี & พร้อมส่ง', points: 'แต้มสะสม' };
 
 type TierMeta = { label: string; grad: string; ink: string; subInk: string; star: string; glow: string; ring: string; stars: number };
 export const TIER_META: Record<CouponTier, TierMeta> = {
@@ -48,7 +48,8 @@ export function CouponTicket({ coupon, size = 'md', muted = false, className }: 
   const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '');
   // what the coupon is locked to — maker name takes priority (ค่าย), then a specific product, else its scope
   const scopeText = SCOPE_LABEL[coupon.scope] ?? coupon.scope;
-  const target = coupon.target_maker_id
+  const pts = isPointsCoupon(coupon); // คูปองแต้ม (rework 2026-09-12 ค่ำ): โชว์เป็นแต้ม ไม่ใช่ "ลด ฿"
+  const target = pts ? 'เข้าคะแนนสะสมทันทีที่ได้รับ · 1 แต้ม = 1฿' : coupon.target_maker_id
     ? `เฉพาะค่าย ${db.manufacturers.find((x) => x.id === coupon.target_maker_id)?.name ?? ''}`.trim()
     : coupon.target_product_id
       ? `เฉพาะ ${db.products.find((p) => p.id === coupon.target_product_id)?.series_name ?? 'รุ่นนี้'}`
@@ -79,7 +80,7 @@ export function CouponTicket({ coupon, size = 'md', muted = false, className }: 
       <div className="relative flex items-stretch">
         <div className={cx('min-w-0 flex-1', d.pad)}>
           <div className={cx('font-black leading-none', d.val)} style={{ color: m.ink, textShadow: tier === 'ultimate' ? 'none' : '0 1px 2px rgba(0,0,0,.35)' }}>
-            ลด {baht(coupon.value)}
+            {pts ? `${coupon.value.toLocaleString('en-US')} แต้ม` : `ลด ${baht(coupon.value)}`}
           </div>
           <div className={cx('mt-1.5 font-extrabold', d.label)} style={{ color: m.ink }}>{m.label}</div>
           <div className={cx('mt-1 truncate font-semibold', d.sub)} style={{ color: m.subInk }}>
@@ -113,9 +114,15 @@ export function CouponReceived() {
   }, [key]);
 
   if (!ready || !uid) return null;
-  const unseen = usableGrantsFor(db, uid).filter((x) => !seen.includes(x.grant.id));
+  // คูปองแต้ม (used ตั้งแต่เกิด) ไม่อยู่ใน usableGrantsFor → ดึงมาฉลองด้วย (ครั้งเดียวต่อ grant เหมือนกัน)
+  const pointsGrants = db.couponGrants
+    .filter((g) => g.user_id === uid && g.status === 'used')
+    .map((g) => ({ grant: g, coupon: db.coupons.find((c) => c.id === g.coupon_id) }))
+    .filter((x): x is { grant: typeof x.grant; coupon: NonNullable<typeof x.coupon> } => !!x.coupon && isPointsCoupon(x.coupon));
+  const unseen = [...usableGrantsFor(db, uid), ...pointsGrants].filter((x) => !seen.includes(x.grant.id));
   if (!unseen.length) return null;
   const { coupon } = unseen[0];
+  const pts = isPointsCoupon(coupon);
 
   // ONE popup per batch — dismissing marks EVERY unseen grant seen. (Before: one popup per coupon,
   // so an account holding several fresh coupons chain-popped on every reload — the "หลายคูปองแวปๆ".)
@@ -128,14 +135,14 @@ export function CouponReceived() {
   return (
     <div className="fixed inset-0 z-[110] grid place-items-center bg-black/75 p-6" onClick={dismiss}>
       <div className="w-full max-w-[380px] text-center" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-1 text-[13px] font-semibold text-ink-muted2">🎉 คุณได้รับคูปองส่วนลด!</div>
-        <div className="mb-4 text-2xl font-extrabold text-ink">{unseen.length > 1 ? `ได้รับ ${unseen.length} ใบ!` : 'เย่! ใช้ได้เลย'}</div>
+        <div className="mb-1 text-[13px] font-semibold text-ink-muted2">{pts ? '🎁 คุณได้รับแต้มสะสม!' : '🎉 คุณได้รับคูปองส่วนลด!'}</div>
+        <div className="mb-4 text-2xl font-extrabold text-ink">{unseen.length > 1 ? `ได้รับ ${unseen.length} รางวัล!` : pts ? `+${coupon.value.toLocaleString('en-US')} แต้ม เข้ากระเป๋าแล้ว` : 'เย่! ใช้ได้เลย'}</div>
         <div className="animate-couponPop">
           <CouponTicket coupon={coupon} size="lg" />
         </div>
-        {unseen.length > 1 && <div className="mt-3 text-[13px] font-bold text-primary-soft">+ อีก {unseen.length - 1} ใบ รออยู่ใน “คูปองของฉัน”</div>}
-        <button onClick={dismiss} className="mt-6 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">เก็บไว้ในกระเป๋า</button>
-        <div className="mt-2 text-[11.5px] text-ink-faint">ดูคูปองทั้งหมดได้ที่ “คูปองของฉัน”</div>
+        {unseen.length > 1 && <div className="mt-3 text-[13px] font-bold text-primary-soft">+ อีก {unseen.length - 1} รางวัล</div>}
+        <button onClick={dismiss} className="mt-6 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">{pts ? 'รับทราบ' : 'เก็บไว้ในกระเป๋า'}</button>
+        <div className="mt-2 text-[11.5px] text-ink-faint">{pts ? 'ดูแต้มและประวัติได้ที่ “คะแนนสะสม”' : 'ดูคูปองทั้งหมดได้ที่ “คูปองของฉัน”'}</div>
       </div>
     </div>
   );
@@ -181,12 +188,12 @@ export function MyCoupons({ uid }: { uid: string }) {
     .filter((x): x is { grant: typeof x.grant; coupon: NonNullable<typeof x.coupon> } => !!x.coupon)
     .sort((a, b) => (b.grant.granted_at ?? '').localeCompare(a.grant.granted_at ?? ''));
   const pastLabel = (g: (typeof past)[number]) =>
-    g.grant.status === 'used' ? 'ใช้ไปแล้ว' : g.grant.status === 'revoked' ? 'ถูกยกเลิก' : couponExpired(g.coupon) ? 'หมดอายุ' : 'ใช้ไม่ได้';
+    isPointsCoupon(g.coupon) ? 'ได้รับแต้มแล้ว' : g.grant.status === 'used' ? 'ใช้ไปแล้ว' : g.grant.status === 'revoked' ? 'ถูกยกเลิก' : couponExpired(g.coupon) ? 'หมดอายุ' : 'ใช้ไม่ได้';
 
   return (
     <div>
       <div className="mb-4 flex items-center gap-2 rounded-xl border border-[#8b5cf6]/25 bg-[#8b5cf6]/[0.06] px-3.5 py-2.5 text-[12px] text-[#c4b5fd]">
-        <Icon name="tag" size={16} /> พรีออเดอร์ → ใช้ตอนจ่ายยอดสุดท้าย · พร้อมส่ง → ใช้ตอนสั่งซื้อ
+        <Icon name="tag" size={16} /> คูปองส่วนลด: พรีออเดอร์ → ใช้ตอนจ่ายยอดสุดท้าย · พร้อมส่ง → ใช้ตอนสั่งซื้อ · คูปองแต้ม → เข้า “คะแนนสะสม” ทันที
       </div>
 
       {usable.length > 0 ? (

@@ -181,11 +181,12 @@ export default function CustomerPage() {
           {grants.length === 0 ? <Empty text="ยังไม่เคยได้รับคูปอง" /> : grants.map((g) => {
             const c = db.coupons.find((x) => x.id === g.coupon_id);
             if (!c) return null;
-            const label = g.status === 'used' ? `ใช้แล้ว ${fmtDate(g.used_at)}` : g.status === 'revoked' ? 'ถูกถอน' : couponExpired(c) ? 'หมดอายุ' : 'พร้อมใช้';
+            const pts = c.scope === 'points'; // คูปองแต้ม: grant = ใบเสร็จ (used ตั้งแต่เกิด) แต้มอยู่ในสมุดคะแนน
+            const label = pts ? `ได้รับแต้ม ${fmtDate(g.granted_at)}` : g.status === 'used' ? `ใช้แล้ว ${fmtDate(g.used_at)}` : g.status === 'revoked' ? 'ถูกถอน' : couponExpired(c) ? 'หมดอายุ' : 'พร้อมใช้';
             return (
               <div key={g.id} className="flex flex-wrap items-center gap-2 py-2">
                 <CouponTierPill value={c.value} />
-                <span className="min-w-0 flex-1 truncate text-[12.5px]">{c.label} · ลด {baht(c.value)}</span>
+                <span className="min-w-0 flex-1 truncate text-[12.5px]">{c.label} · {pts ? `⭐ +${c.value} แต้ม` : `ลด ${baht(c.value)}`}</span>
                 <span className={cx('text-[11px] font-semibold', g.status === 'active' && !couponExpired(c) ? 'text-[#4ade80]' : 'text-ink-faint')}>{label}</span>
               </div>
             );

@@ -21,9 +21,11 @@ export interface QuestFlags {
 
 const fmtD = (iso: string) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 
-export function MissionQuestCard({ cfg, rewardValue, flags, proofUrl, busy, onProofFile, onEnableBell, onSubmit }: {
+export function MissionQuestCard({ cfg, rewardValue, rewardKind = 'points', flags, proofUrl, busy, onProofFile, onEnableBell, onSubmit }: {
   cfg: MissionConfig;
   rewardValue: number;
+  /** 'points' = คูปองแต้ม เข้าคะแนนสะสม (rework 2026-09-12 ค่ำ) · 'baht' = คูปองส่วนลดแบบเก่า */
+  rewardKind?: 'points' | 'baht';
   flags: QuestFlags;
   proofUrl?: string;
   busy?: boolean;
@@ -52,7 +54,7 @@ export function MissionQuestCard({ cfg, rewardValue, flags, proofUrl, busy, onPr
           </div>
           <div className="flex shrink-0 flex-col items-center rounded-2xl border border-[#d4af37]/50 bg-[#d4af37]/[0.12] px-3 py-2">
             <span className="text-xl">🎁</span>
-            <span className="text-[13px] font-extrabold text-[#f1d27a]">คูปอง {baht(rewardValue)}</span>
+            <span className="text-[13px] font-extrabold text-[#f1d27a]">{rewardKind === 'points' ? `${rewardValue} แต้มสะสม` : `คูปอง ${baht(rewardValue)}`}</span>
           </div>
         </div>
         {/* progress */}
@@ -98,7 +100,7 @@ export function MissionQuestCard({ cfg, rewardValue, flags, proofUrl, busy, onPr
           <div className="mt-1 rounded-2xl border border-[#16a34a]/45 bg-[#16a34a]/[0.12] p-4 text-center">
             <div className="text-2xl">🏆</div>
             <div className="text-[15px] font-extrabold text-[#4ade80]">ได้รับของรางวัลแล้ว!</div>
-            <div className="mt-0.5 text-[12px] text-ink-muted2">คูปอง {baht(rewardValue)} อยู่ใน “คูปองของฉัน” แล้ว</div>
+            <div className="mt-0.5 text-[12px] text-ink-muted2">{rewardKind === 'points' ? `${rewardValue} แต้ม เข้า “คะแนนสะสม” แล้ว` : `คูปอง ${baht(rewardValue)} อยู่ใน “คูปองของฉัน” แล้ว`}</div>
           </div>
         ) : pending ? (
           <div className="mt-1 rounded-2xl border border-[#d97706]/45 bg-[#d97706]/[0.10] p-4 text-center">

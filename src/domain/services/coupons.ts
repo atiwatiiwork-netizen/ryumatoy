@@ -48,7 +48,18 @@ export function usableGrantsFor(db: Database, userId: string, now: Date = new Da
   return db.couponGrants
     .filter((g) => g.user_id === userId && g.status === 'active')
     .map((g) => ({ grant: g, coupon: db.coupons.find((c) => c.id === g.coupon_id)! }))
-    .filter((x) => x.coupon && x.coupon.active && !couponExpired(x.coupon, now));
+    .filter((x) => x.coupon && x.coupon.active && !couponExpired(x.coupon, now) && !isPointsCoupon(x.coupon));
+}
+
+/** "คูปองแต้ม" (rework 2026-09-12 ค่ำ): มอบแล้วเข้าคะแนนสะสมทันที — ไม่มีให้เลือกตอนจ่าย/สั่งซื้อ (scopeAllows คืน false) */
+export const isPointsCoupon = (c: Pick<Coupon, 'scope'>) => c.scope === 'points';
+
+/** ลูกค้าคนนี้ "ได้คูปองใบนี้ไปแล้ว" ไหม — คูปองบาท: ถืออยู่ (active) · คูปองแต้ม: เคยได้รับ (ใบเสร็จ used) —
+ *  ตัวเดียวที่ grantCoupon และหน้ามอบใช้ (มอบซ้ำ = ข้าม; อยากให้แต้มซ้ำ → สร้างคูปองใบใหม่) */
+export function couponAlreadyGranted(db: Database, couponId: string, userId: string): boolean {
+  const coupon = db.coupons.find((c) => c.id === couponId);
+  const mine = db.couponGrants.filter((g) => g.coupon_id === couponId && g.user_id === userId);
+  return coupon && isPointsCoupon(coupon) ? mine.some((g) => g.status !== 'revoked') : mine.some((g) => g.status === 'active');
 }
 
 /**

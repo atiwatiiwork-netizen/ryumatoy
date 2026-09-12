@@ -9,7 +9,7 @@ import { EventProgress } from '@/components/EventBits';
 import { campaignLive, qualifyingCount, sortedTiers } from '@/domain/services/campaigns';
 import type { CouponScope } from '@/domain/entities';
 
-const SCOPE_LABEL: Record<CouponScope, string> = { both: 'ใช้ได้ทั้งพรี + พร้อมส่ง', preorder: 'ใช้กับพรีออเดอร์', instock: 'ใช้กับสินค้าพร้อมส่ง' };
+const SCOPE_LABEL: Record<CouponScope, string> = { both: 'ใช้ได้ทั้งพรี + พร้อมส่ง', preorder: 'ใช้กับพรีออเดอร์', instock: 'ใช้กับสินค้าพร้อมส่ง', points: 'รางวัลเป็นแต้มสะสม' };
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
 
 export default function EventDetailPage() {
@@ -55,7 +55,7 @@ export default function EventDetailPage() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-[14px] font-bold text-ink">พรีครบ {tier.threshold} รายการ</div>
-                <div className="text-[12.5px] text-primary-soft">รับคูปอง {baht(tier.coupon_value)} × {tier.coupon_count} ใบ</div>
+                <div className="text-[12.5px] text-primary-soft">{c.reward_scope === 'points' ? `รับ ${tier.coupon_value * Math.max(1, tier.coupon_count)} แต้มสะสม` : `รับคูปอง ${baht(tier.coupon_value)} × ${tier.coupon_count} ใบ`}</div>
               </div>
             </div>
           );
@@ -68,8 +68,10 @@ export default function EventDetailPage() {
         <ul className="list-inside list-disc space-y-1">
           <li>นับเฉพาะ “ใบพรี” ที่แอดมินอนุมัติแล้ว ในช่วงเวลากิจกรรม (1 ใบ = 1 รายการ)</li>
           <li>สะสมครบชั้นไหน รับครบชั้นนั้น — ครบชั้นสูงได้ของชั้นต่ำด้วย และวนสะสมใหม่ได้เรื่อยๆ</li>
-          <li>ครบชั้นแล้วคูปองจะเข้า “คูปองของฉัน” ตอนแอดมินตรวจใบพรี — ถ้าครบแล้วยังไม่ได้ ทักแอดมินได้เลยครับ</li>
-          <li>{SCOPE_LABEL[c.reward_scope]}{makerName ? ` · เฉพาะค่าย ${makerName}` : ''} · คูปองมีอายุ {c.reward_expiry_days} วันหลังได้รับ</li>
+          <li>ครบชั้นแล้ว{c.reward_scope === 'points' ? 'แต้มจะเข้า “คะแนนสะสม”' : 'คูปองจะเข้า “คูปองของฉัน”'} ตอนแอดมินตรวจใบพรี — ถ้าครบแล้วยังไม่ได้ ทักแอดมินได้เลยครับ</li>
+          {c.reward_scope === 'points'
+            ? <li>รางวัลเป็นแต้มสะสม เข้า “คะแนนสะสม” ทันทีตอนแอดมินตรวจใบพรี · 1 แต้ม = 1฿ ใช้ลดตอนปิดใบพรี / ซื้อของพร้อมส่ง</li>
+            : <li>{SCOPE_LABEL[c.reward_scope]}{makerName ? ` · เฉพาะค่าย ${makerName}` : ''} · คูปองมีอายุ {c.reward_expiry_days} วันหลังได้รับ</li>}
         </ul>
       </div>
     </div>

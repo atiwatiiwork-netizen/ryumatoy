@@ -114,7 +114,7 @@ export function nextTierProgress(
   c: Campaign,
   userId: string,
   now: Date = new Date(),
-): { count: number; nextRequired: number; need: number; value: number } | null {
+): { count: number; nextRequired: number; need: number; value: number; total: number } | null {
   const top = topThreshold(c);
   const tiers = sortedTiers(c);
   if (top <= 0 || tiers.length === 0) return null;
@@ -124,7 +124,8 @@ export function nextTierProgress(
   for (const cycle of [currentCycle, currentCycle + 1]) {
     for (const { tier } of tiers) {
       const required = cycle * top + tier.threshold;
-      if (required > count) return { count, nextRequired: required, need: required - count, value: tier.coupon_value };
+      // value = ต่อคูปอง (แบบเก่า) · total = แต้มรวมของชั้น (แบบแต้ม: แต้ม × จำนวน)
+      if (required > count) return { count, nextRequired: required, need: required - count, value: tier.coupon_value, total: tier.coupon_value * Math.max(1, tier.coupon_count) };
     }
   }
   return null;

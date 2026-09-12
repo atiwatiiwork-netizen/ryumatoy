@@ -38,7 +38,7 @@ const plusDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString(
 const fresh = (): Draft => ({
   name: '', banner_url: undefined, product_blurb: '', starts_at: today(), ends_at: plusDays(30), active: true,
   tiers: [{ threshold: '5', coupon_value: '100', coupon_count: '1' }, { threshold: '10', coupon_value: '200', coupon_count: '2' }],
-  reward_scope: 'both', reward_expiry_days: '30', target_maker_id: '',
+  reward_scope: 'points', reward_expiry_days: '30', target_maker_id: '', // rework 2026-09-12 ค่ำ: รางวัลเริ่มต้น = แต้มสะสม
 });
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
 
@@ -50,6 +50,7 @@ export default function AdminEventsPage() {
   const [busy, setBusy] = useState(false);
   const editing = Boolean(draft.id);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
+  const pts = draft.reward_scope === 'points'; // รางวัลเป็นแต้ม → ไม่มีอายุ/ค่าย/scope ของคูปอง
 
   const reset = () => setDraft(fresh());
   const setTier = (i: number, patch: Partial<TierDraft>) => setDraft((d) => ({ ...d, tiers: d.tiers.map((t, j) => (j === i ? { ...t, ...patch } : t)) }));
@@ -104,7 +105,7 @@ export default function AdminEventsPage() {
     <div>
       <AdminTabs tabs={[{ href: '/admin/coupons', label: '🎟️ คูปอง' }, { href: '/admin/events', label: '🎯 กิจกรรม / Event' }, { href: '/admin/points', label: '⭐ คะแนนสะสม' }]} />
       <div className="mb-1 text-2xl font-extrabold">กิจกรรม / Event</div>
-      <div className="mb-5 text-[13px] text-ink-faint">พรีครบตามเป้า รับคูปองอัตโนมัติ · แสดงแบนเนอร์หน้าแรก + ความคืบหน้าในหน้าสินค้า</div>
+      <div className="mb-5 text-[13px] text-ink-faint">พรีครบตามเป้า รับแต้มสะสมอัตโนมัติ (หรือคูปองส่วนลดแบบเก่า) · แสดงแบนเนอร์หน้าแรก + ความคืบหน้าในหน้าสินค้า</div>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,420px)_1fr] lg:items-start">
         <Panel>
@@ -136,12 +137,12 @@ export default function AdminEventsPage() {
             {/* tiers */}
             <div>
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[12.5px] font-semibold text-ink-muted">ชั้นรางวัล (พรีครบ → คูปอง)</span>
+                <span className="text-[12.5px] font-semibold text-ink-muted">ชั้นรางวัล (พรีครบ → {pts ? 'แต้มสะสม' : 'คูปอง'})</span>
                 <button onClick={addTier} className="text-xs font-semibold text-primary-soft">＋ เพิ่มชั้น</button>
               </div>
               <div className="flex flex-col gap-2">
                 <div className="grid grid-cols-[1fr_1fr_1fr_28px] gap-2 px-0.5 text-[10.5px] text-ink-faint">
-                  <span>ครบ (ใบ)</span><span>คูปอง (บาท)</span><span>จำนวน (ใบ)</span><span />
+                  <span>ครบ (ใบ)</span><span>{pts ? 'แต้ม' : 'คูปอง (บาท)'}</span><span>{pts ? '× จำนวน (รวม = แต้ม×จำนวน)' : 'จำนวน (ใบ)'}</span><span />
                 </div>
                 {draft.tiers.map((t, i) => (
                   <div key={i} className="grid grid-cols-[1fr_1fr_1fr_28px] items-center gap-2">
@@ -156,24 +157,30 @@ export default function AdminEventsPage() {
 
             {/* reward coupon spec */}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="คูปองใช้กับ">
+              <Field label="รางวัลเป็น">
                 <select className={inputCls} value={draft.reward_scope} onChange={(e) => set('reward_scope', e.target.value as CouponScope)}>
-                  <option value="both">พรี + พร้อมส่ง</option>
-                  <option value="preorder">พรีออเดอร์</option>
-                  <option value="instock">พร้อมส่ง</option>
+                  <option value="points">⭐ แต้มสะสม (แนะนำ)</option>
+                  <option value="both">คูปองส่วนลด · พรี + พร้อมส่ง</option>
+                  <option value="preorder">คูปองส่วนลด · พรีออเดอร์</option>
+                  <option value="instock">คูปองส่วนลด · พร้อมส่ง</option>
+                </select>
+                {pts && <span className="mt-1 block text-[11px] text-ink-faint">เข้าคะแนนสะสมทันทีตอนแอดมินอนุมัติใบพรีที่ครบชั้น · 1 แต้ม = 1฿</span>}
+              </Field>
+              {!pts && (
+                <Field label="อายุคูปอง (วันหลังได้รับ)">
+                  <input className={inputCls} inputMode="numeric" value={draft.reward_expiry_days} onChange={(e) => set('reward_expiry_days', e.target.value)} placeholder="30" />
+                  <span className="mt-1 block text-[11px] text-ink-faint">0 = ไม่หมดอายุ</span>
+                </Field>
+              )}
+            </div>
+            {!pts && (
+              <Field label="จำกัดค่าย (ไม่บังคับ)">
+                <select className={inputCls} value={draft.target_maker_id} onChange={(e) => set('target_maker_id', e.target.value)}>
+                  <option value="">— ทุกค่าย —</option>
+                  {db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
               </Field>
-              <Field label="อายุคูปอง (วันหลังได้รับ)">
-                <input className={inputCls} inputMode="numeric" value={draft.reward_expiry_days} onChange={(e) => set('reward_expiry_days', e.target.value)} placeholder="30" />
-                <span className="mt-1 block text-[11px] text-ink-faint">0 = ไม่หมดอายุ</span>
-              </Field>
-            </div>
-            <Field label="จำกัดค่าย (ไม่บังคับ)">
-              <select className={inputCls} value={draft.target_maker_id} onChange={(e) => set('target_maker_id', e.target.value)}>
-                <option value="">— ทุกค่าย —</option>
-                {db.manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </Field>
+            )}
 
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.active} onChange={(e) => set('active', e.target.checked)} /> เปิดใช้งาน (โชว์หน้าร้าน — ปิดกิจกรรมอื่นทั้งหมด)</label>
             {editing && db.campaignAwards.some((a) => a.campaign_id === draft.id) && (
@@ -216,10 +223,10 @@ export default function AdminEventsPage() {
                               ? <span className="rounded-full bg-[#d97706]/[0.16] px-2 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">นอกช่วงเวลา</span>
                               : <span className="rounded-full bg-surface-3 px-2 py-0.5 text-[10.5px] font-bold text-ink-faint">ปิด</span>}
                         </div>
-                        <div className="mt-0.5 text-[11.5px] text-ink-faint">{fmtDate(c.starts_at)} – {fmtDate(c.ends_at)} · แจกแล้ว {awards.length} คูปอง · {winners} คน</div>
+                        <div className="mt-0.5 text-[11.5px] text-ink-faint">{fmtDate(c.starts_at)} – {fmtDate(c.ends_at)} · แจกแล้ว {awards.length} รางวัล · {winners} คน{c.reward_scope === 'points' ? ' · ⭐ แต้ม' : ' · 🎟️ คูปอง'}</div>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           {sortedTiers(c).map(({ tier, index }) => (
-                            <span key={index} className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[10.5px] font-semibold text-ink-muted2">ครบ {tier.threshold} → {baht(tier.coupon_value)}×{tier.coupon_count}</span>
+                            <span key={index} className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[10.5px] font-semibold text-ink-muted2">ครบ {tier.threshold} → {c.reward_scope === 'points' ? `${tier.coupon_value * Math.max(1, tier.coupon_count)} แต้ม` : `${baht(tier.coupon_value)}×${tier.coupon_count}`}</span>
                           ))}
                         </div>
                       </div>

@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS, orderTicketId, isVoidedItem, ticketForItem, pairItemsWithTickets } from '../domain/services/tickets';
@@ -22,11 +22,11 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
 import { franchiseOf, canConvertToInStock, stockRemaining, inLiveAuction } from '../domain/services/catalog';
 import { pendingHeld, poolHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
-import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants } from '../domain/services/coupons';
+import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants, isPointsCoupon, couponAlreadyGranted } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
-import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY } from '../domain/services/points';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 
@@ -1126,20 +1126,33 @@ export const deleteCoupon = (couponId: string) => (db: Database): Database => ({
   couponGrants: db.couponGrants.filter((g) => g.coupon_id !== couponId),
 });
 
-/** Grant a coupon to a set of users (skips anyone who already holds an active copy). */
-export const grantCoupon = (couponId: string, userIds: string[]) => (db: Database): Database => {
+/** Grant a coupon to a set of users (skips anyone who already has it — couponAlreadyGranted).
+ *  คูปองแต้ม (scope 'points', rework 2026-09-12 ค่ำ): ให้แต้มทันที — grant เป็น "ใบเสร็จ" (used ตั้งแต่เกิด,
+ *  discount_amount = แต้ม) + แถว point_ledger id ผูก grant ใน mutation เดียวกัน (ไม่มี "ได้คูปองแต่แต้มไม่มา")
+ *  ทุกทางที่เรียก (หน้ามอบ / approveMission / approveOrder→Event) รันในเซสชันแอดมิน = RLS ให้เขียน ledger */
+export const grantCoupon = (couponId: string, userIds: string[], actorId = 'system') => (db: Database): Database => {
+  const coupon = db.coupons.find((c) => c.id === couponId);
+  if (!coupon) return db;
   const now = new Date().toISOString();
   const fresh: CouponGrant[] = [];
+  const rows: PointLedgerEntry[] = [];
   for (const uid of userIds) {
-    if (db.couponGrants.some((g) => g.coupon_id === couponId && g.user_id === uid && g.status === 'active')) continue;
-    fresh.push({ id: id('cg'), coupon_id: couponId, user_id: uid, status: 'active', granted_at: now });
+    if (couponAlreadyGranted(db, couponId, uid) || fresh.some((g) => g.user_id === uid)) continue;
+    if (isPointsCoupon(coupon)) {
+      const g: CouponGrant = { id: id('cg'), coupon_id: couponId, user_id: uid, status: 'used', granted_at: now, used_at: now, discount_amount: coupon.value };
+      fresh.push(g);
+      rows.push(couponRewardRow(g, coupon, actorId));
+    } else {
+      fresh.push({ id: id('cg'), coupon_id: couponId, user_id: uid, status: 'active', granted_at: now });
+    }
   }
-  return { ...db, couponGrants: [...fresh, ...db.couponGrants] };
+  if (!fresh.length) return db;
+  return { ...db, couponGrants: [...fresh, ...db.couponGrants], pointLedger: rows.length ? [...rows, ...db.pointLedger] : db.pointLedger };
 };
 
 /** Grant a coupon to every non-admin member of a rank. */
-export const grantCouponToRank = (couponId: string, rank: RankName) => (db: Database): Database =>
-  grantCoupon(couponId, db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank).map((u) => u.id))(db);
+export const grantCouponToRank = (couponId: string, rank: RankName, actorId = 'system') => (db: Database): Database =>
+  grantCoupon(couponId, db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.rank === rank).map((u) => u.id), actorId)(db);
 
 /** Revoke an unused granted coupon (used ones stay for history). */
 export const revokeGrant = (grantId: string) => (db: Database): Database => ({
@@ -1215,7 +1228,7 @@ export const deleteCampaign = (campaignId: string) => (db: Database): Database =
  * RLS: this runs in the ADMIN session (called from approveOrder), never the customer's — customers
  * are blocked from minting coupons/grants by design (ryuma-dna-save). Auto-granted on approval.
  */
-export const grantCampaignRewards = (campaignId: string, userId: string) => (db: Database): Database => {
+export const grantCampaignRewards = (campaignId: string, userId: string, actorId = 'system') => (db: Database): Database => {
   const c = db.campaigns.find((x) => x.id === campaignId);
   if (!c) return db;
   const now = new Date();
@@ -1228,22 +1241,34 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
   const coupons: Coupon[] = [];
   const grants: CouponGrant[] = [];
   const awards: CampaignAward[] = [];
+  const rows: PointLedgerEntry[] = [];
+  // Event แบบแต้ม (reward_scope 'points', rework 2026-09-12 ค่ำ): 1 รางวัล = แต้ม × จำนวน เข้าคะแนนสะสมทันที (แถวเดียว)
+  const pts = c.reward_scope === 'points';
   for (const a of pending) {
     const couponId = id('c');
-    coupons.push({
-      id: couponId,
-      label: `${c.name} · คูปอง ${a.tier.coupon_value}฿`,
-      value: a.tier.coupon_value,
-      scope: c.reward_scope,
-      target_product_id: c.target_product_id || undefined,
-      target_maker_id: c.target_maker_id || undefined,
-      expires_at: expiresAt,
-      active: true,
-      created_at: nowIso,
-      campaign_id: c.id,
-    });
-    for (let i = 0; i < Math.max(1, a.tier.coupon_count); i++) {
-      grants.push({ id: id('cg'), coupon_id: couponId, user_id: userId, status: 'active', granted_at: nowIso });
+    const total = a.tier.coupon_value * Math.max(1, a.tier.coupon_count);
+    if (pts) {
+      const coupon: Coupon = { id: couponId, label: `${c.name} · ครบ ${a.required} ใบ · ${total} แต้ม`, value: total, scope: 'points', active: true, created_at: nowIso, campaign_id: c.id };
+      const g: CouponGrant = { id: id('cg'), coupon_id: couponId, user_id: userId, status: 'used', granted_at: nowIso, used_at: nowIso, discount_amount: total };
+      coupons.push(coupon);
+      grants.push(g);
+      rows.push(couponRewardRow(g, coupon, actorId));
+    } else {
+      coupons.push({
+        id: couponId,
+        label: `${c.name} · คูปอง ${a.tier.coupon_value}฿`,
+        value: a.tier.coupon_value,
+        scope: c.reward_scope,
+        target_product_id: c.target_product_id || undefined,
+        target_maker_id: c.target_maker_id || undefined,
+        expires_at: expiresAt,
+        active: true,
+        created_at: nowIso,
+        campaign_id: c.id,
+      });
+      for (let i = 0; i < Math.max(1, a.tier.coupon_count); i++) {
+        grants.push({ id: id('cg'), coupon_id: couponId, user_id: userId, status: 'active', granted_at: nowIso });
+      }
     }
     awards.push({ id: id('ca'), campaign_id: c.id, user_id: userId, tier_index: a.key, cycle: a.cycle, claimed_at: nowIso, coupon_id: couponId });
   }
@@ -1252,6 +1277,7 @@ export const grantCampaignRewards = (campaignId: string, userId: string) => (db:
     coupons: [...coupons, ...db.coupons],
     couponGrants: [...grants, ...db.couponGrants],
     campaignAwards: [...awards, ...db.campaignAwards],
+    pointLedger: rows.length ? [...rows, ...db.pointLedger] : db.pointLedger,
   };
 };
 
