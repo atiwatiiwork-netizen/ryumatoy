@@ -21,6 +21,7 @@ import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
+import { balanceOf, maxRedeemable, redeemPicks, redeemRules } from '@/domain/services/points';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
@@ -58,6 +59,7 @@ export default function CheckoutPage() {
   // ── coupon (in-stock only, applied immediately) ──────────────────────────
   const eligibleCoupons = instockCouponsFor(db, currentUserId, validLines.map((l) => l.productId));
   const [couponGrantId, setCouponGrantId] = useState<string>('');
+  const [usePts, setUsePts] = useState(0); // แต้มที่เลือกใช้ (v67) — เฉพาะบรรทัดพร้อมส่ง
   const selected = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
   // discount base = ONLY the in-stock lines this coupon actually targets — must match how
   // approveOrder knocks the discount off tickets, or the total would drop more than the tickets do.
@@ -68,8 +70,14 @@ export default function CheckoutPage() {
       }, 0)
     : 0;
   const discount = selected ? couponDiscount(selected.coupon, couponBase) : 0;
+  // แต้ม (v67): ใช้ได้เฉพาะยอด "พร้อมส่ง" หลังคูปอง ≤ 400/ออเดอร์ ≤ คงเหลือ · เห็นเฉพาะเมื่อเปิดระบบคะแนน
+  // (มัดจำพรีในตะกร้าไม่เข้าเกณฑ์ — submitOrder/approveOrder คุมซ้ำ, DB trigger คุมยอดคงเหลือ)
+  const pointsOn = db.settings.points_enabled;
+  const instockBase = validLines.reduce((s, l) => (db.products.find((pp) => pp.id === l.productId)?.is_stock ? s + unitDeposit(l) * l.qty : s), 0);
+  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, currentUserId), kind: 'instock', payable: Math.max(0, instockBase - discount) }) : 0;
+  const ptsUse = Math.min(usePts, ptsMax);
 
-  const payNow = Math.max(0, grossPay - discount);
+  const payNow = Math.max(0, grossPay - discount - ptsUse);
   const diamondFree = grossPay <= 0; // rank perk (Diamond) → nothing to transfer
   const couponFree = grossPay > 0 && payNow <= 0; // a coupon fully covered the amount
   const noPayment = payNow <= 0; // no slip needed → auto-approve + issue ticket now
@@ -234,7 +242,7 @@ export default function CheckoutPage() {
     // อ่านจำนวนออเดอร์ "ตอนนี้จริงๆ" หลังรอ RPC เสร็จ แล้วค่อย dispatch — เพื่อให้ read-back เชื่อถือได้
     let ordersBefore = 0;
     dispatch((d) => { ordersBefore = d.orders.length; return d; });
-    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos));
+    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos, ptsUse));
     // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
     // ⚠ ต้องเทียบกับ "จำนวนก่อนหน้าที่อ่านจาก store จริง" ไม่ใช่ db ที่ผูกไว้ตอน render:
     //   ระหว่างรอ reserveTicketNos ตัว poll อาจดึงออเดอร์ของคนอื่นเข้ามา แล้วนับว่าสำเร็จมั่ว (regression #6)
@@ -321,12 +329,29 @@ export default function CheckoutPage() {
             <span className="font-semibold">−{baht(discount)}</span>
           </div>
         )}
+        {ptsUse > 0 && (
+          <div className="mt-1 flex justify-between gap-2.5 py-1 text-[13px] text-[#4ade80]">
+            <span>⭐ ใช้แต้ม (จองทันที คืนถ้าสลิปไม่ผ่าน)</span>
+            <span className="font-semibold">−{baht(ptsUse)}</span>
+          </div>
+        )}
         <div className="my-2.5 border-t border-subtle" />
         <div className="flex items-center justify-between">
           <span className="font-bold">{noPayment ? 'ชำระตอนนี้' : 'ยอดโอน'}</span>
           <span className="text-xl font-extrabold text-primary-soft">{baht(payNow)}</span>
         </div>
       </div>
+
+      {/* ใช้แต้ม (v67) — เฉพาะยอดพร้อมส่ง ≤ 400/ออเดอร์ · เห็นเมื่อเปิดระบบคะแนน */}
+      {pointsOn && ptsMax > 0 && (
+        <div className="mb-3.5 rounded-card border border-[#d4af37]/30 bg-[#0d0909] p-[14px]">
+          <div className="mb-2 flex items-center justify-between text-[13px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดของพร้อมส่ง</span><span className="text-[11.5px] text-ink-faint">มี {balanceOf(db, currentUserId).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, 'instock').cap}/ครั้ง</span></div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
+            {redeemPicks(ptsMax, redeemRules(db.settings, 'instock').min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}
+          </div>
+        </div>
+      )}
 
       {eligibleCoupons.length > 0 && (
         <div className="mb-3.5 rounded-card border border-[#8b5cf6]/30 bg-[#8b5cf6]/[0.06] p-[14px]">

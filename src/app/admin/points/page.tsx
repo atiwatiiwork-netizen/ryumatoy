@@ -218,7 +218,7 @@ function SimulationTable({ rows }: { rows: ReturnType<typeof simulateAll> }) {
                   <td className="px-2 text-right tabular-nums text-ink-muted2">{num(r.lifetime)}</td>
                   <td className="pl-2 text-[11.5px]">
                     {ms.top ? <span className="rounded-md bg-surface-3 px-1.5 py-0.5 font-bold">{ms.top.emoji} {ms.top.label}</span> : <span className="text-ink-faint">—</span>}
-                    <span className="ml-1 text-ink-faint">{ms.pieces} ใบ{ms.due > 0 ? ` · ค้าง +${num(ms.due)}` : ''}</span>
+                    <span className="ml-1 text-ink-faint">{ms.pieces} ใบ</span>
                   </td>
                 </tr>
               );

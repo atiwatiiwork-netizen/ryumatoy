@@ -16,6 +16,8 @@ import { warehouseEtaLabel } from '@/domain/services/warehouse';
 import { submitRemainingPayment, chooseDelivery } from '@/data/mutations';
 import { deliveryReady, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
 import { ticketPayable } from '@/domain/services/payments';
+import { monthlyBonusForTicket, pendingBonusDiscount, ymShort } from '@/domain/services/monthly';
+import { balanceOf, maxRedeemable, redeemPicks, redeemRules } from '@/domain/services/points';
 import { store } from '@/data/store';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
@@ -48,6 +50,7 @@ export default function TicketDetailPage() {
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [couponGrantId, setCouponGrantId] = useState<string>('');
+  const [usePts, setUsePts] = useState(0); // แต้มที่เลือกใช้ (v67) — 0 = ไม่ใช้
 
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
   if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
@@ -89,7 +92,14 @@ export default function TicketDetailPage() {
   const eligibleCoupons = preorderCouponsForTicket(db, CURRENT_USER_ID, product);
   const selectedCoupon = eligibleCoupons.find((x) => x.grant.id === couponGrantId);
   const couponOff = selectedCoupon ? couponDiscount(selectedCoupon.coupon, due) : 0;
-  const payable = Math.max(0, due - couponOff);
+  // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติถ้าใบนี้อยู่ใน N ใบแรกของเดือนที่ปิดแล้ว — mutation คำนวณซ้ำเอง
+  const bonus = monthlyBonusForTicket(db, ticket);
+  const bonusOff = pendingBonusDiscount(db, ticket);
+  // แต้ม (v67): เห็นเฉพาะเมื่อเปิดระบบคะแนน — ด่านจริงคือ DB trigger; หน้าจอแค่จำกัดตัวเลือก
+  const pointsOn = db.settings.points_enabled;
+  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, CURRENT_USER_ID), kind: 'pre', payable: Math.max(0, due - couponOff - bonusOff) }) : 0;
+  const ptsUse = Math.min(usePts, ptsMax);
+  const payable = Math.max(0, due - couponOff - bonusOff - ptsUse);
 
   const onSlip = async (file?: File) => {
     if (!file) return;
@@ -105,7 +115,7 @@ export default function TicketDetailPage() {
     // (ไม่ใช่เจ้าของ / จ่ายครบแล้ว / มีสลิปรออยู่แล้ว) เดิมบอกสำเร็จทุกกรณีแล้วล้างรูปทิ้ง
     // = ลูกค้าโอนเงินแล้วเชื่อว่าส่งสลิปแล้ว แต่ไม่มีอะไรเข้าคิวเลย (audit persist #4)
     const before = db.remainingPayments.length;
-    dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, payable, slip, selectedCoupon ? { grantId: selectedCoupon.grant.id, discount: couponOff } : undefined));
+    dispatch(submitRemainingPayment(ticket.id, CURRENT_USER_ID, payable, slip, selectedCoupon ? { grantId: selectedCoupon.grant.id, discount: couponOff } : undefined, { points: ptsUse }));
     let after = before;
     dispatch((d) => { after = d.remainingPayments.length; return d; });
     if (after === before) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — อาจมีสลิปรอตรวจอยู่แล้ว หรือยอดนี้จ่ายครบแล้ว'); }
@@ -227,6 +237,24 @@ export default function TicketDetailPage() {
               </select>
               {selectedCoupon && <div className="mt-2.5"><CouponTicket coupon={selectedCoupon.coupon} size="sm" /></div>}
               {couponOff > 0 && <div className="mt-1.5 flex justify-between text-[12.5px] text-[#4ade80]"><span>ส่วนลด</span><span className="font-semibold">−{baht(couponOff)}</span></div>}
+            </div>
+          )}
+          {/* โบนัสยศผูกใบ (Phase 1) — หักให้เองตอนร้านอนุมัติ */}
+          {bonusOff > 0 && bonus && (
+            <div className="mb-3.5 flex items-center justify-between rounded-xl border border-[#d4af37]/40 bg-[#d4af37]/[0.08] px-3 py-2 text-left text-[12.5px]">
+              <span className="text-[#f1d27a]">🏆 ส่วนลดยศ {bonus.tier.emoji} {bonus.tier.label} ({ymShort(bonus.ym)}) — ใบนี้อยู่ใน {bonus.tier.pieces} ใบแรก</span>
+              <span className="font-bold text-[#4ade80]">−{baht(bonusOff)}</span>
+            </div>
+          )}
+          {/* ใช้แต้ม (v67) — ปุ่มขั้นละ 50 ไม่เกินเพดาน/ยอดค้าง/คงเหลือ */}
+          {pointsOn && ptsMax > 0 && (
+            <div className="mb-3.5 rounded-xl border border-[#d4af37]/30 bg-[#0d0909] p-3 text-left">
+              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดใบนี้</span><span className="text-ink-faint">มี {balanceOf(db, CURRENT_USER_ID).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, 'pre').cap}/ใบ</span></div>
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
+                {redeemPicks(ptsMax, redeemRules(db.settings, 'pre').min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}
+              </div>
+              {ptsUse > 0 && <div className="mt-1.5 flex justify-between text-[12.5px] text-[#4ade80]"><span>ใช้แต้ม (จองทันที คืนถ้าสลิปไม่ผ่าน)</span><span className="font-semibold">−{baht(ptsUse)}</span></div>}
             </div>
           )}
           <div className="mb-3.5 flex justify-center">

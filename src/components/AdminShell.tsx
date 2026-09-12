@@ -4,14 +4,16 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useDatabase } from '@/state/DataProvider';
-import { useAuth, canLogin } from '@/state/AuthProvider';
+import { useAuth, canLogin, useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
 import { needsClose } from '@/domain/services/auctions';
 import { pendingRpGroups } from '@/domain/services/payments';
-import { markPlanReminded } from '@/data/mutations';
+import { isAdminUser } from '@/domain/services/admins';
+import { monthsToClose, closedMonths, ymLabel, type MonthlySnapshot } from '@/domain/services/monthly';
+import { markPlanReminded, closeMonth } from '@/data/mutations';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
@@ -22,6 +24,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const db = useDatabase();
   const { isAdmin, isLoggedIn, authReady, signInFacebook } = useAuth();
+  const adminId = useCurrentUserId();
   const { flash } = useToast();
   // a failed background save (schema drift, RLS, etc.) must not vanish silently → toast it here.
   useEffect(() => {
@@ -62,6 +65,36 @@ export function AdminShell({ children }: { children: ReactNode }) {
       flash(`เตือนนัดชำระอัตโนมัติ ${targets.length} รายการแล้ว 🔔`);
     })();
   }, [db, isAdmin, flash]);
+
+  // ปิดเดือนอัตโนมัติ (Phase 1 รอบเดือน): เซสชันแอดมินแรกของเดือนใหม่ปิดเดือนก่อนหน้าที่ยังไม่ปิด (closeMonth idempotent)
+  // แล้ว push บอกลูกค้าที่ได้ยศ — เซฟให้ผ่านก่อนยิง (snapshot ไม่ขึ้น = ไม่ยิง, ลองใหม่ครั้งหน้า)
+  const closedRef = useRef(false);
+  useEffect(() => {
+    // ใช้ isAdminUser (ไม่ใช่ isAdmin จาก auth) เพื่อให้โหมด seed/พรีวิวทดสอบปิดเดือนอัตโนมัติได้เหมือน production
+    if (closedRef.current || !isAdminUser(db, adminId)) return;
+    const months = monthsToClose(db);
+    if (months.length === 0) return;
+    closedRef.current = true;
+    (async () => {
+      const before = closedMonths(db);
+      for (const ym of months) store.update(closeMonth(adminId, ym));
+      if (await store.flush()) { closedRef.current = false; return; }
+      let snaps: Record<string, MonthlySnapshot> = {};
+      store.update((d) => { snaps = closedMonths(d); return d; });
+      if (pushEnabled(db, "points_monthly")) {
+        for (const ym of months) {
+          const s = snaps[ym];
+          if (!s || before[ym]) continue;
+          for (const [uid, u] of Object.entries(s.users)) {
+            const subs = subsForUsers(db, [uid]);
+            if (!subs.length) continue;
+            sendPush(subs, { title: "🏆 ได้ยศ " + u.tier.emoji + " " + u.tier.label + " เดือน" + ymLabel(ym), body: "พรี " + u.pieces + " ใบ · ส่วนลด " + u.share + " บาท/ใบ ใน " + u.tickets.length + " ใบแรก ตอนปิดใบ", url: "/points" }).catch(() => {});
+          }
+        }
+      }
+      flash("ปิดเดือน " + months.map(ymLabel).join(", ") + " แล้ว 🏆");
+    })();
+  }, [db, isAdmin, adminId, flash]);
 
   // Wait for the session restore before deciding lock-vs-admin — otherwise every resume/reload flashes
   // the Facebook login screen (isLoggedIn is momentarily false), and a stalled getSession would strand

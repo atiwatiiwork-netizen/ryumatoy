@@ -27,7 +27,8 @@ import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
 import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId } from '../domain/services/points';
-import { MONTHLY_KEY, monthlyRewardRows, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
+import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
+import { ticketDue as ticketDueOf } from '../domain/services/money';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -944,9 +945,12 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
   }
   // ⚠ ยอดที่บันทึกคำนวณจากส่วนลดที่ "ผ่านการตรวจจริง" เสมอ (money audit F7): เดิมใช้ค่า amount จากหน้าจอ
   // ถ้าคูปองถูกใช้ที่อื่นไปแล้วระหว่างนั้น ลูกค้าจะโอนตามยอดลด แต่ระบบไม่ลดให้ = ค้างเงินงงๆ
-  // แต้ม (v67): ≤ 200/ใบ ≤ ยอดค้างหลังคูปอง ≤ คงเหลือ ≥ ขั้นต่ำ — ไม่เข้าเกณฑ์ = ตัดลง/0 · ด่านจริง = trigger ryuma_points_hold_rp
-  const usePoints = clampRedeem(db, userId, 'pre', Math.max(0, due - discount), opts.points ?? 0);
-  const payAmount = Math.max(0, Math.min(due - discount - usePoints, amount || due - discount - usePoints));
+  // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติถ้าใบนี้อยู่ใน N ใบแรกของเดือนที่ปิดแล้ว — หักตอนอนุมัติ (approveRemainingPayment คำนวณซ้ำเอง)
+  const bonus = pendingBonusDiscount(db, ticket);
+  // แต้ม (v67): ≤ 200/ใบ ≤ ยอดค้างหลังคูปอง+โบนัส ≤ คงเหลือ ≥ ขั้นต่ำ — ไม่เข้าเกณฑ์ = ตัดลง/0 · ด่านจริง = trigger ryuma_points_hold_rp
+  const usePoints = clampRedeem(db, userId, 'pre', Math.max(0, due - discount - bonus), opts.points ?? 0);
+  const net = Math.max(0, due - discount - bonus - usePoints);
+  const payAmount = Math.max(0, Math.min(net, amount || net));
   const rpId = id('rp');
   return {
     ...db,
@@ -970,16 +974,22 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
   const pay = db.remainingPayments.find((r) => r.id === paymentId);
   if (!pay || pay.status !== 'pending') return db;
+  // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติตอนปิดใบ — คำนวณจาก snapshot เดือนที่ปิดแล้วในเซสชันแอดมิน (เชื่อถือได้)
+  // ไม่เชื่อตัวเลขจากลูกค้า: ถ้าลูกค้าโอนน้อยกว่าที่ควร (อ้างโบนัสเกิน) หนี้จะยังค้างให้เห็น ไม่หายเงียบ
+  const t0 = db.tickets.find((t) => t.id === pay.ticket_id);
+  const bonus = t0 ? pendingBonusDiscount(db, t0) : 0;
   const next: Database = {
     ...db,
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
     tickets: db.tickets.map((t) => {
       if (t.id !== pay.ticket_id) return t;
-      // ส่วนลดคูปอง + แต้ม (v67) มาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
-      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - (pay.points_redeemed ?? 0));
+      // ส่วนลดคูปอง + แต้ม (v67) + โบนัสยศ มาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
+      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - (pay.points_redeemed ?? 0) - bonus);
       const paid = Math.min(remaining, t.remaining_paid + pay.amount);
       return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
+    // สมุด: +โบนัส / −ใช้ลดใบนี้ (ยอดคงเหลือไม่เปลี่ยน แต่ลูกค้าเห็นประวัติ) — id ผูกเดือน+ใบ กันซ้ำ
+    pointLedger: bonus > 0 && t0 ? [...bonusRows(db, t0, 'discount', bonus, 'system'), ...db.pointLedger] : db.pointLedger,
   };
   // คะแนนสะสม (v66): งวดนี้ทำให้ตั๋ว "ปิดยอด" → ได้คะแนนครั้งเดียว (id ผูกตั๋ว = กันซ้ำ) ในมุทเทชันเดียวกัน
   return mintPointsForTickets([pay.ticket_id])(next);
@@ -2387,12 +2397,21 @@ export const setMonthlyConfig = (cfg: MonthlyConfig) => (db: Database): Database
   appConfig: [{ key: MONTHLY_KEY, value: cfg as unknown as Record<string, unknown> }, ...db.appConfig.filter((c) => c.key !== MONTHLY_KEY)],
 });
 
-/** จ่ายโบนัสยศประจำเดือน ym ให้ทุกคนที่ถึงยศแล้วและยังไม่ได้รับ — id แถวผูก เดือน+คน+ยศ → กดซ้ำไม่จ่ายซ้ำ.
- *  ทำงานแม้ระบบคะแนนยังปิด (แอดมินตัดสินใจเอง) — แนะนำกดหลังสิ้นเดือนเมื่อยอดตั๋วนิ่งแล้ว */
-export const payMonthlyRewards = (actorId: string, ym: string) => (db: Database): Database => {
-  const rows = monthlyRewardRows(db, ym, actorId);
-  if (!rows.length) return db;
-  const total = rows.reduce((s, r) => s + r.delta, 0);
-  const people = new Set(rows.map((r) => r.user_id)).size;
-  return logActivity(actorId, 'pay_monthly_rewards', `จ่ายโบนัสยศ ${ymLabel(ym)} · ${people} คน · ${rows.length} ยศ · รวม ${total} คะแนน`, { amount: total })({ ...db, pointLedger: [...rows, ...db.pointLedger] });
+/** ปิดเดือน ym (Phase 1 — เจ้าของ 2026-09-12): snapshot ยศ + "N ใบแรกตามลำดับอนุมัติ" ที่ได้รางวัล ลง app_config ·
+ *  ใบที่ได้รางวัลแต่ปิดไปก่อนวันปิดเดือน → ให้เป็นแต้มทันที (ลดย้อนหลังไม่ได้) · idempotent (ปิดแล้ว = no-op)
+ *  เรียกอัตโนมัติจากเซสชันแอดมินแรกของเดือนใหม่ (AdminShell) หรือกดเองในแท็บรางวัลประจำเดือน */
+export const closeMonth = (actorId: string, ym: string) => (db: Database): Database => {
+  if (closedMonths(db)[ym]) return db;
+  const snap = computeMonthSnapshot(db, ym, actorId);
+  const closed = { ...closedMonths(db), [ym]: snap };
+  let next: Database = { ...db, appConfig: [{ key: MONTHLY_CLOSED_KEY, value: closed as unknown as Record<string, unknown> }, ...db.appConfig.filter((c) => c.key !== MONTHLY_CLOSED_KEY)] };
+  const rows: Database['pointLedger'] = [];
+  for (const u of Object.values(snap.users)) for (const id of u.tickets) {
+    const t = next.tickets.find((x) => x.id === id);
+    if (!t || t.owner_id !== ticketBuyer(t) || ticketDueOf(t) > 0) continue;
+    rows.push(...bonusRows(next, t, 'points', u.share * Math.max(1, t.qty ?? 1), actorId));
+  }
+  if (rows.length) next = { ...next, pointLedger: [...rows, ...next.pointLedger] };
+  const people = Object.keys(snap.users).length;
+  return logActivity(actorId, 'close_month', `ปิดเดือน ${ymLabel(ym)} · ได้ยศ ${people} คน · ใบที่ปิดไปก่อนได้เป็นแต้ม ${rows.length} ใบ`, { amount: people })(next);
 };

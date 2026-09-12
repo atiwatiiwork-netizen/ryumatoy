@@ -1,8 +1,8 @@
 'use client';
 
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useReady } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
@@ -12,6 +12,8 @@ import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketDue } from '@/domain/services/money';
 import { ticketSelectable } from '@/domain/services/payments';
+import { pendingBonusDiscount, monthlyBonusForTicket, ymShort } from '@/domain/services/monthly';
+import { balanceOf, redeemRules, redeemPicks, POINT_STEP } from '@/domain/services/points';
 import { usableGrantsFor, scopeAllows, couponMatchesProduct, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitRemainingPayment } from '@/data/mutations';
@@ -45,9 +47,16 @@ function PayInner() {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const uid = useCurrentUserId();
+  // กัน hydration mismatch: เซิร์ฟเวอร์ไม่มีข้อมูลตั๋ว (seed) แต่ client โหลดเสร็จก่อน React hydrate → รอ ready ก่อนวาดรายการ (แบบเดียวกับ checkout)
+  const ready = useReady();
+  // โหมด seed (localStorage) โหลดเสร็จก่อน React hydrate → ready=true บน client แต่ false บน server = mismatch
+  // → วาดเนื้อหาหลัง mount เท่านั้น (เฟรมแรกทั้งสองฝั่งเป็น "กำลังโหลด…" เหมือนกัน)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [couponGrantId, setCouponGrantId] = useState('');
+  const [usePts, setUsePts] = useState(0); // แต้มรวมที่เลือกใช้ (v67) — กระจายให้ใบละไม่เกินเพดาน
 
   const ids = useMemo(() => (params.get('t') ?? '').split(',').filter(Boolean), [params]);
   // ใบที่จ่ายได้จริง ณ ตอนนี้ (ของตัวเอง · เปิดให้จ่าย · ไม่มีสลิปค้าง) — ใบที่หลุดเกณฑ์ระหว่างทางถูกตัดออกเงียบๆ พร้อมบอก
@@ -62,7 +71,30 @@ function PayInner() {
     ? [...tickets].sort((a, b) => ticketDue(b) - ticketDue(a)).find((t) => { const p = db.products.find((pp) => pp.id === t.product_id); return !!p && couponMatchesProduct(selected.coupon, p); })
     : undefined;
   const couponOff = selected && couponTicket ? couponDiscount(selected.coupon, ticketDue(couponTicket)) : 0;
-  const lineAmount = (t: PreorderTicket) => Math.max(0, ticketDue(t) - (couponTicket?.id === t.id ? couponOff : 0));
+  // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติต่อใบ — mutation/แอดมินคำนวณซ้ำเอง (หน้าจอแค่โชว์)
+  const bonusOf = (t: PreorderTicket) => pendingBonusDiscount(db, t);
+  const afterCouponBonus = (t: PreorderTicket) => Math.max(0, ticketDue(t) - (couponTicket?.id === t.id ? couponOff : 0) - bonusOf(t));
+  // แต้ม (v67): เพดานต่อใบ × จำนวนใบ · กระจาย "เติมใบที่ค้างมากสุดให้เต็มเพดานก่อน" (เจ้าของ 2026-09-12) · เห็นเฉพาะเมื่อเปิดระบบคะแนน
+  const pointsOn = db.settings.points_enabled;
+  const prule = redeemRules(db.settings, 'pre');
+  const ptsCapAll = tickets.reduce((s, t) => s + Math.min(prule.cap, afterCouponBonus(t)), 0);
+  const ptsMax = pointsOn ? Math.floor(Math.min(balanceOf(db, uid), ptsCapAll) / POINT_STEP) * POINT_STEP : 0;
+  const ptsUse = Math.min(usePts, ptsMax >= prule.min ? ptsMax : 0);
+  const ptsByTicket = useMemo(() => {
+    const m = new Map<string, number>();
+    let left = ptsUse;
+    for (const t of [...tickets].sort((a, b) => afterCouponBonus(b) - afterCouponBonus(a))) {
+      if (left <= 0) break;
+      // ต่อใบต้อง ≥ ขั้นต่ำ (ด่าน DB) — ใบที่เหลือให้ไม่ถึงขั้นต่ำ ข้ามไป
+      const give = Math.min(left, prule.cap, afterCouponBonus(t));
+      if (give >= prule.min) { m.set(t.id, give); left -= give; }
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ptsUse, tickets, couponTicket?.id, couponOff]);
+  const lineAmount = (t: PreorderTicket) => Math.max(0, afterCouponBonus(t) - (ptsByTicket.get(t.id) ?? 0));
+  const bonusTotal = tickets.reduce((s, t) => s + bonusOf(t), 0);
+  const ptsApplied = [...ptsByTicket.values()].reduce((s, v) => s + v, 0);
   const total = tickets.reduce((s, t) => s + lineAmount(t), 0);
 
   const onSlip = async (file?: File) => {
@@ -80,7 +112,7 @@ function PayInner() {
       const before = db.remainingPayments.length;
       // สลิปเดียว = slip_url เดียวกันทุกแถว → แอดมินเห็นเป็นกลุ่ม (pendingRpGroups)
       for (const t of tickets) {
-        dispatch(submitRemainingPayment(t.id, uid, lineAmount(t), slip ?? '', couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined));
+        dispatch(submitRemainingPayment(t.id, uid, lineAmount(t), slip ?? '', couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined, { points: ptsByTicket.get(t.id) ?? 0 }));
       }
       let after = before;
       dispatch((d) => { after = d.remainingPayments.length; return d; });
@@ -94,6 +126,8 @@ function PayInner() {
       router.replace('/wallet');
     } catch { setBusy(false); flash('เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'); }
   };
+
+  if (!ready || !mounted) return <div className="p-10 text-center text-ink-faint">กำลังโหลด…</div>;
 
   return (
     <div className="mx-auto max-w-[640px]">
@@ -122,12 +156,14 @@ function PayInner() {
                   <div className="text-right">
                     <div className="text-[13.5px] font-extrabold text-primary-soft">{baht(lineAmount(t))}</div>
                     {off > 0 && <div className="text-[10.5px] text-[#4ade80]">คูปอง −{baht(off)}</div>}
+                    {bonusOf(t) > 0 && <div className="text-[10.5px] text-[#f1d27a]">🏆 ยศ {monthlyBonusForTicket(db, t)?.tier.emoji} {ymShort(monthlyBonusForTicket(db, t)!.ym)} −{baht(bonusOf(t))}</div>}
+                    {(ptsByTicket.get(t.id) ?? 0) > 0 && <div className="text-[10.5px] text-[#4ade80]">⭐ แต้ม −{baht(ptsByTicket.get(t.id)!)}</div>}
                   </div>
                 </div>
               );
             })}
             <div className="flex items-center justify-between border-t border-subtle bg-surface-3/40 px-4 py-3">
-              <span className="text-[13px] text-ink-muted2">รวม {tickets.length} ใบ{couponOff > 0 && <span className="ml-1 text-[#4ade80]">· ลด {baht(couponOff)}</span>}</span>
+              <span className="text-[13px] text-ink-muted2">รวม {tickets.length} ใบ{couponOff > 0 && <span className="ml-1 text-[#4ade80]">· คูปอง −{baht(couponOff)}</span>}{bonusTotal > 0 && <span className="ml-1 text-[#f1d27a]">· ยศ −{baht(bonusTotal)}</span>}{ptsApplied > 0 && <span className="ml-1 text-[#4ade80]">· แต้ม −{baht(ptsApplied)}</span>}</span>
               <span className="text-[18px] font-extrabold text-primary-soft">{baht(total)}</span>
             </div>
           </div>
@@ -142,6 +178,18 @@ function PayInner() {
               </select>
               {selected && <div className="mt-2.5"><CouponTicket coupon={selected.coupon} size="sm" /></div>}
               {couponTicket && couponOff > 0 && <div className="mt-1.5 text-[11.5px] text-ink-faint">ใช้กับใบ {couponTicket.ticket_no}</div>}
+            </div>
+          )}
+
+          {/* ใช้แต้ม (v67) — เห็นเฉพาะเมื่อเปิดระบบคะแนน · ปุ่มขั้นละ 50 · กระจายให้ใบที่ค้างมากสุดก่อน ใบละไม่เกินเพดาน */}
+          {pointsOn && ptsMax >= prule.min && (
+            <div className="mb-4 rounded-card border border-[#d4af37]/30 bg-[#0d0909] p-4">
+              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มตัดยอด</span><span className="text-ink-faint">มี {balanceOf(db, uid).toLocaleString('en-US')} · ใช้ได้สูงสุด {ptsMax.toLocaleString('en-US')} ({prule.cap}/ใบ × {tickets.length} ใบ)</span></div>
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
+                {redeemPicks(ptsMax, prule.min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}
+              </div>
+              {ptsUse > 0 && <div className="mt-1.5 text-[11.5px] text-ink-faint">แต้มถูกจองทันทีตอนส่งสลิป คืนให้ถ้าสลิปไม่ผ่าน{ptsApplied < ptsUse ? ` · ใช้ได้จริง ${ptsApplied.toLocaleString('en-US')} (ส่วนที่เหลือไม่ถึงขั้นต่ำต่อใบ)` : ''}</div>}
             </div>
           )}
 
