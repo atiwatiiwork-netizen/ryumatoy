@@ -1,9 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useDatabase } from '@/state/DataProvider';
+import { useState } from 'react';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useAuth, useCurrentUserId, canLogin } from '@/state/AuthProvider';
+import { updateUser } from '@/data/mutations';
+import { store } from '@/data/store';
+import { AddressForm } from '@/components/AddressForm';
+import { shippingInfoOf, composeAddress, addressProblem } from '@/domain/services/address';
+import type { User, ShippingInfo } from '@/domain/entities';
 import { RANK } from '@/lib/theme';
 import { Icon, type IconName } from '@/components/Icon';
 import { Button, ProgressBar, RankBadge, cx } from '@/components/ui';
@@ -72,14 +78,8 @@ export default function ProfilePage() {
         {needsApproval && <div className="mt-1.5 rounded-full border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-1 text-[11.5px] font-bold text-[#fbbf24]">⏳ รอแอดมินอนุมัติสมาชิก</div>}
       </div>
 
-      {(me.phone || me.shipping_address) && (
-        <div className="mb-[18px] rounded-card border border-subtle bg-surface-2 p-4">
-          <div className="mb-2 text-[12.5px] font-bold text-ink">ข้อมูลจัดส่ง</div>
-          {me.phone && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">เบอร์</span><span className="text-ink">{me.phone}</span></div>}
-          {me.shipping_address && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">ที่อยู่</span><span className="text-ink">{me.shipping_address}</span></div>}
-          {me.line_id && <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">LINE</span><span className="text-ink">{me.line_id}</span></div>}
-        </div>
-      )}
+      {/* ที่อยู่จัดส่ง — โชว์แยกช่อง + ปุ่มแก้ไข (แพลตฟอร์มที่อยู่ เจ้าของ 2026-09-12) */}
+      <ShippingCard me={me} />
 
       <div className="mb-[18px] rounded-2xl border p-[18px]" style={{ background: r.grad, borderColor: 'transparent' }}>
         <div className="mb-3 flex items-center justify-between">
@@ -133,4 +133,80 @@ export default function ProfilePage() {
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-lg bg-surface-3 px-2.5 py-0.5 text-xs font-bold text-ink-muted2">{children}</span>;
+}
+
+/* ── ที่อยู่จัดส่ง: การ์ดโชว์แยกช่อง + ปุ่มแก้ไข → modal ฟอร์ม AddressForm (shared) ──────────
+   ประกาศนอกฟังก์ชันหน้า (DNA react-state) — หน้าแม่ re-render แล้วฟอร์มต้องไม่ถูกล้าง */
+function ShippingCard({ me }: { me: User }) {
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [info, setInfo] = useState<ShippingInfo>({});
+  const [line, setLine] = useState('');
+  const [busy, setBusy] = useState(false);
+  const openEdit = () => { setInfo(shippingInfoOf(me)); setLine(me.line_id ?? ''); setEditing(true); };
+  const save = async () => {
+    const bad = addressProblem(info);
+    if (bad) return flash(bad);
+    setBusy(true);
+    // ⚠ shipping_address (ข้อความประกอบแล้ว) ต้องเขียนคู่กับ shipping_info เสมอ — ใบปะหน้า A4 /
+    //   หน้าจัดส่ง / หน้าแอดมิน / needsProfile gate อ่านช่องข้อความเดิม (services/address.ts)
+    dispatch(updateUser(me.id, { shipping_info: info, shipping_address: composeAddress(info), line_id: line.trim() || undefined }));
+    const failed = await store.flush();
+    setBusy(false);
+    flash(failed ? 'เน็ตสะดุด — บันทึกไว้ในเครื่องแล้ว ระบบกำลังส่งขึ้นระบบให้อัตโนมัติ' : 'บันทึกที่อยู่แล้ว ✓');
+    setEditing(false);
+  };
+  const i = me.shipping_info;
+  const hasAny = !!(i?.address || me.shipping_address || me.phone);
+  const Row = ({ label, value }: { label: string; value?: string }) =>
+    value ? <div className="flex gap-2 py-0.5 text-[13px]"><span className="w-14 shrink-0 text-ink-faint">{label}</span><span className="min-w-0 flex-1 text-ink">{value}</span></div> : null;
+  return (
+    <div className="mb-[18px] rounded-card border border-subtle bg-surface-2 p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[12.5px] font-bold text-ink"><Icon name="truck" size={15} className="text-primary-soft" /> ที่อยู่จัดส่ง</div>
+        <button onClick={openEdit} className="flex items-center gap-1 rounded-lg border border-subtle bg-surface-3 px-2.5 py-1 text-[11.5px] font-bold text-ink-muted2 hover:border-accent hover:text-primary-soft">
+          ✏️ แก้ไข
+        </button>
+      </div>
+      {!hasAny ? (
+        <button onClick={openEdit} className="w-full rounded-xl border border-dashed border-subtle py-3 text-[12.5px] text-ink-faint">
+          ยังไม่มีที่อยู่ในระบบ — แตะเพื่อเพิ่มที่อยู่จัดส่ง
+        </button>
+      ) : (
+        <>
+          <Row label="ผู้รับ" value={i?.name ?? me.display_name} />
+          <Row label="เบอร์" value={i?.phone ?? me.phone} />
+          <Row label="ที่อยู่" value={i?.address ?? me.shipping_address} />
+          {(i?.province || i?.postal) && (
+            <div className="mt-1 flex flex-wrap gap-1.5 pl-16 text-[11px] font-bold">
+              {i?.province && <span className="rounded-md bg-white/[0.07] px-2 py-0.5 text-ink-muted2">📍 {i.province}</span>}
+              {i?.postal && <span className="rounded-md bg-white/[0.07] px-2 py-0.5 font-mono text-ink-muted2">{i.postal}</span>}
+            </div>
+          )}
+          {me.line_id && <Row label="LINE" value={me.line_id} />}
+        </>
+      )}
+
+      {editing && (
+        <div className="fixed inset-0 z-[120] grid place-items-center overflow-y-auto bg-black/75 p-5" onClick={() => !busy && setEditing(false)}>
+          <div className="w-full max-w-[440px] rounded-3xl border border-subtle bg-surface-2 p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-center gap-2 text-lg font-extrabold text-ink"><Icon name="truck" size={20} className="text-primary-soft" /> แก้ไขที่อยู่จัดส่ง</div>
+            <div className="mb-4 text-[12.5px] text-ink-faint">ใช้กับพัสดุทุกกล่องที่ส่งแบบ &quot;ตามที่อยู่ที่ลงทะเบียน&quot;</div>
+            <div className="flex flex-col gap-3">
+              <AddressForm value={info} onChange={setInfo} />
+              <label className="block">
+                <span className="mb-1 block text-[12px] font-semibold text-ink-muted">LINE ID <span className="text-ink-faint">(ไม่บังคับ)</span></span>
+                <input className="w-full rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-[13.5px] text-ink outline-none focus:border-accent" value={line} onChange={(e) => setLine(e.target.value)} placeholder="@yourline" />
+              </label>
+              <div className="mt-1 flex gap-2.5">
+                <button onClick={() => setEditing(false)} disabled={busy} className="flex-1 rounded-xl border border-subtle bg-surface-3 py-3 text-sm font-bold text-ink-muted2">ยกเลิก</button>
+                <button onClick={save} disabled={busy} className="flex-[2] rounded-xl bg-cta py-3 text-sm font-bold text-white">{busy ? 'กำลังบันทึก…' : '💾 บันทึกที่อยู่'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

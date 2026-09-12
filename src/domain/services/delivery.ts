@@ -54,13 +54,20 @@ export const deliveryReady = (db: Database, t: PreorderTicket): boolean => {
   return !!p?.is_stock;
 };
 
-/** ผู้รับของช่องใบปะหน้า — custom ใช้ 3 ช่องที่กรอก, ที่เหลืออ่านสดจากโปรไฟล์ผู้ใช้. */
+/** ผู้รับของช่องใบปะหน้า — custom ใช้ช่องที่กรอกต่อตั๋ว, ที่เหลืออ่านสดจากโปรไฟล์ผู้ใช้.
+ *  แพลตฟอร์มที่อยู่ 2026-09-12: ถ้ามี shipping_info (แยกช่อง) ใช้ "ชื่อผู้รับ/เบอร์ผู้รับ" จากนั้นก่อน —
+ *  display_name คือชื่อเฟส ไม่ใช่ชื่อจ่าหน้าพัสดุ · ที่อยู่ยังอ่านจาก shipping_address (ประกอบแล้ว) เหมือนเดิม */
 export interface ShipTo { name: string; phone: string; address: string }
 export const resolveShipTo = (db: Database, t: PreorderTicket): ShipTo => {
   if (t.delivery?.method === 'custom')
     return { name: t.delivery.name ?? '', phone: t.delivery.phone ?? '', address: t.delivery.address ?? '' };
   const u = db.users.find((x) => x.id === t.owner_id);
-  return { name: u?.display_name ?? '—', phone: u?.phone ?? '', address: u?.shipping_address ?? '' };
+  const info = u?.shipping_info;
+  return {
+    name: info?.name?.trim() || u?.display_name || '—',
+    phone: info?.phone?.trim() || u?.phone || '',
+    address: u?.shipping_address ?? '',
+  };
 };
 
 /**

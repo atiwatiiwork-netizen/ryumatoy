@@ -375,6 +375,15 @@ export interface CampaignAward {
   coupon_id?: string; // the auto-generated Coupon template created for this grant
 }
 
+/** ที่อยู่จัดส่งแบบแยกช่อง — ใช้ทั้งที่อยู่ที่ลงทะเบียน (users.shipping_info) และฟอร์ม "ที่อยู่ใหม่" ต่อตั๋ว */
+export interface ShippingInfo {
+  name?: string;     // ชื่อผู้รับพัสดุ (ไม่จำเป็นต้องเท่าชื่อเฟส)
+  phone?: string;    // เบอร์ติดต่อตอนส่งของ (แยกจากเบอร์ล็อกอิน)
+  address?: string;  // บ้านเลขที่ / หมู่ / ถนน / ตำบล / อำเภอ
+  province?: string; // จังหวัด
+  postal?: string;   // รหัสไปรษณีย์ 5 หลัก
+}
+
 export interface User {
   id: string;
   display_name: string;
@@ -398,6 +407,11 @@ export interface User {
   // captured after admin approval (phone required = login id, address required, line optional)
   phone?: string;
   shipping_address?: string;
+  /** ที่อยู่จัดส่งแบบแยกช่อง (แพลตฟอร์มที่อยู่ 2026-09-12, migration v68 users.shipping_info jsonb).
+   *  ⚠ `shipping_address` ยังเป็น "ข้อความประกอบแล้ว" ที่เขียนคู่กันทุกครั้งที่เซฟ — ใบปะหน้า/หน้าจัดส่ง/
+   *  แอดมินอ่านช่องเดิมต่อได้หมด. ชื่อ/เบอร์ในนี้คือ "ผู้รับพัสดุ" (แยกจาก display_name ที่เป็นชื่อเฟส
+   *  และ phone ที่เป็นเบอร์ล็อกอิน ซึ่งลูกค้าแก้เองไม่ได้เพราะ guard คุ้มครอง) */
+  shipping_info?: ShippingInfo;
   line_id?: string;
   created_at?: string; // signup time (from users.created_at, backfilled from the auth account)
   installed_at?: string; // first time this member opened the app installed to the home screen (PWA standalone) — for install-rate analytics

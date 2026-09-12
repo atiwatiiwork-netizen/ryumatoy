@@ -7,7 +7,9 @@ import { useAuth } from '@/state/AuthProvider';
 import { updateUser } from '@/data/mutations';
 import { store } from '@/data/store';
 import { Icon } from './Icon';
-import { cx } from './ui';
+import { AddressForm } from './AddressForm';
+import { composeAddress, addressProblem } from '@/domain/services/address';
+import type { ShippingInfo } from '@/domain/entities';
 
 /** Blocking overlay: login → (not approved) wait screen → (approved) fill shipping address. */
 export function ProfileGate() {
@@ -16,9 +18,13 @@ export function ProfileGate() {
   const me = db.users.find((u) => u.id === currentUserId);
   const dispatch = useDispatch();
   const { flash } = useToast();
-  const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
+  const [info, setInfo] = useState<ShippingInfo>({ name: '', phone: '', address: '', province: '', postal: '' });
   const [line, setLine] = useState('');
+  // เติมชื่อเฟส + เบอร์ล็อกอินให้ก่อน (ครั้งเดียวตอนแถวผู้ใช้มาถึง) — ลูกค้าส่วนใหญ่ผู้รับคือตัวเอง
+  useEffect(() => {
+    if (!me) return;
+    setInfo((v) => (v.name || v.phone ? v : { ...v, name: me.display_name ?? '', phone: me.phone ?? '' }));
+  }, [me]);
 
   // SELF-HEAL the "กำลังโหลดบัญชี…" hang: logged-in but our own row didn't arrive — happens when the
   // data reload stalled on a resume (frozen PWA reopened over a flaky network). Instead of sitting on
@@ -88,33 +94,31 @@ export function ProfileGate() {
   if (!needsProfile) return null;
 
   const needPhone = !me?.phone; // phone-signup users already have it; FB users may not
-  const save = () => {
-    if (needPhone && !phone.trim()) return flash('กรอกเบอร์โทรศัพท์');
-    if (!address.trim()) return flash('กรอกที่อยู่จัดส่ง');
-    dispatch(updateUser(currentUserId, { ...(needPhone ? { phone: phone.trim() } : {}), shipping_address: address.trim(), line_id: line.trim() || undefined }));
-    flash('บันทึกข้อมูลแล้ว ยินดีต้อนรับ! 🎉');
+  const save = async () => {
+    const bad = addressProblem(info);
+    if (bad) return flash(bad);
+    // shipping_address (ข้อความประกอบแล้ว) ต้องเขียนคู่เสมอ — ใบปะหน้า/หน้าจัดส่ง/gate อ่านช่องนี้
+    dispatch(updateUser(currentUserId, {
+      ...(needPhone ? { phone: info.phone?.trim() } : {}),
+      shipping_info: info,
+      shipping_address: composeAddress(info),
+      line_id: line.trim() || undefined,
+    }));
+    const failed = await store.flush();
+    flash(failed ? 'บันทึกไว้ในเครื่องแล้ว — กำลังส่งขึ้นระบบให้อัตโนมัติ' : 'บันทึกข้อมูลแล้ว ยินดีต้อนรับ! 🎉');
   };
 
   const inputCls = 'w-full rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent';
 
   return (
-    <div className="fixed inset-0 z-[110] grid place-items-center bg-black/75 p-5">
-      <div className="w-full max-w-[420px] rounded-3xl border border-subtle bg-surface-2 p-6">
-        <div className="mb-1 flex items-center gap-2 text-lg font-extrabold text-ink"><Icon name="user" size={20} className="text-primary-soft" /> กรอกที่อยู่จัดส่ง</div>
-        <div className="mb-4 text-[12.5px] text-ink-faint">อนุมัติแล้ว 🎉 กรอกที่อยู่ให้ครบก่อนเริ่มสั่งซื้อ</div>
+    <div className="fixed inset-0 z-[110] grid place-items-center overflow-y-auto bg-black/75 p-5">
+      <div className="w-full max-w-[440px] rounded-3xl border border-subtle bg-surface-2 p-6">
+        <div className="mb-1 flex items-center gap-2 text-lg font-extrabold text-ink"><Icon name="truck" size={20} className="text-primary-soft" /> กรอกที่อยู่จัดส่ง</div>
+        <div className="mb-4 text-[12.5px] text-ink-faint">อนุมัติแล้ว 🎉 กรอกที่อยู่ให้ครบก่อนเริ่มสั่งซื้อ — แก้ไขทีหลังได้ที่หน้าโปรไฟล์</div>
         <div className="flex flex-col gap-3">
-          {needPhone && (
-            <label className="block">
-              <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">เบอร์โทรศัพท์ <span className="text-primary-soft">*</span></span>
-              <input className={inputCls} inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />
-            </label>
-          )}
+          <AddressForm value={info} onChange={setInfo} />
           <label className="block">
-            <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">ที่อยู่จัดส่ง <span className="text-primary-soft">*</span></span>
-            <textarea className={cx(inputCls, 'h-24 resize-none')} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="บ้านเลขที่ / หมู่ / ถนน / ตำบล / อำเภอ / จังหวัด / รหัสไปรษณีย์" />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[12.5px] font-semibold text-ink-muted">LINE ID <span className="text-ink-faint">(ไม่บังคับ)</span></span>
+            <span className="mb-1 block text-[12px] font-semibold text-ink-muted">LINE ID <span className="text-ink-faint">(ไม่บังคับ)</span></span>
             <input className={inputCls} value={line} onChange={(e) => setLine(e.target.value)} placeholder="@yourline" />
           </label>
           <button onClick={save} className="mt-1 w-full rounded-xl bg-cta py-3 text-sm font-bold text-white">บันทึก · เริ่มใช้งาน</button>

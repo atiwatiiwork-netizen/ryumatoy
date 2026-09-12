@@ -24,7 +24,9 @@ import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
-import type { ProductStatus, PreorderTicket, DeliveryMethod } from '@/domain/entities';
+import { AddressForm } from '@/components/AddressForm';
+import { shippingInfoOf, composeAddress, addressProblem, splitComposed } from '@/domain/services/address';
+import type { ProductStatus, PreorderTicket, DeliveryMethod, ShippingInfo } from '@/domain/entities';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
   { key: 'open', label: 'เปิดจอง' },
@@ -305,10 +307,14 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
   const d = ticket.delivery;
   const [choosing, setChoosing] = useState(false);
   const [method, setMethod] = useState<DeliveryMethod>('registered');
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [addr, setAddr] = useState('');
+  // ที่อยู่ใหม่ต่อตั๋ว — ฟอร์มแยกช่องเดียวกับแพลตฟอร์มที่อยู่ (2026-09-12); ตั้งต้นจากที่อยู่ที่ลงทะเบียน
+  const [info, setInfo] = useState<ShippingInfo>({});
+  const [seeded, setSeeded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const pickCustom = () => {
+    setMethod('custom');
+    if (!seeded) { setInfo(shippingInfoOf(me)); setSeeded(true); } // เติมให้ก่อน ลูกค้าแก้เฉพาะจุดที่ต่าง
+  };
 
   const METHODS: { key: DeliveryMethod; icon: 'truck' | 'home' | 'box' | 'user'; label: string; sub: string }[] = [
     { key: 'registered', icon: 'truck', label: 'ส่งพัสดุ ตามที่อยู่ที่ลงทะเบียนไว้', sub: me?.shipping_address ? me.shipping_address : 'ยังไม่มีที่อยู่ในระบบ — เลือก "ที่อยู่ใหม่" แทน' },
@@ -319,9 +325,11 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
 
   const submit = async () => {
     if (method === 'registered' && !me?.shipping_address?.trim()) return flash('ยังไม่มีที่อยู่ในระบบ — เลือก "ที่อยู่ใหม่" แทน');
-    if (method === 'custom' && !(name.trim() && phone.trim() && addr.trim())) return flash('กรอก ชื่อ / เบอร์ / ที่อยู่ ให้ครบ');
+    if (method === 'custom') { const bad = addressProblem(info); if (bad) return flash(bad); }
     setBusy(true);
-    dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method, method === 'custom' ? { name, phone, address: addr } : undefined));
+    // delivery.address เก็บเป็นข้อความประกอบแล้ว (ที่อยู่ + จังหวัด + ไปรษณีย์) — ใบปะหน้า/คิวแอดมินอ่านช่องเดิม
+    dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method,
+      method === 'custom' ? { name: info.name!.trim(), phone: info.phone!.trim(), address: composeAddress(info) } : undefined));
     // read-back: mutation guard อาจ no-op (แอดมินเพิ่ง accept / จ่ายไม่ครบจาก state ใหม่) —
     // ห้าม flash สำเร็จ + ping LINE ทั้งที่ไม่มีอะไรเปลี่ยน (audit 2026-07-23 false-success class)
     let applied = false;
@@ -342,7 +350,7 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
         <div className="mb-4 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-3">
           <div className="flex items-center gap-2 text-[13px] font-bold text-[#fbbf24]"><Icon name="truck" size={17} /> ส่งคำขอรับของแล้ว · รอแอดมินยืนยัน</div>
           <div className="mt-1 text-[12.5px] text-ink-muted2">{DELIVERY_METHOD_LABEL[d.method]}{d.method === 'custom' && d.address ? ` · ${d.name} ${d.phone}` : ''}</div>
-          <button onClick={() => { setMethod(d.method); setName(d.name ?? ''); setPhone(d.phone ?? ''); setAddr(d.address ?? ''); setChoosing(true); }} className="mt-1.5 text-[12px] text-ink-faint underline">เปลี่ยนวิธีรับของ</button>
+          <button onClick={() => { setMethod(d.method); if (d.method === 'custom') { setInfo({ name: d.name ?? '', phone: d.phone ?? '', ...splitComposed(d.address) }); setSeeded(true); } setChoosing(true); }} className="mt-1.5 text-[12px] text-ink-faint underline">เปลี่ยนวิธีรับของ</button>
         </div>
       );
     }
@@ -367,7 +375,7 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
       <div className="mb-3 text-[12px] text-ink-faint">เลือกได้ 1 ทาง · ส่งคำขอแล้วรอแอดมินยืนยัน</div>
       <div className="flex flex-col gap-2">
         {METHODS.map((m) => (
-          <button key={m.key} onClick={() => setMethod(m.key)}
+          <button key={m.key} onClick={() => (m.key === 'custom' ? pickCustom() : setMethod(m.key))}
             className={cx('rounded-xl border px-3.5 py-2.5 text-left', method === m.key ? 'border-accent bg-[#b91c1c]/[0.1]' : 'border-subtle bg-surface-3')}>
             <div className={cx('flex items-center gap-2 text-[13px] font-bold', method === m.key ? 'text-primary-soft' : 'text-ink')}>
               <Icon name={m.icon} size={15} /> {m.label} {m.key === 'registered' && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-semibold text-ink-muted2">แนะนำ</span>}
@@ -377,10 +385,8 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
         ))}
       </div>
       {method === 'custom' && (
-        <div className="mt-3 flex flex-col gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ชื่อผู้รับ *" className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="เบอร์โทร *" className="w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
-          <textarea value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="ที่อยู่จัดส่ง *" className="h-20 w-full resize-none rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+        <div className="mt-3 rounded-xl border border-subtle bg-surface-2/60 p-3">
+          <AddressForm value={info} onChange={setInfo} />
         </div>
       )}
       <div className="mt-3 flex gap-2.5">
