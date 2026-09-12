@@ -13,7 +13,7 @@ import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketDue } from '@/domain/services/money';
 import { ticketSelectable } from '@/domain/services/payments';
 import { pendingBonusDiscount, monthlyBonusForTicket, ymShort } from '@/domain/services/monthly';
-import { balanceOf, redeemRules, redeemPicks, POINT_STEP } from '@/domain/services/points';
+import { balanceOf, redeemRules, redeemPicks, POINT_STEP, redeemEnabled } from '@/domain/services/points';
 import { usableGrantsFor, scopeAllows, couponMatchesProduct, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitRemainingPayment } from '@/data/mutations';
@@ -75,7 +75,7 @@ function PayInner() {
   const bonusOf = (t: PreorderTicket) => pendingBonusDiscount(db, t);
   const afterCouponBonus = (t: PreorderTicket) => Math.max(0, ticketDue(t) - (couponTicket?.id === t.id ? couponOff : 0) - bonusOf(t));
   // แต้ม (v67): เพดานต่อใบ × จำนวนใบ · กระจาย "เติมใบที่ค้างมากสุดให้เต็มเพดานก่อน" (เจ้าของ 2026-09-12) · เห็นเฉพาะเมื่อเปิดระบบคะแนน
-  const pointsOn = db.settings.points_enabled;
+  const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
   const prule = redeemRules(db.settings, 'pre');
   const ptsCapAll = tickets.reduce((s, t) => s + Math.min(prule.cap, afterCouponBonus(t)), 0);
   const ptsMax = pointsOn ? Math.floor(Math.min(balanceOf(db, uid), ptsCapAll) / POINT_STEP) * POINT_STEP : 0;

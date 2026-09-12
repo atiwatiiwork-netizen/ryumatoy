@@ -2,8 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 process.env.TZ = 'Asia/Bangkok'; // ตัดเดือนตามเวลาไทยเสมอ ไม่ว่ารันบนเครื่องไหน
 import { SEED_DATABASE } from '../../src/data/seed';
-import { approveOrder, approveRemainingPayment, submitOrder, closeMonth, deleteTicket, backfillPoints, adjustPoints, submitRemainingPayment, setMonthlyConfig } from '../../src/data/mutations';
-import { balanceOf, lifetimeOf, ticketIsFullPay, rawPointsForTicket, ticketEarnEligible, earnIdFor, ticketsMissingEarn } from '../../src/domain/services/points';
+import { approveOrder, approveRemainingPayment, submitOrder, closeMonth, deleteTicket, backfillPoints, adjustPoints, submitRemainingPayment, setMonthlyConfig, launchPointsPreOnly } from '../../src/data/mutations';
+import { balanceOf, lifetimeOf, ticketIsFullPay, ticketIsPre, rawPointsForTicket, ticketEarnEligible, earnIdFor, ticketsMissingEarn, earnRowForTicket, pointsRates, redeemEnabled } from '../../src/domain/services/points';
 import { monthlyConfig, monthlyStatus, monthlyBoard, monthlyPieces, ticketYm, countsForMonthly, DEFAULT_MONTHLY, currentYm, prevYm, closedMonths, monthsToClose, computeMonthSnapshot, monthlyBonusForTicket, pendingBonusDiscount, mbonusId, latestRankOf } from '../../src/domain/services/monthly';
 import type { Database, PreorderTicket, Order } from '../../src/domain/entities';
 
@@ -186,6 +186,35 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   db = adjustPoints('u-admin', U, -(bal + 1), 'over')(db);
   ok('H8 หักเกินคงเหลือถูกบล็อก · lifetime ไม่รวม adjust', balanceOf(db, U) === bal && lifetimeOf(adjustPoints('u-admin', U, 5, 'x')(db), U) === lifetimeOf(db, U));
   ok('H9 ตั๋วค้าง ไม่ eligible', !ticketEarnEligible(db, preTicket(db, U, 14)).ok);
+}
+
+// ── I) เปิดตัวแบบ "นับเฉพาะใบพรี" (เจ้าของ 2026-09-12 ค่ำ) + รอบพิเศษจ่ายเต็ม = ใบพรี ─────────
+{
+  let db = structuredClone(base);
+  db.settings.points_enabled = false;
+  const pre1 = preTicket(db, U, 3, { closed: true });                                   // ใบพรีปิดแล้ว → 20
+  const sp0 = preTicket(db, U, 4, { closed: true, price: 1200, deposit: 1200 });        // รอบพิเศษเก็บเต็ม → ยังเป็นใบพรี (batch)
+  db.tickets.find((t) => t.id === sp0.id)!.batch_id = 'b-audit';
+  const sp = db.tickets.find((t) => t.id === sp0.id)!;
+  const full = preTicket(db, U2, 5, { closed: true, price: 900, deposit: 900 });        // จ่ายเต็มไม่มีรอบ = พร้อมส่ง
+  const cfg = monthlyConfig(db);
+  ok('I1 รอบพิเศษจ่ายเต็ม = ใบพรี (20 + นับรายเดือน) · จ่ายเต็มไม่มีรอบ = พร้อมส่ง (30 ไม่นับ)',
+    ticketIsPre(db, sp) && rawPointsForTicket(db, sp) === 20 && countsForMonthly(db, cfg, sp) && !ticketIsPre(db, full) && rawPointsForTicket(db, full) === 30 && !countsForMonthly(db, cfg, full));
+  const mine = (d: Database) => ticketsMissingEarn(d).filter((t) => [pre1.id, sp.id, full.id].includes(t.id)).length;
+  ok('I1b ก่อนเปิดตัว (พร้อมส่ง 30): ทั้ง 3 ใบค้างให้คะแนน (seed มีใบค้างของตัวเองอยู่แล้ว ไม่นับ)', mine(db) === 3, ticketsMissingEarn(db).length);
+  db = launchPointsPreOnly('u-admin')(db);
+  ok('I2 เปิดตัว: พร้อมส่ง=0 + ระบบเปิด + ใช้แต้มยังปิด', db.settings.points_per_piece_instock === 0 && db.settings.points_enabled === true && !redeemEnabled(db));
+  ok('I3 ย้อนหลังเฉพาะใบพรี: pre1 + รอบพิเศษ = 40 · พร้อมส่ง 0', balanceOf(db, U) === 40 && balanceOf(db, U2) === 0 && db.pointLedger.some((e) => e.id === earnIdFor(pre1.id)) && db.pointLedger.some((e) => e.id === earnIdFor(sp.id)) && !db.pointLedger.some((e) => e.id === earnIdFor(full.id)), { u: balanceOf(db, U), u2: balanceOf(db, U2) });
+  ok('I4 หลังเปิด ไม่มีใบค้าง (พร้อมส่ง 0 ไม่นับเป็นค้าง)', ticketsMissingEarn(db).length === 0);
+  const n = db.pointLedger.length;
+  db = launchPointsPreOnly('u-admin')(db);
+  ok('I5 กดซ้ำ ไม่ให้ซ้ำ', db.pointLedger.length === n && balanceOf(db, U) === 40);
+  const pre2 = preTicket(db, U, 6);
+  db = closeTicket(db, pre2, U).db;
+  const full2 = preTicket(db, U2, 7, { closed: true, price: 900, deposit: 900 });
+  ok('I6 หลังเปิด: ปิดใบพรี +20 · พร้อมส่งปิดยอด = ไม่มีแถว (0)', balanceOf(db, U) === 60 && earnRowForTicket(db, full2) === null && earnRowForTicket(db, full2, { force: true }) === null);
+  ok('I7 pointsRates พร้อมส่ง 0 จริง (ไม่ fallback 30) · ใบพรียัง 20', pointsRates(db.settings).instock === 0 && pointsRates(db.settings).pre === 20);
+  ok('I8 note แถวย้อนหลังของรอบพิเศษบอก "ใบพรี 20/ใบ"', (db.pointLedger.find((e) => e.id === earnIdFor(sp.id))?.note ?? '').includes('ใบพรี 20/ใบ'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

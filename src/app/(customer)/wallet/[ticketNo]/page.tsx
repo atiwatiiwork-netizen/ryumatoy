@@ -17,7 +17,7 @@ import { submitRemainingPayment, chooseDelivery } from '@/data/mutations';
 import { deliveryReady, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
 import { ticketPayable } from '@/domain/services/payments';
 import { monthlyBonusForTicket, pendingBonusDiscount, ymShort } from '@/domain/services/monthly';
-import { balanceOf, maxRedeemable, redeemPicks, redeemRules } from '@/domain/services/points';
+import { balanceOf, maxRedeemable, redeemPicks, redeemRules, redeemEnabled } from '@/domain/services/points';
 import { store } from '@/data/store';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
@@ -96,7 +96,7 @@ export default function TicketDetailPage() {
   const bonus = monthlyBonusForTicket(db, ticket);
   const bonusOff = pendingBonusDiscount(db, ticket);
   // แต้ม (v67): เห็นเฉพาะเมื่อเปิดระบบคะแนน — ด่านจริงคือ DB trigger; หน้าจอแค่จำกัดตัวเลือก
-  const pointsOn = db.settings.points_enabled;
+  const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
   const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, CURRENT_USER_ID), kind: 'pre', payable: Math.max(0, due - couponOff - bonusOff) }) : 0;
   const ptsUse = Math.min(usePts, ptsMax);
   const payable = Math.max(0, due - couponOff - bonusOff - ptsUse);

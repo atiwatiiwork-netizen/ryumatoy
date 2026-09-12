@@ -3,7 +3,8 @@
 process.env.TZ = 'Asia/Bangkok';
 import { SEED_DATABASE } from '../../src/data/seed';
 import { submitRemainingPayment, approveRemainingPayment, rejectRemainingPayment, submitOrder, approveOrder, rejectOrder, adjustPoints } from '../../src/data/mutations';
-import { balanceOf, clampRedeem, maxRedeemable, redeemPicks, redeemHoldId, refundId, earnIdFor } from '../../src/domain/services/points';
+import { balanceOf, clampRedeem, maxRedeemable, redeemPicks, redeemHoldId, refundId, earnIdFor, redeemEnabled, redeemFlag, REDEEM_KEY } from '../../src/domain/services/points';
+import { setPointsRedeem } from '../../src/data/mutations';
 import type { Database } from '../../src/domain/entities';
 
 let pass = 0, fail = 0;
@@ -11,6 +12,7 @@ const ok = (name: string, cond: boolean, detail?: unknown) => { if (cond) { pass
 
 const base: Database = structuredClone(SEED_DATABASE);
 base.settings.points_enabled = true;
+base.appConfig = [{ key: REDEEM_KEY, value: { enabled: true } }, ...base.appConfig.filter((c) => c.key !== REDEEM_KEY)]; // สวิตช์ใช้แต้มเปิด (ทดสอบ G แยกต่างหาก)
 const U = 'u-me';
 const openTicket = (db: Database) => db.tickets.find((t) => t.owner_id === U && t.remaining_amount - t.remaining_paid > 0 && t.status === 'active')!;
 const withBalance = (n: number) => adjustPoints('u-admin', U, n, 'seed')(structuredClone(base));
@@ -97,6 +99,23 @@ const withBalance = (n: number) => adjustPoints('u-admin', U, n, 'seed')(structu
   for (const [i, t] of tix.entries()) db = submitRemainingPayment(t.id, U, 0, 'slip', undefined, { points: i === 0 ? 200 : 150, groupId: g })(db);
   const rps = db.remainingPayments.filter((r) => r.group_id === g);
   ok('R9 2 ใบในกลุ่มเดียว: หลด 200 + 150 = คงเหลือ 0, group_id ครบ', rps.length === 2 && balanceOf(db, U) === 0 && rps.every((r) => r.group_id === g), { n: rps.length, bal: balanceOf(db, U) });
+}
+
+// ── G: สวิตช์ "ใช้แต้มตัดยอด" แยกจากสวิตช์โชว์แต้ม (เจ้าของ 2026-09-12 ค่ำ: โชว์ก่อน ยังไม่เปิดลดจริง) ──
+{
+  const off: Database = { ...withBalance(500), appConfig: base.appConfig.filter((c) => c.key !== REDEEM_KEY) }; // ระบบเปิด แต่ยังไม่เปิดใช้แต้ม
+  ok('G1 ระบบเปิด + ใช้แต้มปิด → clampRedeem 0 / redeemEnabled false', clampRedeem(off, U, 'pre', 5000, 200) === 0 && !redeemEnabled(off) && !redeemFlag(off));
+  const t = openTicket(off);
+  const due = t.remaining_amount - t.remaining_paid;
+  const d2 = submitRemainingPayment(t.id, U, due, 'slip', undefined, { points: 200 })(off);
+  const rp = d2.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending')!;
+  ok('G2 ส่งสลิปพร้อมขอใช้แต้ม → ถูกตัดเป็น 0 ไม่มีแถวจอง คงเหลือเท่าเดิม', (rp.points_redeemed ?? 0) === 0 && !d2.pointLedger.some((e) => e.id === redeemHoldId(rp.id)) && balanceOf(d2, U) === 500, rp);
+  const flagOnly: Database = { ...withBalance(500), settings: { ...base.settings, points_enabled: false } };
+  ok('G3 สวิตช์ใช้แต้มเปิด แต่ระบบคะแนนปิด → ยังใช้ไม่ได้', !redeemEnabled(flagOnly) && redeemFlag(flagOnly) && clampRedeem(flagOnly, U, 'instock', 5000, 100) === 0);
+  const on = setPointsRedeem('u-admin', true)(off);
+  ok('G4 เปิดสวิตช์ → ใช้ได้ + มี activity log', redeemEnabled(on) && clampRedeem(on, U, 'pre', 5000, 200) === 200 && on.activityLogs.some((l) => JSON.stringify(l).includes('points_redeem')));
+  const off2 = setPointsRedeem('u-admin', false)(on);
+  ok('G5 ปิดสวิตช์กลับ → 0 + เหลือ config แถวเดียว', clampRedeem(off2, U, 'pre', 5000, 200) === 0 && off2.appConfig.filter((c) => c.key === REDEEM_KEY).length === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

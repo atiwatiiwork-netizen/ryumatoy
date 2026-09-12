@@ -3,14 +3,14 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { AdminTabs } from '@/components/AdminTabs';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useStore } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
-import { updateSettings, adjustPoints, backfillPoints } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates } from '@/domain/services/points';
-import type { ShopSettings } from '@/domain/entities';
+import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, launchPointsPreOnly } from '@/data/mutations';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag } from '@/domain/services/points';
+import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
 import { currentYm, monthlyConfig, monthlyStatus } from '@/domain/services/monthly';
 import { ymOf } from '@/domain/services/analytics';
@@ -44,6 +44,7 @@ export default function AdminPointsPage() {
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-2xl font-extrabold">คะแนนสะสม</span>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', on ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{on ? '● เปิดใช้งาน' : '○ โหมดพรีวิว (ยังไม่ให้คะแนนจริง)'}</span>
+        {on && <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', redeemEnabled(db) ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-surface-3 text-ink-muted2')}>{redeemEnabled(db) ? '🎟️ ใช้แต้มตัดยอดได้' : '🔒 ยังไม่เปิดใช้แต้ม (โชว์อย่างเดียว)'}</span>}
       </div>
       <div className="mb-5 text-[13px] text-ink-faint">คะแนน "คงที่ต่อชิ้น" (กำไรร้าน fix ต่อชิ้น ไม่ขึ้นกับราคา): ใบพรี <b className="text-ink">{rate.pre}</b> · พร้อมส่ง/จ่ายเต็ม <b className="text-ink">{rate.instock}</b> · ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ใบพรี = งวดสุดท้ายอนุมัติ · พร้อมส่ง = อนุมัติออเดอร์) · 1 คะแนน = 1฿ · ไม่ให้ตอนมัดจำ / ตั๋วหาของ / ประมูล</div>
 
@@ -78,11 +79,15 @@ function SettingsPanel() {
   const s = db.settings;
   const rate = pointsRates(s); // อัตราต่อชิ้น (มี fallback) — โชว์ตัวเลขผ่านตัวนี้เท่านั้น
   const set = (patch: Partial<ShopSettings>) => { dispatch(updateSettings(patch)); };
+  const adminId = useCurrentUserId();
+  const redeemOn = redeemEnabled(db), redeemSet = redeemFlag(db);
   // DNA react-state: ช่องตัวเลขเป็นคอมโพเนนต์ระดับบนสุด (NumField) — ถ้าประกาศในฟังก์ชันนี้จะ remount ทุกครั้งที่พิมพ์ → โฟกัสหลุด
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 font-bold">⚙️ ตั้งค่า</div>
       <div className="mb-4 text-[12.5px] text-ink-faint">ทุกหน้าคิดคะแนนผ่านสูตรกลาง (points.ts) — แก้ที่นี่มีผลทันทีทั้งฝั่งลูกค้าและแอดมิน</div>
+
+      {!s.points_enabled && <LaunchCard />}
 
       <button
         onClick={() => { const v = !s.points_enabled; if (confirm(v ? 'เปิดระบบคะแนน? ตั้งแต่นี้ตั๋วที่ปิดยอดจะได้คะแนนจริง (ของเก่าใช้ปุ่ม "ให้คะแนนย้อนหลัง")' : 'ปิดระบบคะแนน? คะแนนที่มีอยู่ยังอยู่ แค่หยุดให้ใหม่')) { set({ points_enabled: v }); flash(v ? 'เปิดระบบคะแนนแล้ว' : 'ปิดระบบคะแนนแล้ว (พรีวิว)'); } }}
@@ -95,9 +100,21 @@ function SettingsPanel() {
         <div className="mt-1 text-[12px] text-ink-muted2">{s.points_enabled ? 'ตั๋วที่ปิดยอดตั้งแต่นี้ได้คะแนนอัตโนมัติในจังหวะที่แอดมินกดอนุมัติ' : 'ดูตัวเลขจำลองได้ครบ แต่ยังไม่มีใครได้คะแนนจริง — เปิดเมื่อตัวเลขลงตัว'}</div>
       </button>
 
+      {/* สวิตช์ 2: ใช้แต้มตัดยอด — แยกจากสวิตช์โชว์แต้ม (เจ้าของ 2026-09-12 ค่ำ: โชว์ก่อน ยังไม่เปิดลดจริง) */}
+      <button
+        onClick={() => { const v = !redeemSet; if (confirm(v ? 'เปิดให้ลูกค้า "ใช้แต้มตัดยอด"? ปุ่มเลือกแต้มจะโผล่ตอนปิดใบพรี (สูงสุด 200/ใบ) และซื้อของพร้อมส่ง (สูงสุด 400/ออเดอร์)' : 'ปิดการใช้แต้ม? ลูกค้ายังเห็นแต้ม แต่ปุ่มเลือกแต้มจะหายไป (แต้มที่จองไว้ในสลิปที่รอตรวจไม่กระทบ)')) { dispatch(setPointsRedeem(adminId, v)); flash(v ? 'เปิดใช้แต้มตัดยอดแล้ว' : 'ปิดการใช้แต้มแล้ว (ยังโชว์แต้ม)'); } }}
+        className={cx('mb-4 w-full rounded-xl border px-4 py-3 text-left', redeemOn ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.10]' : 'border-subtle bg-surface-3/40')}
+      >
+        <div className="flex items-center justify-between">
+          <span className="font-bold">{redeemOn ? '● ใช้แต้มตัดยอด: เปิด' : redeemSet ? '◐ ใช้แต้มตัดยอด: ตั้งเปิดไว้ (มีผลเมื่อเปิดระบบคะแนน)' : '○ ใช้แต้มตัดยอด: ปิด'}</span>
+          <span className="rounded-md bg-surface-3 px-2 py-0.5 text-[11.5px] font-bold text-ink-muted2">{redeemSet ? 'กดเพื่อปิด' : 'กดเพื่อเปิด'}</span>
+        </div>
+        <div className="mt-1 text-[12px] text-ink-muted2">{redeemOn ? 'ลูกค้าเลือกแต้มได้ตอนปิดใบพรี / ซื้อพร้อมส่ง — ด่านจริงอยู่ที่ DB trigger (v67)' : 'ปิด = ลูกค้าเห็นแต้มสะสม แต่ปุ่มเลือกแต้มยังไม่โผล่ และระบบไม่รับแต้ม (clampRedeem = 0) · หน้าลูกค้าขึ้น "แลกใช้ได้: เร็วๆ นี้"'}</div>
+      </button>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <NumField s={s} onChange={set} k="points_per_piece_pre" label="คะแนน/ชิ้น · ใบพรี" hint="กำไร 200-250/ชิ้น → 20 = ~10% ทุกราคา" />
-        <NumField s={s} onChange={set} k="points_per_piece_instock" label="คะแนน/ชิ้น · พร้อมส่ง / จ่ายเต็ม" hint="กำไร in-stock สูงกว่า (ราคาบวก 200-400)" />
+        <NumField s={s} onChange={set} k="points_per_piece_instock" label="คะแนน/ชิ้น · พร้อมส่ง / จ่ายเต็ม (0 = ยังไม่ให้ นับเฉพาะใบพรี)" hint="กำไร in-stock สูงกว่า (ราคาบวก 200-400)" />
         <NumField s={s} onChange={set} k="points_min_redeem" label="ใช้แต้มขั้นต่ำต่อครั้ง" hint="50 · ปุ่มเลือกขั้นละ 50" />
         <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="ใช้แต้มสูงสุด · ปิดใบพรี (ต่อใบ)" hint="เจ้าของ 2026-09-12: 200 ต่อใบ" />
         <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="ใช้แต้มสูงสุด · พร้อมส่ง (ต่อออเดอร์)" hint="เจ้าของ 2026-09-12: 400 ต่อออเดอร์" />
@@ -367,6 +384,42 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
           {u ? <PointsPanel userId={u.id} mode="preview" simulateEnabled={simOn ? true : undefined} /> : <div className="py-8 text-center text-ink-faint">ยังไม่มีลูกค้า</div>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── เปิดตัว (เจ้าของ 2026-09-12 ค่ำ): โชว์แต้มจากใบพรีที่ปิดแล้ว (รอบปกติ+รอบพิเศษ) · ยังไม่เปิดใช้แต้ม ──
+function LaunchCard() {
+  const db = useDatabase();
+  const store = useStore();
+  const adminId = useCurrentUserId();
+  const { flash } = useToast();
+  const [busy, setBusy] = useState(false);
+  // จำลอง "อัตราพร้อมส่ง = 0" ก่อนกด → ตัวเลขที่โชว์ = สิ่งที่ปุ่มจะทำจริง (สูตรเดียวกับ backfillPoints ใน launchPointsPreOnly)
+  const preview = useMemo(() => {
+    const d: Database = { ...db, settings: { ...db.settings, points_per_piece_instock: 0 } };
+    const tix = ticketsMissingEarn(d);
+    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size };
+  }, [db]);
+  const run = async () => {
+    if (busy) return;
+    if (!confirm(`เปิดระบบคะแนนให้ลูกค้า (นับเฉพาะใบพรี)?\n\n1) อัตราพร้อมส่ง → 0 (ยังไม่ให้คะแนนของพร้อมส่ง)\n2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้ว ${preview.tickets} ใบ รวม ${num(preview.points)} คะแนน ให้ ${preview.customers} คน\n3) เปิดสวิตช์ระบบ → ลูกค้าเห็นแต้มทันที\n\n"ใช้แต้มตัดยอด" ยังปิดอยู่ — ค่อยเปิดทีหลังที่ปุ่มด้านล่าง`)) return;
+    setBusy(true);
+    store.update(launchPointsPreOnly(adminId));
+    const err = await store.flush(); // DNA save: รอผลเซฟก่อนบอกว่าสำเร็จ (ย้อนหลังใช้ id ผูกตั๋ว กดซ้ำได้ ไม่ให้ซ้ำ)
+    setBusy(false);
+    flash(err ? 'บันทึกไม่สำเร็จ — กดใหม่ได้ ระบบกันให้คะแนนซ้ำไว้แล้ว' : `เปิดระบบแล้ว · ให้คะแนนย้อนหลัง ${preview.tickets} ใบ`);
+  };
+  return (
+    <div className="mb-4 rounded-xl border border-[#d4af37]/50 bg-[#d4af37]/[0.08] p-4">
+      <div className="mb-1 font-bold text-[#f1d27a]">🚀 เปิดตัวแบบ "โชว์แต้มจากใบพรีที่ปิดแล้ว" (ยังไม่เปิดใช้แต้ม)</div>
+      <div className="mb-3 text-[12px] text-ink-muted2">ปุ่มเดียวทำ 3 อย่างในรอบเซฟเดียว: ตั้งอัตราพร้อมส่ง = 0 → ให้คะแนนย้อนหลังใบพรีที่ปิดแล้วทุกใบ (รอบปกติ + รอบพิเศษ) → เปิดสวิตช์ระบบ · สวิตช์ "ใช้แต้มตัดยอด" ยังปิด ลูกค้าเห็น "แลกใช้ได้: เร็วๆ นี้"</div>
+      <div className="mb-3 flex flex-wrap gap-4 text-[12.5px]">
+        <span>ใบพรีที่จะได้ย้อนหลัง <b className="text-ink">{preview.tickets}</b> ใบ</span>
+        <span>รวม <b className="text-[#fbbf24]">{num(preview.points)}</b> คะแนน</span>
+        <span>ลูกค้า <b className="text-ink">{preview.customers}</b> คน</span>
+      </div>
+      <button onClick={run} disabled={busy} className="rounded-lg bg-primary px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-40">{busy ? 'กำลังบันทึก…' : 'เปิดระบบให้ลูกค้าเห็นแต้ม (นับเฉพาะใบพรี)'}</button>
     </div>
   );
 }

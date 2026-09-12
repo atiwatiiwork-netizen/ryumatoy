@@ -26,7 +26,7 @@ import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orpha
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
-import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId } from '../domain/services/points';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 
@@ -2389,6 +2389,25 @@ export const backfillPoints = (actorId: string) => (db: Database): Database => {
   if (!rows.length) return db;
   const total = rows.reduce((s, r) => s + r.delta, 0);
   return logActivity(actorId, 'backfill_points', `ให้คะแนนย้อนหลัง ${rows.length} ใบ รวม ${total} คะแนน`, { amount: total })({ ...db, pointLedger: [...rows, ...db.pointLedger] });
+};
+
+/** สวิตช์ "ใช้แต้มตัดยอด" (app_config 'points_redeem') — แยกจาก points_enabled: เปิดโชว์แต้มก่อน ค่อยเปิดลดจริงทีหลัง
+ *  (เจ้าของ 2026-09-12 ค่ำ: "ยังไม่เปิดการลดจริง เอาแค่โชว์แต้ม") · ปุ่มเลือกแต้ม + clampRedeem อ่านผ่าน redeemEnabled() */
+export const setPointsRedeem = (actorId: string, enabled: boolean) => (db: Database): Database =>
+  logActivity(actorId, 'points_redeem', enabled ? 'เปิดให้ลูกค้าใช้แต้มตัดยอด' : 'ปิดการใช้แต้มตัดยอด (ยังเห็นแต้มอยู่)')({
+    ...db,
+    appConfig: [{ key: REDEEM_KEY, value: { enabled } }, ...db.appConfig.filter((c) => c.key !== REDEEM_KEY)],
+  });
+
+/** เปิดตัวระบบคะแนนแบบ "นับเฉพาะใบพรี" (เจ้าของ 2026-09-12 ค่ำ) — mutation เดียว 3 ขั้น จะได้ไม่มีสถานะครึ่งๆ:
+ *   1) อัตราพร้อมส่ง = 0 (ยังไม่ให้คะแนนของพร้อมส่ง)  2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้วทุกใบ (รอบปกติ+รอบพิเศษ)
+ *   3) เปิดสวิตช์ระบบคะแนน (ลูกค้าเห็นแต้ม) — **ไม่แตะ** สวิตช์ใช้แต้ม (ยังปิด)
+ *  เรียกซ้ำได้ (ย้อนหลังใช้ id ผูกตั๋ว = ไม่ให้ซ้ำ) */
+export const launchPointsPreOnly = (actorId: string) => (db: Database): Database => {
+  let next = updateSettings({ points_per_piece_instock: 0 })(db);
+  next = backfillPoints(actorId)(next);
+  next = updateSettings({ points_enabled: true })(next);
+  return logActivity(actorId, 'points_launch', 'เปิดระบบคะแนนให้ลูกค้า (นับเฉพาะใบพรี · ยังไม่เปิดใช้แต้ม)')(next);
 };
 
 /** รางวัลรายเดือน (แท็บใน /admin/points): กติกาเก็บใน app_config key 'points_monthly' — ไม่ต้องรัน migration */

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled } from '@/domain/services/points';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
 import { isAdminUser } from '@/domain/services/admins';
 import { ticketDue } from '@/domain/services/money';
@@ -22,6 +22,7 @@ const num = (n: number) => n.toLocaleString('en-US');
  *
  * Phase 1 (เจ้าของ 2026-09-12 ค่ำ): คะแนนปิดใบ/พร้อมส่ง · รอบเดือน = ยศ + "N ใบแรกตามลำดับอนุมัติ" ได้ส่วนลดตอนปิดใบ ·
  *   ใช้แต้มตอนปิดใบ (200/ใบ) / พร้อมส่ง (400/ออเดอร์) · wording: ยอดสะสม · ใบพรี: x ใบ · แลกใช้ได้
+ * เปิดตัว (เจ้าของ 2026-09-12 ค่ำ): โชว์แต้มจากใบพรีที่ปิดแล้ว (อัตราพร้อมส่ง = 0 → ซ่อนบรรทัดพร้อมส่ง) · สวิตช์ใช้แต้มยังปิด → "แลกใช้ได้: เร็วๆ นี้"
  * ธีม: Elden Ring แดง-ทอง-ดำ (eldenReveal / lineGrow / goldShine / ember / tierGlow) · ปิดเมื่อ reduced-motion
  */
 export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
@@ -37,6 +38,8 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const simulating = mode === 'preview' && simulateEnabled === true;
   const enabled = simulating ? true : s.points_enabled;
   const visible = mode === 'preview' ? enabled : pointsVisibleTo(db, uid);
+  // สวิตช์ 2 "ใช้แต้มตัดยอด" (เจ้าของ 2026-09-12 ค่ำ): เปิดตัวแบบโชว์แต้มก่อน → ส่วน "แลกใช้ได้" บอกว่าเร็วๆ นี้
+  const canRedeem = simulating ? true : redeemEnabled(db);
   const adminPreview = mode === 'live' && isAdminUser(db, uid);
 
   const balance = balanceOf(db, uid);
@@ -109,7 +112,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
         <div className="relative mt-4 grid grid-cols-3 gap-2 text-[11.5px] text-ink-muted2">
           <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">ยอดสะสม</div><b className="text-[#f1d27a]">{num(lifetime)}</b></div>
           <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">รอปิดใบ</div><b className="text-[#fbbf24]">+{num(pendingPts)}</b></div>
-          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div><b className="text-[11px] leading-tight text-ink">ส่วนลดส่วนต่างใบพรี / ของพร้อมส่ง</b></div>
+          <div className="rounded-lg border border-white/5 bg-black/40 px-2.5 py-1.5"><div className="text-ink-faint">แลกใช้ได้</div>{canRedeem ? <b className="text-[11px] leading-tight text-ink">ส่วนลดส่วนต่างใบพรี / ของพร้อมส่ง</b> : <b className="text-[11px] leading-tight text-[#fbbf24]">เร็วๆ นี้ · ร้านจะประกาศ</b>}</div>
         </div>
       </div>
 
@@ -179,9 +182,9 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
         <div className="mb-1.5 text-[13.5px] font-bold text-ink">วิธีได้คะแนน</div>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (จ่ายส่วนต่างครบ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
-          <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>
+          {rate.instock > 0 && <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>}
           <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — ส่วนลดตอนปิดใบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `${num(sharePerPiece(t))}/ใบ`).join(' · ')}</b></div>
-          <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · ใช้ลดได้ตอนปิดใบพรี (สูงสุด {num(rules.pre.cap)}/ใบ) และซื้อของพร้อมส่ง (สูงสุด {num(rules.instock.cap)}/ครั้ง) · ครั้งละอย่างน้อย {rules.pre.min}</div>
+          <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · {canRedeem ? 'ใช้ลดได้' : 'เร็วๆ นี้ใช้ลดได้'}ตอนปิดใบพรี (สูงสุด {num(rules.pre.cap)}/ใบ) และซื้อของพร้อมส่ง (สูงสุด {num(rules.instock.cap)}/ครั้ง) · ครั้งละอย่างน้อย {rules.pre.min}{!canRedeem && ' — ร้านจะประกาศวันเปิดใช้แต้มอีกครั้ง'}</div>
         </div>
       </div>
 
@@ -223,7 +226,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
       <div className="mb-6 rounded-card border border-subtle bg-surface-2 p-4">
         <div className="mb-2 text-[13.5px] font-bold">📒 ประวัติคะแนน</div>
         {rows.length === 0 ? (
-          <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีประวัติ — ปิดใบพรีหรือซื้อของพร้อมส่งเพื่อเริ่มสะสม</div>
+          <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีประวัติ — {rate.instock > 0 ? 'ปิดใบพรีหรือซื้อของพร้อมส่ง' : 'ปิดใบพรี'}เพื่อเริ่มสะสม</div>
         ) : (
           <div className="flex flex-col divide-y divide-hair">
             {rows.map((e) => {

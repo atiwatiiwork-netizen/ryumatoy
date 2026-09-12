@@ -67,10 +67,15 @@ export function pointsRates(settings: ShopSettings): { pre: number; instock: num
   return { pre: n(settings.points_per_piece_pre, 20), instock: n(settings.points_per_piece_instock, 30) };
 }
 
-/** อัตราคะแนนต่อชิ้นของตั๋วใบนี้ */
+/** "ใบพรี" ในสายตาเจ้าของ = พรีปกติ + รอบพิเศษ (batch) — ใช้อัตราใบพรี + นับยอดพรีรายเดือน.
+ *  รอบพิเศษที่เก็บเต็มราคาตั้งแต่แรกก็ยังเป็น "ใบพรี" (เจ้าของ 2026-09-12 ค่ำ: "ทั้งรอบปกติ - รอบพิเศษ")
+ *  ไม่ใช่ใบพรี = พร้อมส่ง / จ่ายเต็มตั้งแต่เกิดโดยไม่มีรอบ (ticketIsFullPay) */
+export const ticketIsPre = (db: Database, t: PreorderTicket) => !!t.batch_id || !ticketIsFullPay(db, t);
+
+/** อัตราคะแนนต่อชิ้นของตั๋วใบนี้ — ตั้งอัตราพร้อมส่ง = 0 คือ "นับเฉพาะใบพรี" (โหมดเปิดตัว) */
 export function ratePerPiece(db: Database, t: PreorderTicket): number {
   const r = pointsRates(db.settings);
-  return ticketIsFullPay(db, t) ? r.instock : r.pre;
+  return ticketIsPre(db, t) ? r.pre : r.instock;
 }
 
 /** คะแนน "เต็มใบ" ตามสูตร (ไม่ดูเกณฑ์/ปิดยอด) — ใช้โชว์ "จะได้เมื่อปิดยอด" */
@@ -112,7 +117,7 @@ export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorI
   const pts = pointsForTicket(db, t);
   if (pts <= 0) return null;
   const product = db.products.find((p) => p.id === t.product_id);
-  const kindLabel = ticketIsFullPay(db, t) ? 'พร้อมส่ง' : 'ใบพรี';
+  const kindLabel = ticketIsPre(db, t) ? 'ใบพรี' : 'พร้อมส่ง';
   return {
     id: earnIdFor(t.id),
     user_id: t.owner_id,
@@ -219,7 +224,7 @@ export function redeemPicks(max: number, min = 50, step = POINT_STEP): number[] 
 /** ตัวเลขแต้มที่ "ใช้จริง" ตามที่ลูกค้าขอ — ด่านฝั่งแอป (DB trigger v67 เป็นด่านจริงอีกชั้น):
  *  ระบบปิด / ต่ำกว่าขั้นต่ำ / เกินเพดาน / เกินยอดค้าง / เกินคงเหลือ → ตัดลงหรือ 0 (ไม่ปัดตกทั้งรายการ) */
 export function clampRedeem(db: Database, userId: string, kind: RedeemKind, payable: number, requested: number): number {
-  if (!db.settings.points_enabled) return 0;
+  if (!redeemEnabled(db)) return 0; // สวิตช์ใช้แต้มปิด (หรือระบบคะแนนปิด) → ไม่รับแต้มเลย
   const { cap, min } = redeemRules(db.settings, kind);
   const r = Math.max(0, Math.trunc(requested || 0));
   if (r < min) return 0;
@@ -290,3 +295,15 @@ export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji
 /** ฝั่งลูกค้าเห็นระบบคะแนนไหม (เจ้าของ 2026-09-12: ซ่อนไว้จนกว่าจะพร้อมประกาศ) —
  *  เปิดสวิตช์แล้ว = ทุกคนเห็น · ยังปิด = เฉพาะแอดมินเห็น (พรีวิวหน้าลูกค้าด้วยบัญชีตัวเอง) */
 export const pointsVisibleTo = (db: Database, userId: string) => db.settings.points_enabled || isAdminUser(db, userId);
+
+// ── สวิตช์ "ใช้แต้มตัดยอด" (เจ้าของ 2026-09-12 ค่ำ: เปิดโชว์แต้มก่อน ยังไม่เปิดลดจริง) ──────────
+/** เก็บใน app_config key 'points_redeem' → { enabled } — ไม่ต้องรัน migration (แบบเดียวกับ points_monthly) */
+export const REDEEM_KEY = 'points_redeem';
+/** ค่าที่แอดมินตั้งไว้ (ยังไม่ดูว่าระบบคะแนนเปิดไหม) — ใช้โชว์สถานะปุ่มในแอดมิน */
+export function redeemFlag(db: Database): boolean {
+  const row = db.appConfig.find((c) => c.key === REDEEM_KEY);
+  return (row?.value as { enabled?: unknown } | undefined)?.enabled === true;
+}
+/** ลูกค้าใช้แต้มตัดยอดได้ไหม = ระบบคะแนนเปิด **และ** สวิตช์ใช้แต้มเปิด —
+ *  ตัวเดียวที่ปุ่มเลือกแต้ม (หน้าตั๋ว / จ่ายรวม / checkout) และ clampRedeem ใช้ · ปิด = เห็นแต้ม แต่ยังใช้ลดไม่ได้ */
+export const redeemEnabled = (db: Database) => db.settings.points_enabled && redeemFlag(db);

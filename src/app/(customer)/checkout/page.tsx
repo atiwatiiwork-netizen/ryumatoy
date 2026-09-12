@@ -21,7 +21,7 @@ import { store } from '@/data/store';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
-import { balanceOf, maxRedeemable, redeemPicks, redeemRules } from '@/domain/services/points';
+import { balanceOf, maxRedeemable, redeemPicks, redeemRules, redeemEnabled } from '@/domain/services/points';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
@@ -72,7 +72,7 @@ export default function CheckoutPage() {
   const discount = selected ? couponDiscount(selected.coupon, couponBase) : 0;
   // แต้ม (v67): ใช้ได้เฉพาะยอด "พร้อมส่ง" หลังคูปอง ≤ 400/ออเดอร์ ≤ คงเหลือ · เห็นเฉพาะเมื่อเปิดระบบคะแนน
   // (มัดจำพรีในตะกร้าไม่เข้าเกณฑ์ — submitOrder/approveOrder คุมซ้ำ, DB trigger คุมยอดคงเหลือ)
-  const pointsOn = db.settings.points_enabled;
+  const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
   const instockBase = validLines.reduce((s, l) => (db.products.find((pp) => pp.id === l.productId)?.is_stock ? s + unitDeposit(l) * l.qty : s), 0);
   const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, currentUserId), kind: 'instock', payable: Math.max(0, instockBase - discount) }) : 0;
   const ptsUse = Math.min(usePts, ptsMax);

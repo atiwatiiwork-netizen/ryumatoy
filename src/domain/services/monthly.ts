@@ -1,6 +1,6 @@
 import type { Database, PointLedgerEntry, PreorderTicket } from '../entities';
 import { isSourcingTicket, ticketDue } from './money';
-import { ticketIsFullPay } from './points';
+import { ticketIsPre } from './points';
 import { ymOf } from './analytics';
 
 /**
@@ -76,7 +76,7 @@ export const ymShort = (ym: string) => {
 /** ตั๋วใบนี้นับเข้า "ใบพรี" ของเดือนไหม */
 export function countsForMonthly(db: Database, cfg: MonthlyConfig, t: PreorderTicket): boolean {
   if (isSourcingTicket(db, t)) return false;
-  if (cfg.count === 'pre' && ticketIsFullPay(db, t)) return false;
+  if (cfg.count === 'pre' && !ticketIsPre(db, t)) return false; // ใบพรี = พรีปกติ + รอบพิเศษ (points.ts ตัวเดียว)
   return true;
 }
 /** เดือนที่ตั๋ว "เกิด" (เวลาเครื่อง = ไทย) = เดือนที่แอดมินอนุมัติ */
