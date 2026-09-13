@@ -27,11 +27,22 @@ export function RoundLogCard({ log, makerName }: { log: BoardCloseLog; makerName
           </div>
           <div className="flex flex-col divide-y divide-hair">
             {log.lines.map((l) => (
-              <div key={l.product_id} className="grid grid-cols-[1fr_70px_70px_90px] items-center gap-2 px-3 py-2 text-[13px]">
-                <span className="truncate font-semibold">{l.name}</span>
-                <span className="text-center">{l.booked}</span>
-                <span className="text-center font-bold text-primary-soft">{l.final}</span>
-                <span className="text-center text-[12px]">{l.surplus > 0 ? <span className="text-primary-soft">+{l.surplus}</span> : <span className="text-ink-faint">—</span>}</span>
+              <div key={l.product_id} className="px-3 py-2 text-[13px]">
+                <div className="grid grid-cols-[1fr_70px_70px_90px] items-center gap-2">
+                  <span className="truncate font-semibold">{l.name}</span>
+                  <span className="text-center">{l.booked}</span>
+                  <span className="text-center font-bold text-primary-soft">{l.final}</span>
+                  <span className="text-center text-[12px]">{l.surplus > 0 ? <span className="text-primary-soft">+{l.surplus}</span> : <span className="text-ink-faint">—</span>}</span>
+                </div>
+                {/* แตกยอดรายแบบ A/B (มีเฉพาะ log ที่ปิดหลัง 2026-09-13) — ใบสั่งถึงค่ายดูจากตรงนี้ */}
+                {l.variants && l.variants.length > 0 && l.variants.map((v) => (
+                  <div key={v.name} className="grid grid-cols-[1fr_70px_70px_90px] items-center gap-2 text-[11.5px] text-ink-muted2">
+                    <span className="truncate pl-4 text-[#c4b5fd]">└ แบบ {v.name}</span>
+                    <span className="text-center">{v.booked}</span>
+                    <span className="text-center font-bold">{v.final}</span>
+                    <span className="text-center">{v.final - v.booked > 0 ? `+${v.final - v.booked}` : '—'}</span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

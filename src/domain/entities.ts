@@ -128,7 +128,12 @@ export interface BoardCloseLog {
   board_title: string; // board title, or "ปิดรอบสั่งผลิต" for a non-board round
   maker_id: string;
   closed_at: string;
-  lines: { product_id: string; name: string; booked: number; final: number; surplus: number }[];
+  lines: {
+    product_id: string; name: string; booked: number; final: number; surplus: number;
+    /** แตกยอดรายแบบ A/B ของสินค้าที่มี variants (เจ้าของ 2026-09-13) — ใบสั่งของถึงค่ายต้องรู้จำนวนต่อแบบ.
+     *  optional: log เก่าไม่มี field นี้ (lines เป็น jsonb เพิ่มได้โดยไม่ต้อง migration) */
+    variants?: { name: string; booked: number; final: number }[];
+  }[];
 }
 
 /**

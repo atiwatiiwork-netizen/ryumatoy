@@ -8,7 +8,8 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
 import { RoundLogCard } from '@/components/RoundLogCard';
-import { orderedQtyOf, franchiseOf, inOpenBoard, groupByMakerSeries } from '@/domain/services/catalog';
+import { orderedQtyOf, franchiseOf, inOpenBoard, groupByMakerSeries, variantsOf } from '@/domain/services/catalog';
+import type { Product } from '@/domain/entities';
 import { closeProduction } from '@/data/mutations';
 
 const inputCls = 'w-20 rounded-lg border border-subtle bg-surface-3 px-2.5 py-2 text-center text-sm text-ink outline-none focus:border-accent';
@@ -27,9 +28,27 @@ export default function ProductionPage() {
   // open board (those are managed by the board — close the board first, then they show up here).
   const items = db.products.filter((p) => p.manufacturer_id === makerId && !p.is_stock && p.status === 'open' && !inOpenBoard(db, p));
   const orderedOf = (pid: string) => orderedQtyOf(db, pid);
+  // ── แยกยอดรายแบบ A/B (เจ้าของ 2026-09-13): สินค้าที่มี variants ต้องเห็น/สั่งเป็นรายแบบ
+  //    เพราะใบสั่งถึงค่ายต้องบอกจำนวนต่อแบบ — ยอดรวมของสินค้าคิดจากผลบวกของทุกแบบ ──
+  const bookedVar = (pid: string, vid: string | null) =>
+    db.tickets.filter((t) => t.product_id === pid && (t.variant_id ?? null) === vid).reduce((s, t) => s + t.qty, 0);
+  const variantRows = (p: Product): { key: string; name: string; booked: number }[] | null => {
+    const vs = variantsOf(db, p.id);
+    if (vs.length === 0) return null;
+    const rows = vs.map((v) => ({ key: v.id, name: v.name, booked: bookedVar(p.id, v.id) }));
+    const none = bookedVar(p.id, null); // ตั๋วเก่าที่ไม่ผูกแบบ — โชว์แยกไว้ ไม่เงียบหาย
+    if (none > 0) rows.push({ key: 'none', name: 'ไม่ระบุแบบ', booked: none });
+    return rows;
+  };
   // clamp to ≥ ยอดจอง so the surplus preview is truthful — closeProduction clamps the same way, so a
   // typed value below the booked qty would otherwise show a wrong "ไม่มีส่วนเกิน". (audit A#7)
-  const finalOf = (pid: string) => Math.max(orderedOf(pid), Number(qty[pid] ?? String(orderedOf(pid))) || 0);
+  const vFinal = (pid: string, key: string, booked: number) => Math.max(booked, Number(qty[`${pid}|${key}`] ?? String(booked)) || 0);
+  const finalOf = (pid: string) => {
+    const p = items.find((x) => x.id === pid);
+    const rows = p ? variantRows(p) : null;
+    if (rows) return rows.reduce((s, r) => s + vFinal(pid, r.key, r.booked), 0); // รวมทุกแบบ
+    return Math.max(orderedOf(pid), Number(qty[pid] ?? String(orderedOf(pid))) || 0);
+  };
   const chosen = items.filter((p) => sel[p.id]);
   // จัดกลุ่มตามซีรีย์ (เจ้าของ 2026-09-13 "หน้าปิดรอบให้แยกตามซีรีย์") — ค่ายเรียกเก็บมักมาทั้งซีรีย์
   // ใช้ groupByMakerSeries ตัวเดียวกับหน้าช็อป/สินค้า (ค่ายถูกกรองแล้ว จึงได้กลุ่มเดียว → หยิบ groups)
@@ -40,7 +59,15 @@ export default function ProductionPage() {
     // irreversible (writes a round log + flips all tickets to production) → confirm first (audit A#8)
     const totalFinal = chosen.reduce((s, p) => s + finalOf(p.id), 0);
     if (!window.confirm(`ปิดรอบสั่งผลิต ${chosen.length} รายการ · รวมสั่ง ${totalFinal} ชิ้น?\nยืนยันแล้วย้อนกลับไม่ได้`)) return;
-    dispatch(closeProduction(chosen.map((p) => ({ productId: p.id, finalQty: finalOf(p.id) }))));
+    dispatch(closeProduction(chosen.map((p) => {
+      const rows = variantRows(p);
+      return {
+        productId: p.id,
+        finalQty: finalOf(p.id),
+        // snapshot รายแบบลง log — ใบสั่งถึงค่ายย้อนดูได้ว่าสั่งแบบไหนกี่ตัว
+        variants: rows?.map((r) => ({ name: r.name, booked: r.booked, final: vFinal(p.id, r.key, r.booked) })),
+      };
+    })));
     flash(`ปิดรอบ → ผลิต ${chosen.length} รายการ`);
     setSel({});
     setQty({});
@@ -89,25 +116,54 @@ export default function ProductionPage() {
                       const ordered = orderedOf(p.id);
                       const surplus = Math.max(0, finalOf(p.id) - ordered);
                       const on = !!sel[p.id];
+                      const vrows = variantRows(p);
                       return (
-                        <div key={p.id} className="grid grid-cols-[28px_1fr] items-center gap-3 py-3 lg:grid-cols-[28px_1fr_90px_110px_1fr]">
-                          <button onClick={() => setSel((s) => ({ ...s, [p.id]: !on }))} className={cx('grid h-5 w-5 place-items-center rounded-[5px] border-[1.5px]', on ? 'border-primary bg-primary' : 'border-subtle')}>
-                            {on && <Icon name="check" size={12} className="text-white" />}
-                          </button>
-                          <div className="min-w-0">
-                            {/* อยู่ใต้หัวซีรีย์แล้ว → โชว์ชื่อตัวละครพอ (ไม่มี character_name = ชื่อเต็มเดิม) */}
-                            <div className="truncate text-sm font-semibold">{p.character_name || p.series_name}</div>
-                            <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {baht(p.price_total)}</div>
+                        <div key={p.id} className="py-3">
+                          <div className="grid grid-cols-[28px_1fr] items-center gap-3 lg:grid-cols-[28px_1fr_90px_110px_1fr]">
+                            <button onClick={() => setSel((s) => ({ ...s, [p.id]: !on }))} className={cx('grid h-5 w-5 place-items-center rounded-[5px] border-[1.5px]', on ? 'border-primary bg-primary' : 'border-subtle')}>
+                              {on && <Icon name="check" size={12} className="text-white" />}
+                            </button>
+                            <div className="min-w-0">
+                              {/* อยู่ใต้หัวซีรีย์แล้ว → โชว์ชื่อตัวละครพอ (ไม่มี character_name = ชื่อเต็มเดิม) */}
+                              <div className="truncate text-sm font-semibold">{p.character_name || p.series_name}{vrows && <span className="ml-1.5 rounded bg-[#8b5cf6]/[0.16] px-1.5 py-0.5 text-[10px] font-bold text-[#c4b5fd]">{vrows.length} แบบ</span>}</div>
+                              <div className="font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · {baht(p.price_total)}</div>
+                            </div>
+                            <div className="text-center text-sm font-bold lg:col-start-3"><span className="text-ink-faint lg:hidden">ยอดจอง </span>{ordered}</div>
+                            <div className="lg:col-start-4 lg:text-center">
+                              {vrows
+                                // มีหลายแบบ → ยอดรวมคิดจากช่องรายแบบข้างล่าง (แก้ที่รายแบบ)
+                                ? <span className="inline-block w-20 rounded-lg border border-subtle bg-surface-3/50 px-2.5 py-2 text-center text-sm font-bold text-ink-muted2">{finalOf(p.id)}</span>
+                                : <input className={inputCls} inputMode="numeric" value={qty[p.id] ?? String(ordered)} disabled={!on} onChange={(e) => setQty((q) => ({ ...q, [p.id]: e.target.value }))} />}
+                            </div>
+                            <div className="text-[13px] lg:col-start-5">
+                              {on && surplus > 0
+                                ? <span className="text-primary-soft">+{surplus} ตัว → สต๊อก</span>
+                                : <span className="text-ink-faint">{on ? 'ไม่มีส่วนเกิน' : '—'}</span>}
+                            </div>
                           </div>
-                          <div className="text-center text-sm font-bold lg:col-start-3"><span className="text-ink-faint lg:hidden">ยอดจอง </span>{ordered}</div>
-                          <div className="lg:col-start-4 lg:text-center">
-                            <input className={inputCls} inputMode="numeric" value={qty[p.id] ?? String(ordered)} disabled={!on} onChange={(e) => setQty((q) => ({ ...q, [p.id]: e.target.value }))} />
-                          </div>
-                          <div className="text-[13px] lg:col-start-5">
-                            {on && surplus > 0
-                              ? <span className="text-primary-soft">+{surplus} ตัว → สต๊อก</span>
-                              : <span className="text-ink-faint">{on ? 'ไม่มีส่วนเกิน' : '—'}</span>}
-                          </div>
+                          {/* แถวย่อยรายแบบ A/B — จอง + ช่องสั่งไฟนอลของแบบนั้น (เจ้าของ 2026-09-13) */}
+                          {vrows && (
+                            <div className="mt-1.5 flex flex-col gap-1">
+                              {vrows.map((v) => {
+                                const vf = vFinal(p.id, v.key, v.booked);
+                                const vSurplus = Math.max(0, vf - v.booked);
+                                return (
+                                  <div key={v.key} className="grid grid-cols-[28px_1fr] items-center gap-3 rounded-lg bg-surface-3/35 py-1.5 pr-2 lg:grid-cols-[28px_1fr_90px_110px_1fr]">
+                                    <span className="justify-self-center text-ink-faint">└</span>
+                                    <div className="truncate text-[12.5px] font-semibold text-[#c4b5fd]">แบบ {v.name}</div>
+                                    <div className="text-center text-[13px] font-bold lg:col-start-3"><span className="text-ink-faint lg:hidden">จอง </span>{v.booked}</div>
+                                    <div className="lg:col-start-4 lg:text-center">
+                                      <input className={cx(inputCls, 'py-1.5')} inputMode="numeric" value={qty[`${p.id}|${v.key}`] ?? String(v.booked)} disabled={!on}
+                                        onChange={(e) => setQty((q) => ({ ...q, [`${p.id}|${v.key}`]: e.target.value }))} />
+                                    </div>
+                                    <div className="text-[12px] lg:col-start-5">
+                                      {on && vSurplus > 0 ? <span className="text-primary-soft">+{vSurplus} → สต๊อก</span> : <span className="text-ink-faint">—</span>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

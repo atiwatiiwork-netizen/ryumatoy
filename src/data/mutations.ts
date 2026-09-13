@@ -1765,7 +1765,7 @@ export const markShippedOffline = (ticketId: string) => (db: Database): Database
  * Records the final production qty and the surplus (final − ordered) that becomes
  * shop stock. Ordered qty is the sum of ticket qty for the product.
  */
-export const closeProduction = (entries: { productId: string; finalQty: number }[]) => (db: Database): Database => {
+export const closeProduction = (entries: { productId: string; finalQty: number; variants?: { name: string; booked: number; final: number }[] }[]) => (db: Database): Database => {
   const ids = new Set(entries.map((e) => e.productId));
   const now = new Date().toISOString();
   const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
@@ -1774,7 +1774,11 @@ export const closeProduction = (entries: { productId: string; finalQty: number }
     const p = db.products.find((pp) => pp.id === e.productId);
     const booked = orderedOf(e.productId);
     const final = Math.max(booked, e.finalQty);
-    return { product_id: e.productId, name: p?.series_name ?? '—', booked, final, surplus: Math.max(0, final - booked) };
+    return {
+      product_id: e.productId, name: p?.series_name ?? '—', booked, final, surplus: Math.max(0, final - booked),
+      // ใบสั่งของถึงค่ายต้องรู้จำนวนต่อแบบ (A/B) — snapshot ลง log ให้ย้อนดูได้ (เจ้าของ 2026-09-13)
+      ...(e.variants && e.variants.length ? { variants: e.variants } : {}),
+    };
   });
   const makerId = db.products.find((p) => p.id === entries[0]?.productId)?.manufacturer_id ?? '';
   return {
