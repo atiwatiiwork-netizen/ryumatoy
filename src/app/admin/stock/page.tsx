@@ -437,6 +437,12 @@ function SurplusRow({ product: p }: { product: Product }) {
   return (
     <div className="px-1 py-3">
       <div className="flex flex-wrap items-center gap-2">
+        {/* รูปสินค้า (เจ้าของ 2026-09-15) — สไตล์เดียวกับการ์ดกลุ่ม SKU ข้างล่าง */}
+        <div className="h-[48px] w-[48px] shrink-0 overflow-hidden rounded-[9px] border border-subtle bg-stripe">
+          {p.images[0]
+            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={20} className="text-primary-soft/25" /></div>}
+        </div>
         <span className="min-w-[140px] flex-1">
           <span className="block text-sm font-semibold">{p.series_name}</span>
           <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}</span>
