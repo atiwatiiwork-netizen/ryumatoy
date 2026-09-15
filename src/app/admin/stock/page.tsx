@@ -11,7 +11,7 @@ import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
-import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel, inOpenBoard } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel, inOpenBoard, groupByMakerSeries } from '@/domain/services/catalog';
 import { StatusRow } from '../products/StatusRow';
 import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, grantFromSurplus, setSpecialGate, logActivity } from '@/data/mutations';
 import { useCurrentUserId } from '@/state/AuthProvider';
@@ -396,19 +396,49 @@ function SurplusList() {
   const db = useDatabase();
   const avail = db.products.filter((p) => stockRemaining(db, p) > 0 && !hasOpenBatch(db, p.id));
   const busy = db.products.filter((p) => stockRemaining(db, p) > 0 && hasOpenBatch(db, p.id));
+  // แยกตามค่าย → กลุ่มซีรีย์ (เจ้าของ 2026-09-15) — ตัวจัดกลุ่มเดียวกับหน้าปิดรอบ/ช็อป
+  const makers = groupByMakerSeries(db, avail);
   return (
     <div className="mb-6 rounded-2xl border border-subtle bg-surface-2 p-4">
       <div className="mb-2 text-[13px] text-ink-faint">ส่วนเกินจากการปิดยอด — เปิดรอบพิเศษได้ (ทีละรอบต่อ SKU)</div>
       {avail.length === 0 && busy.length === 0 ? <div className="py-6 text-center text-[13px] text-ink-faint">ไม่มีส่วนเกินให้ขาย</div> : (
-        <div className="flex flex-col divide-y divide-hair">
-          {avail.map((p) => <SurplusRow key={p.id} product={p} />)}
-          {busy.map((p) => (
-            <div key={p.id} className="flex items-center justify-between px-1 py-3 text-[13px]">
-              <span className="font-semibold">{p.series_name}</span>
-              <span className="text-[12px] text-[#fbbf24]">กำลังเปิดรอบอยู่ · จัดการด้านล่าง</span>
+        <>
+          {makers.map((mk) => (
+            <div key={mk.makerId} className="mb-3">
+              {/* หัวค่าย */}
+              <div className="mb-1 flex items-center gap-2 border-b border-hair pb-1.5 text-[12.5px] font-bold text-ink-muted">
+                {db.manufacturers.find((m) => m.id === mk.makerId)?.logo_url
+                  ? <img src={db.manufacturers.find((m) => m.id === mk.makerId)!.logo_url} alt="" className="h-5 w-5 rounded-full object-cover" />
+                  : <Icon name="store" size={15} className="text-primary-soft" />}
+                {mk.makerName}
+                <span className="font-normal text-ink-faint">· {mk.groups.reduce((s, g) => s + g.products.length, 0)} สินค้า</span>
+              </div>
+              {mk.groups.map((g) => (
+                <div key={g.seriesId ?? 'none'}>
+                  {/* หัวซีรีย์ + ส่วนเกินรวมของซีรีย์ */}
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-surface-3/60 px-2.5 py-1.5">
+                    <span className="h-2 w-2 rounded-full bg-primary-bright" />
+                    <span className="text-[12.5px] font-bold text-ink">{g.seriesName ?? 'ไม่ระบุซีรีย์'}</span>
+                    <span className="text-[11px] text-ink-faint">· {g.products.length} ตัว · เหลือรวม {g.products.reduce((s, p) => s + stockRemaining(db, p), 0)}</span>
+                  </div>
+                  <div className="flex flex-col divide-y divide-hair">
+                    {g.products.map((p) => <SurplusRow key={p.id} product={p} />)}
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
-        </div>
+          {busy.length > 0 && (
+            <div className="mt-2 flex flex-col divide-y divide-hair border-t border-hair pt-1">
+              {busy.map((p) => (
+                <div key={p.id} className="flex items-center justify-between px-1 py-3 text-[13px]">
+                  <span className="font-semibold">{p.series_name}</span>
+                  <span className="text-[12px] text-[#fbbf24]">กำลังเปิดรอบอยู่ · จัดการด้านล่าง</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -444,7 +474,8 @@ function SurplusRow({ product: p }: { product: Product }) {
             : <div className="grid h-full w-full place-items-center"><Icon name="box" size={20} className="text-primary-soft/25" /></div>}
         </div>
         <span className="min-w-[140px] flex-1">
-          <span className="block text-sm font-semibold">{p.series_name}</span>
+          {/* อยู่ใต้หัวซีรีย์แล้ว → ชื่อตัวละครพอ (ตัวที่ไม่มี character_name = ชื่อเต็มเดิม) */}
+          <span className="block text-sm font-semibold">{p.character_name || p.series_name}</span>
           <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}</span>
         </span>
         <input className="w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="ราคา" />
