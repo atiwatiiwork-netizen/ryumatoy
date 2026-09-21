@@ -1984,9 +1984,13 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
   // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
   const grandTotal = t0.deposit_paid + t0.remaining_amount;
   const dep = Math.max(0, Math.min(newDeposit, grandTotal));
+  // ⛔ ห้ามตั้งมัดจำสูงจน "กิน" ส่วนต่างที่ลูกค้าจ่ายมาแล้ว (audit 2026-09-21 วิกฤต #4): เดิม paid ถูก clamp
+  //   ลงตาม remaining ใหม่ → เงินที่จ่ายแล้วหายจากตั๋วถาวร (แก้กลับไม่คืน) + สลิปยังนับในรายได้ = นับซ้ำ
+  //   + ตั๋ว paid_full เด้งเป็น active หลุดคิวส่ง. เพดานที่ตั้งได้ = ราคาเต็ม − ส่วนต่างที่จ่ายแล้ว → ตัวเรียกต้อง read-back
+  if (dep > grandTotal - (t0.remaining_paid ?? 0)) return db;
   const delta = dep - t0.deposit_paid;                 // มัดจำที่ขยับ (บวก=เพิ่ม)
   const remaining = grandTotal - dep;
-  const paid = Math.min(t0.remaining_paid, remaining); // กันจ่ายเกินยอดใหม่
+  const paid = Math.min(t0.remaining_paid, remaining); // ถึงจุดนี้ remaining ≥ remaining_paid เสมอ (ไม่ clamp จริง)
   // สถานะต้องคำนวณใหม่เสมอ — เดิมค้าง 'paid_full' ทั้งที่ยอดเพิ่งถูกขยับให้ค้างอีก (F4/F6)
   const status: PreorderTicket['status'] = t0.status === 'shipped' ? 'shipped' : paid >= remaining ? 'paid_full' : 'active';
   // ⚠ ตั๋วที่มาจากออเดอร์ (id = t-<orderItemId>): cashIn.deposits อ่านจาก order.total_deposit ไม่ใช่ตั๋ว

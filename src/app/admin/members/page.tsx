@@ -254,12 +254,26 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
   const [editId, setEditId] = useState<string | null>(null);
   const [depStr, setDepStr] = useState('');
 
-  const saveDeposit = (t: PreorderTicket) => {
+  const saveDeposit = async (t: PreorderTicket) => {
     const total = t.deposit_paid + t.remaining_amount;
+    const paidRem = t.remaining_paid ?? 0;
+    // เพดาน = ราคาเต็ม − ส่วนต่างที่ลูกค้าจ่ายมาแล้ว (mutation กันอีกชั้น) — เดิมตั้งเกินได้แล้วเงินที่จ่ายหายจากตั๋ว (audit #4)
+    const cap = total - paidRem;
     const dep = Number(depStr);
-    if (!Number.isFinite(dep) || dep < 0 || dep > total) return flash(`มัดจำต้องอยู่ระหว่าง 0–${total}`);
+    if (!Number.isFinite(dep) || dep < 0) return flash('มัดจำต้องเป็นตัวเลข ≥ 0');
+    if (dep > cap) return flash(paidRem > 0
+      ? `ตั้งได้สูงสุด ${baht(cap)} — ลูกค้าจ่ายส่วนต่างมาแล้ว ${baht(paidRem)} ตั้งเกินนี้เงินที่จ่ายแล้วจะหาย`
+      : `มัดจำต้องอยู่ระหว่าง 0–${baht(total)}`);
+    if (dep === t.deposit_paid) { setEditId(null); return; }
     dispatch(editTicketDeposit(t.id, dep));
-    flash(`แก้มัดจำ ${t.ticket_no} → ${baht(dep)} · ส่วนต่างเหลือ ${baht(total - dep)}`);
+    // read-back: mutation อาจปัดตกเงียบ → ห้ามขึ้น ✓ มั่ว
+    let applied = false;
+    dispatch((d) => { applied = d.tickets.find((x) => x.id === t.id)?.deposit_paid === dep; return d; });
+    if (!applied) return flash('แก้มัดจำไม่สำเร็จ — รีเฟรชแล้วลองใหม่');
+    // การแก้กระจาย 2 ตาราง (ตั๋ว + ออเดอร์) ไม่ atomic → ต้องรู้ผลเซฟ; ห้ามชวน "กดซ้ำ" (delta บน total_deposit ไม่ idempotent)
+    if (await store.flush()) return flash('แก้มัดจำยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรชเช็ค');
+    dispatch(logActivity(adminId, 'edit_deposit', `แก้มัดจำ ${t.ticket_no} ${baht(t.deposit_paid)} → ${baht(dep)} (${user?.display_name ?? ''})`, { targetId: t.id, targetLabel: t.ticket_no, amount: Math.abs(dep - t.deposit_paid) }));
+    flash(`แก้มัดจำ ${t.ticket_no} → ${baht(dep)} · ส่วนต่างเหลือ ${baht(total - dep)} ✓`);
     setEditId(null);
   };
 
@@ -319,7 +333,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
                     <div className="mt-2.5 flex items-center gap-2">
                       <span className="text-[12px] text-ink-muted">มัดจำใหม่</span>
                       <input autoFocus className="w-28 rounded-lg border border-accent bg-surface-2 px-3 py-1.5 text-sm text-ink outline-none" inputMode="numeric" value={depStr} onChange={(e) => setDepStr(e.target.value.replace(/[^\d]/g, ''))} />
-                      <span className="text-[11.5px] text-ink-faint">ส่วนต่างจะเหลือ {baht(Math.max(0, total - (Number(depStr) || 0)))}</span>
+                      <span className="text-[11.5px] text-ink-faint">ส่วนต่างจะเหลือ {baht(Math.max(0, total - (Number(depStr) || 0)))}{(t.remaining_paid ?? 0) > 0 && <span className="text-[#fbbf24]"> · จ่ายส่วนต่างแล้ว {baht(t.remaining_paid)} → ตั้งได้สูงสุด {baht(total - (t.remaining_paid ?? 0))}</span>}</span>
                       <div className="ml-auto flex gap-1.5">
                         <button onClick={() => setEditId(null)} className="rounded-lg border border-subtle px-3 py-1.5 text-[12px] text-ink-muted2">ยกเลิก</button>
                         <button onClick={() => saveDeposit(t)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">บันทึก</button>
