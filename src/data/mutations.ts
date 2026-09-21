@@ -1760,6 +1760,43 @@ export const markShippedOffline = (ticketId: string) => (db: Database): Database
   return { ...db, tickets: db.tickets.map((x) => (x.id === ticketId ? { ...x, status: 'shipped' as const, shipped_out_at: now } : x)) };
 };
 
+/** id แถวรับเงินนอกระบบ — ผูกกับตั๋ว = กดซ้ำ/เซฟล้มแล้วลองใหม่ ได้แถวเดิม ไม่บวกเงินซ้ำ */
+export const offlineRpId = (ticketId: string) => `rp-off-${ticketId}`;
+
+/**
+ * "จบงานตั๋วนี้เลย" — เคลียร์กันนอกระบบ (เจ้าของ 2026-09-21): ลูกค้ามารับเอง/โอนตรง/ตกลงกันทางแชท
+ * แล้วแอดมินอยากปิดใบนั้นทันทีจากป๊อปอัปรายชื่อ ไม่ต้องไล่ผ่านคิวจัดส่งทีละขั้น
+ *
+ * ⚠ กฎอนุรักษ์เงิน: ใบที่ยังค้างเงิน ถ้า "ปิดเฉยๆ" หนี้จะหายจากบัญชีโดยที่รายได้ไม่ขึ้น = เงินหายจากสมุดเงียบๆ
+ *   (บั๊กทรงเดียวกับ editTicketDeposit ที่เคยแก้ไป) จึงบังคับให้แอดมินเลือกอย่างใดอย่างหนึ่ง:
+ *   · collectRemaining=true  → บันทึกว่า "รับเงินส่วนต่างนอกระบบแล้ว" ลงแถว remaining_payments
+ *     (status approved, ไม่มีสลิป) → cashIn นับรายได้เพิ่ม + หนี้เป็นศูนย์ → สมุดยังสมดุลเป๊ะ
+ *   · collectRemaining=false → ปิดได้เฉพาะใบที่จ่ายครบอยู่แล้ว (ใบที่ยังค้าง = no-op ตัวเรียกต้องอ่าน read-back)
+ * ปิดแล้วถือว่า "ปิดใบ" เหมือนอนุมัติสลิปงวดสุดท้าย จึงมินต์คะแนนด้วยตัวเดียวกัน (idempotent ผูกตั๋ว)
+ */
+export const completeTicketOffline = (ticketId: string, opts?: { collectRemaining?: boolean }) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === ticketId);
+  if (!t || t.status === 'shipped') return db;
+  const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
+  if (due > 0 && !opts?.collectRemaining) return db; // ยังค้างเงินแต่ไม่ได้ยืนยันว่ารับเงินแล้ว → ไม่ปิด
+  const now = new Date().toISOString();
+  const rpId = offlineRpId(ticketId);
+  const next: Database = {
+    ...db,
+    tickets: db.tickets.map((x) => (x.id === ticketId
+      ? { ...x, remaining_paid: x.remaining_amount, status: 'shipped' as const, shipped_out_at: now }
+      : x)),
+    // เงินที่รับนอกระบบต้องมีร่องรอยในสมุด ไม่งั้น cashIn ไม่นับ = รายได้หาย (ดู money.ts: remaining อ่านจากตารางนี้)
+    remainingPayments: due > 0 && !db.remainingPayments.some((r) => r.id === rpId)
+      ? [{
+          id: rpId, ticket_id: ticketId, user_id: t.owner_id, amount: due,
+          slip_url: '', status: 'approved' as const, created_at: now, approved_at: now,
+        }, ...db.remainingPayments]
+      : db.remainingPayments,
+  };
+  return mintPointsForTickets([ticketId])(next);
+};
+
 /**
  * Close the pre-order round for the given products → status 'production'.
  * Records the final production qty and the surplus (final − ordered) that becomes

@@ -2,9 +2,13 @@
 
 import { useState } from 'react';
 import type { PreorderTicket } from '@/domain/entities';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useToast } from '@/state/ToastProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { productLabel } from '@/domain/services/catalog';
 import { baht } from '@/lib/theme';
+import { completeTicketOffline, logActivity } from '@/data/mutations';
+import { store } from '@/data/store';
 import { Icon } from './Icon';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -14,11 +18,44 @@ const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH
  *  ใกล้เวลาออกตั๋วที่สุด กันเคสลูกค้าสั่งสินค้าเดิมซ้ำหลายรอบ). */
 export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onClose: () => void }) {
   const db = useDatabase();
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  const adminId = useCurrentUserId();
   const [big, setBig] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const p = db.products.find((x) => x.id === t.product_id);
   const batch = t.batch_id ? db.batches.find((b) => b.id === t.batch_id) : undefined;
   const buyer = db.users.find((u) => u.id === t.owner_id);
   const due = t.remaining_amount - t.remaining_paid;
+  // อ่านสถานะสดจาก store เสมอ — ตั๋วที่ส่งเข้ามาเป็น snapshot ตอนเปิดป๊อปอัป (กดจบแล้วป้ายต้องเปลี่ยนทันที)
+  const live = db.tickets.find((x) => x.id === t.id) ?? t;
+  const done = live.status === 'shipped';
+
+  /** "จบงานตั๋วนี้เลย" — เคลียร์กันนอกระบบ (มารับเอง/โอนตรง/ตกลงทางแชท)
+   *  ใบที่ยังค้างเงินต้องยืนยันว่ารับเงินแล้ว ไม่งั้นหนี้หายจากบัญชีแต่รายได้ไม่ขึ้น = เงินหายจากสมุด */
+  const complete = async () => {
+    const dueNow = Math.max(0, live.remaining_amount - live.remaining_paid);
+    const msg = dueNow > 0
+      ? `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nใบนี้ยังค้าง ${baht(dueNow)}\n`
+        + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่างนอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ ${baht(dueNow)} ให้ด้วย\n`
+        + `(ถ้ายังไม่ได้รับเงิน ห้ามกด — บัญชีจะเพี้ยน)\n\nตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ`
+      : `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nจ่ายครบแล้ว · ตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ\n(ใช้กับเคสมารับเอง/ส่งกันเองนอกระบบ)`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    try {
+      dispatch(completeTicketOffline(live.id, { collectRemaining: dueNow > 0 }));
+      // read-back: mutation อาจ no-op (ใบถูกปิดไปแล้วจากอีกแท็บ) — ห้ามขึ้น ✓ ทั้งที่ไม่มีอะไรเปลี่ยน
+      let ok = false;
+      dispatch((d) => { ok = d.tickets.find((x) => x.id === live.id)?.status === 'shipped'; return d; });
+      if (!ok) { flash('ปิดใบไม่สำเร็จ — รีเฟรชแล้วลองใหม่'); return; }
+      // DNA save: ต้องเซฟผ่านก่อนถึงบอกว่าสำเร็จ (ปุ่มนี้ idempotent — กดซ้ำได้ ไม่บวกเงินซ้ำ)
+      if (await store.flush()) { flash('ยังบันทึกขึ้นระบบไม่ได้ — ระบบลองใหม่ให้อัตโนมัติ รอสักครู่แล้วรีเฟรชเช็ค'); return; }
+      dispatch(logActivity(adminId, 'close_delivery',
+        `จบงานนอกระบบ ${live.ticket_no} · ${buyer?.display_name ?? ''}${dueNow > 0 ? ` · รับส่วนต่างนอกระบบ ${baht(dueNow)}` : ''}`,
+        { targetId: live.id, targetLabel: live.ticket_no, amount: dueNow }));
+      flash(dueNow > 0 ? `จบงาน ${live.ticket_no} ✓ บันทึกรับเงิน ${baht(dueNow)} แล้ว` : `จบงาน ${live.ticket_no} ✓`);
+    } finally { setBusy(false); }
+  };
 
   const tTime = new Date(t.created_at).getTime();
   const order = db.orders
@@ -67,7 +104,19 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
           </div>
         )}
 
-        <a href={`/wallet/${encodeURIComponent(t.ticket_no)}`} target="_blank" rel="noreferrer" className="mt-4 block rounded-xl border border-subtle bg-surface-3 py-2.5 text-center text-[12.5px] font-bold text-ink-muted2">เปิดหน้าตั๋วเต็ม →</a>
+        {/* จบงานนอกระบบ (เจ้าของ 2026-09-21): มารับเอง/โอนตรง/ตกลงทางแชท → ปิดใบจากตรงนี้ได้เลย
+            ใบที่ยังค้างเงินจะถูกบันทึกเป็นรายได้ด้วย เพื่อไม่ให้หนี้หายแต่รายได้ไม่ขึ้น */}
+        {done ? (
+          <div className="mt-4 rounded-xl border border-[#16a34a]/35 bg-[#16a34a]/[0.1] py-2.5 text-center text-[12.5px] font-bold text-[#4ade80]">
+            ✓ เสร็จสิ้นแล้ว{live.shipped_out_at ? ` · ${fmtDate(live.shipped_out_at)}` : ''}
+          </div>
+        ) : (
+          <button onClick={complete} disabled={busy}
+            className="mt-4 w-full rounded-xl border border-[#16a34a]/45 bg-[#16a34a]/[0.14] py-2.5 text-center text-[12.5px] font-bold text-[#4ade80] disabled:opacity-50">
+            {busy ? 'กำลังปิดใบ…' : `✅ จบงานตั๋วนี้เลย${due > 0 ? ` (รับส่วนต่าง ${baht(due)} นอกระบบ)` : ''}`}
+          </button>
+        )}
+        <a href={`/wallet/${encodeURIComponent(t.ticket_no)}`} target="_blank" rel="noreferrer" className="mt-2 block rounded-xl border border-subtle bg-surface-3 py-2.5 text-center text-[12.5px] font-bold text-ink-muted2">เปิดหน้าตั๋วเต็ม →</a>
       </div>
 
       {/* lightbox — สลิปภาพใหญ่เต็มจอเผื่อตรวจ */}
