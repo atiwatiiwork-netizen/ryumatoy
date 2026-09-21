@@ -1810,7 +1810,9 @@ export const completeTicketOffline = (ticketId: string, opts?: { collectRemainin
 export const closeProduction = (entries: { productId: string; finalQty: number; variants?: { name: string; booked: number; final: number }[] }[]) => (db: Database): Database => {
   const ids = new Set(entries.map((e) => e.productId));
   const now = new Date().toISOString();
-  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
+  // "ยอดจอง" ที่ต้องสั่งค่าย = ตั๋วกระดานหลักเท่านั้น — ตั๋วรอบพิเศษ (batch_id) คือของที่มีในมือ/ล็อตแยก
+  // ห้ามนับปน ไม่งั้นสั่งเกิน (audit 2026-09-21 วิกฤต #2) · ใช้ตัวเดียวกับหน้าจอ (catalog.orderedQtyOf)
+  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid && !t.batch_id).reduce((s, t) => s + t.qty, 0);
   // same round-log as a board close (booked vs final snapshot) — a plain ปิดรอบ is also 1 cycle
   const lines = entries.map((e) => {
     const p = db.products.find((pp) => pp.id === e.productId);
@@ -1830,12 +1832,15 @@ export const closeProduction = (entries: { productId: string; finalQty: number; 
       if (!e) return p;
       const booked = orderedOf(p.id);
       const final = Math.max(booked, e.finalQty); // can't order fewer than booked
-      return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
+      // surplus ต้อง "บวกสะสม" ไม่ใช่เขียนทับ — SKU อาจมีของในมือจากรอบพิเศษอยู่แล้ว (surplus_qty > 0)
+      // เขียนทับเป็นค่าใหม่ = ของที่ขายรอบพิเศษไปแล้วหายจากคลัง (stockRemaining clamp 0 · แปลง In-Stock ไม่ได้)
+      return { ...p, status: 'production', production_qty: final, surplus_qty: (p.surplus_qty ?? 0) + Math.max(0, final - booked) };
     }),
     // ปิดใบพรี = เปิดจอง → ผลิต : ต้อง cascade สถานะลงทุกตั๋วเหมือน setProductStatus (ให้ 2 ฟีเจอร์ตรงกัน)
     // cascade เฉพาะตั๋วรอบที่ยังจองอยู่ ('open') — ห้ามลากตั๋วรอบเก่าที่ arrived/shipped ถอยกลับมาผลิต
     // (audit 2026-07-23: ตั๋วจบแล้วถอยสถานะ = หายจากคิวจัดส่งเงียบๆ)
-    tickets: db.tickets.map((t) => (ids.has(t.product_id) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
+    // + ห้ามลากตั๋วรอบพิเศษ (batch_id) — ล็อตนั้นมีสเต็ปเปอร์ของตัวเอง (depart/arriveSpecialRound) ของอาจอยู่ในมือแล้ว
+    tickets: db.tickets.map((t) => (ids.has(t.product_id) && !t.batch_id && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
     boardLogs: entries.length
       ? [{ id: id('bl'), board_title: 'ปิดรอบสั่งผลิต', maker_id: makerId, closed_at: now, lines }, ...db.boardLogs]
       : db.boardLogs,
@@ -2075,7 +2080,9 @@ export const closeBoardWithProduction = (boardId: string, entries: { productId: 
   const board = db.boards.find((b) => b.id === boardId);
   if (!board || board.status !== 'open') return db; // only an OPEN board can be closed (no double-close/log)
   const now = new Date().toISOString();
-  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid).reduce((s, t) => s + t.qty, 0);
+  // "ยอดจอง" ที่ต้องสั่งค่าย = ตั๋วกระดานหลักเท่านั้น — ตั๋วรอบพิเศษ (batch_id) คือของที่มีในมือ/ล็อตแยก
+  // ห้ามนับปน ไม่งั้นสั่งเกิน (audit 2026-09-21 วิกฤต #2) · ใช้ตัวเดียวกับหน้าจอ (catalog.orderedQtyOf)
+  const orderedOf = (pid: string) => db.tickets.filter((t) => t.product_id === pid && !t.batch_id).reduce((s, t) => s + t.qty, 0);
   const byId = new Map(entries.map((e) => [e.productId, e.finalQty]));
   const lines = entries.map((e) => {
     const p = db.products.find((pp) => pp.id === e.productId);
@@ -2090,10 +2097,13 @@ export const closeBoardWithProduction = (boardId: string, entries: { productId: 
       if (!byId.has(p.id)) return p;
       const booked = orderedOf(p.id);
       const final = Math.max(booked, byId.get(p.id)!);
-      return { ...p, status: 'production', production_qty: final, surplus_qty: Math.max(0, final - booked) };
+      // surplus ต้อง "บวกสะสม" ไม่ใช่เขียนทับ — SKU อาจมีของในมือจากรอบพิเศษอยู่แล้ว (surplus_qty > 0)
+      // เขียนทับเป็นค่าใหม่ = ของที่ขายรอบพิเศษไปแล้วหายจากคลัง (stockRemaining clamp 0 · แปลง In-Stock ไม่ได้)
+      return { ...p, status: 'production', production_qty: final, surplus_qty: (p.surplus_qty ?? 0) + Math.max(0, final - booked) };
     }),
     // scope เดียวกับ closeProduction — เฉพาะตั๋ว 'open' ยังไม่ shipped (กัน bleed ข้ามรอบ)
-    tickets: db.tickets.map((t) => (byId.has(t.product_id) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
+    // + ห้ามลากตั๋วรอบพิเศษ (batch_id) — ล็อตนั้นมีสเต็ปเปอร์ของตัวเอง (เหมือน closeProduction)
+    tickets: db.tickets.map((t) => (byId.has(t.product_id) && !t.batch_id && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
     boardLogs: [
       { id: id('bl'), board_id: boardId, board_title: board.title, maker_id: board.maker_id, closed_at: now, lines },
       ...db.boardLogs,

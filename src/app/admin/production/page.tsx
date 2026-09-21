@@ -31,7 +31,8 @@ export default function ProductionPage() {
   // ── แยกยอดรายแบบ A/B (เจ้าของ 2026-09-13): สินค้าที่มี variants ต้องเห็น/สั่งเป็นรายแบบ
   //    เพราะใบสั่งถึงค่ายต้องบอกจำนวนต่อแบบ — ยอดรวมของสินค้าคิดจากผลบวกของทุกแบบ ──
   const bookedVar = (pid: string, vid: string | null) =>
-    db.tickets.filter((t) => t.product_id === pid && (t.variant_id ?? null) === vid).reduce((s, t) => s + t.qty, 0);
+    // เฉพาะกระดานหลัก (!batch_id) ให้ผลรวมรายแบบ = orderedQtyOf เสมอ — ตั๋วรอบพิเศษไม่ใช่ยอดที่ต้องสั่งค่าย
+    db.tickets.filter((t) => t.product_id === pid && !t.batch_id && (t.variant_id ?? null) === vid).reduce((s, t) => s + t.qty, 0);
   const variantRows = (p: Product): { key: string; name: string; booked: number }[] | null => {
     const vs = variantsOf(db, p.id);
     if (vs.length === 0) return null;

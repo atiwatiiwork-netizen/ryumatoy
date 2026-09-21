@@ -189,9 +189,12 @@ export function filterProducts(db: Database, f: ProductFilter): Product[] {
 
 export const remaining = (price: number, deposit: number) => Math.max(0, price - deposit);
 
-/** Total pre-ordered quantity for a product (sum of ticket qty). */
+/** ยอดจอง "กระดานหลัก" ของ SKU (ผลรวม qty ตั๋วที่ไม่ผูกรอบพิเศษ) — คือจำนวนที่ต้องสั่งค่ายตอนปิดรอบ.
+ *  ⚠ ห้ามนับตั๋วรอบพิเศษ (batch_id) ปน: นั่นคือของที่มีในมือ/ล็อตแยกที่มีสเต็ปเปอร์ของตัวเอง — เดิมนับรวม
+ *  ทำให้หน้าปิดรอบโชว์ยอดจองเกินจริงและ closeProduction สั่งเกิน (audit 2026-09-21 วิกฤต #2).
+ *  ผู้ใช้ทุกที่ (ปิดรอบ/กระดาน/StatusRow/หน้าตั๋วเทียบ production_qty) หมายถึงกระดานหลักเหมือนกัน */
 export function orderedQtyOf(db: Database, productId: string): number {
-  return db.tickets.filter((t) => t.product_id === productId).reduce((s, t) => s + t.qty, 0);
+  return db.tickets.filter((t) => t.product_id === productId && !t.batch_id).reduce((s, t) => s + t.qty, 0);
 }
 
 // ---- Surplus stock accounting (reopened batches) ---------------------------
