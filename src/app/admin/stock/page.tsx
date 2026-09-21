@@ -394,7 +394,9 @@ function LegacyCreate() {
 // ── Tab B: open a round from a production-close surplus ──────────────────────
 function SurplusList() {
   const db = useDatabase();
-  const avail = db.products.filter((p) => stockRemaining(db, p) > 0 && !hasOpenBatch(db, p.id));
+  // "ส่วนเกินที่ขายได้" = คลัง − hold ที่ลูกค้ากำลังจ่าย/สลิปรอตรวจ (สูตรเดียวกับการ์ดรอบ) — เดิมไม่หัก
+  // ทำให้แท็บนี้โชว์ "เหลือ 2" ขณะการ์ดรอบโชว์ "ขายของที่เหลือ (0)" บนจอเดียวกัน (audit 2026-09-21 #3)
+  const avail = db.products.filter((p) => stockRemaining(db, p) - poolHeld(db, p.id) > 0 && !hasOpenBatch(db, p.id));
   const busy = db.products.filter((p) => stockRemaining(db, p) > 0 && hasOpenBatch(db, p.id));
   // แยกตามค่าย → กลุ่มซีรีย์ (เจ้าของ 2026-09-15) — ตัวจัดกลุ่มเดียวกับหน้าปิดรอบ/ช็อป
   const makers = groupByMakerSeries(db, avail);
@@ -448,7 +450,9 @@ function SurplusRow({ product: p }: { product: Product }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
-  const remaining = stockRemaining(db, p);
+  // ของว่างจริง = คลัง − hold ค้าง (ตรงกับด่านใน openSpecialRound/grantFromSurplus และการ์ดรอบ)
+  const held = poolHeld(db, p.id);
+  const remaining = Math.max(0, stockRemaining(db, p) - held);
   const [price, setPrice] = useState(String(p.price_total));
   const [qty, setQty] = useState(String(remaining));
   const [fullPay, setFullPay] = useState(false);
@@ -476,7 +480,7 @@ function SurplusRow({ product: p }: { product: Product }) {
         <span className="min-w-[140px] flex-1">
           {/* อยู่ใต้หัวซีรีย์แล้ว → ชื่อตัวละครพอ (ตัวที่ไม่มี character_name = ชื่อเต็มเดิม) */}
           <span className="block text-sm font-semibold">{p.character_name || p.series_name}</span>
-          <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}</span>
+          <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · ส่วนเกินเหลือ {remaining}{held > 0 && <span className="animate-blink font-bold text-[#fbbf24]"> · ⏳ ติดจอง {held} (คลัง {stockRemaining(db, p)})</span>}</span>
         </span>
         <input className="w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="ราคา" />
         <input className="w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={qty} onChange={(e) => setQtyClamped(e.target.value)} />
@@ -1454,7 +1458,15 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
         )}
         {!readOnly && noBuyers && !edit && <button onClick={() => { setEp(String(b.price_total)); setEq(String(b.stock_qty)); setEl(b.label); setEdit(true); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">แก้ไข</button>}
         {!readOnly && noBuyers && <button onClick={() => { if (confirm('ยกเลิกรอบนี้? (ยังไม่มีคนซื้อ)')) { dispatch(removeBatch(b.id)); flash('ยกเลิกรอบแล้ว'); } }} className="rounded-lg border border-[#b91c1c]/40 bg-[#b91c1c]/[0.12] px-2.5 py-1.5 text-[12px] font-semibold text-primary-soft">ยกเลิก</button>}
-        {!readOnly && <button onClick={() => { dispatch(closeBatch(b.id)); flash('ปิดรอบ · เก็บเข้าประวัติแล้ว'); }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
+        {!readOnly && <button onClick={() => {
+          // ด่านอยู่ใน mutation (ห้ามปิดขณะมีคนจอง/สลิปรอตรวจ) → read-back ก่อนขึ้น ✓ ไม่ให้ "สำเร็จปลอม"
+          const heldNow = pendingHeld(db, b.product_id, b.id);
+          if (heldNow > 0) return flash(`ปิดรอบไม่ได้ — มีลูกค้าถือจอง/สลิปรอตรวจในรอบนี้ ${heldNow} ชิ้น ตรวจสลิปให้จบก่อน (กันเปิดรอบใหม่ทับของที่ถูกจอง)`);
+          dispatch(closeBatch(b.id));
+          let closed = false;
+          dispatch((d) => { closed = d.batches.find((x) => x.id === b.id)?.status === 'closed'; return d; });
+          flash(closed ? 'ปิดรอบ · เก็บเข้าประวัติแล้ว' : 'ปิดรอบไม่สำเร็จ — รีเฟรชแล้วลองใหม่');
+        }} className="rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[12px] font-semibold text-ink-muted2">ปิดรอบ</button>}
       </div>
 
       {/* ตั้งราคา/มัดจำ/จำนวน "ของล็อตนี้" ก่อนเปิดขายจริง — ตั๋วที่ออกแล้วไม่ถูกแตะ (snapshot) */}

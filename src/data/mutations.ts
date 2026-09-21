@@ -451,10 +451,14 @@ export const addStock = (productId: string, qty: number, note?: string) => (db: 
   ],
 });
 
-export const closeBatch = (batchId: string) => (db: Database): Database => ({
-  ...db,
-  batches: db.batches.map((b) => (b.id === batchId ? { ...b, status: 'closed' } : b)),
-});
+export const closeBatch = (batchId: string) => (db: Database): Database => {
+  const b = db.batches.find((x) => x.id === batchId);
+  if (!b || b.status !== 'open') return db;
+  // ห้ามปิดรอบขณะมีลูกค้ากำลังจ่าย/สลิปรอตรวจในรอบนี้ — ไม่งั้น SKU หลุดไปแท็บ "ส่วนเกิน" ทั้งที่ของยังถูกจอง
+  // แล้วเปิดรอบใหม่/มอบตั๋วทับ พออนุมัติสลิปที่ค้าง = ตั๋วเกินของจริง (audit 2026-09-21 #3) → ตัวเรียกต้อง read-back
+  if (pendingHeld(db, b.product_id, b.id) > 0) return db;
+  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, status: 'closed' } : x)) };
+};
 
 /** เปิดรอบที่ปิดไปแล้วกลับมาขายต่อ (เจ้าของ 2026-07-30: "ดันเผลอไปกดปิดรอบ ทำไรไม่ได้เลย").
  *  ปิดรอบเป็นแค่การ "เก็บเข้าประวัติ" ไม่ได้ทำลายอะไร — กดพลาดต้องกู้ได้ในคลิกเดียว
@@ -508,6 +512,9 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
   if (db.batches.some((b) => b.product_id === productId && b.status === 'open')) return db; // one round at a time
   const qty = Math.max(0, Math.floor(opts.qty));
   if (qty <= 0) return db;
+  // เปิดรอบจาก "ของที่มีอยู่แล้ว" (ไม่ใช่ของมาเพิ่ม) ต้องไม่เกินของว่างจริง = คลัง − hold ที่ลูกค้ากำลังจ่าย/สลิปรอตรวจ
+  // เดิมไม่มีด่านเลย (UI clamp อย่างเดียว) → เปิดรอบทับของที่มีคนจองค้าง แล้วอนุมัติสลิปนั้น = ตั๋วเกินของจริง (audit 2026-09-21 #3)
+  if (!opts.addSurplus && qty > stockRemaining(db, p) - poolHeld(db, productId)) return db;
   const price = opts.price > 0 ? opts.price : p.price_total;
   // custom deposit (e.g. finished-goods rate 1000฿) wins; capped at the price so the remaining is never negative
   const deposit = opts.fullPay ? price : Math.min(price, (opts.deposit && opts.deposit > 0 ? opts.deposit : p.deposit_amount));
@@ -676,8 +683,11 @@ export const grantFromSurplus = (
     // ขนาดรอบร่าง = ของที่เหลือในคลังทั้งหมด (ไม่ใช่แค่จำนวนที่มอบครั้งนี้) — ไม่งั้นมอบได้แค่คนแรก
     // แล้ว SKU ถูกล็อกด้วยรอบที่เต็มทันที ต้องไปกด "แก้ไข" ก่อนถึงมอบคนต่อไปได้ (audit 2026-08-08)
     // รอบยังเป็นร่าง = ไม่ขึ้นหน้าร้าน ของจึงไม่ถูกปล่อยขายจนกว่าจะกดเปิดขายเอง
-    const roundQty = Math.max(q, Math.floor(opts.roundQty ?? stockRemaining(db, p)));
-    if (roundQty > stockRemaining(db, p)) return db;
+    // ของว่างจริง = คลัง − hold ที่ลูกค้ากำลังจ่าย/สลิปรอตรวจ (สูตรเดียวกับ restockSpecialRound) —
+    // เดิมไม่หัก hold → เปิดรอบร่าง/มอบตั๋วทับของที่มีคนจองค้าง แล้วพอแอดมินอนุมัติสลิปนั้น = ตั๋วเกินของจริง (audit 2026-09-21 วิกฤต #3)
+    const free = stockRemaining(db, p) - poolHeld(db, productId);
+    const roundQty = Math.max(q, Math.floor(opts.roundQty ?? free));
+    if (roundQty > free || q > free) return db;
     next = openSpecialRound(productId, {
       qty: roundQty, price: priceEach, fullPay: false, deposit: depEach,
       label: opts.label, addSurplus: false, published: false,
