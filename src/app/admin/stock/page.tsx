@@ -842,8 +842,9 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
   const showNormal = !!p && !p.is_stock && !inOpenBoard(db, p) && (
     stage ? stageTickets(normalTickets, stage).length > 0 : normalTickets.some((t) => t.status !== 'shipped'));
   const lots = batches.length + (showNormal ? 1 : 0);
-  const openBatches = batches.filter((b) => b.status === 'open');
-  const movingClosed = batches.filter((b) => b.status !== 'open');
+  // เรียงตามลำดับรอบ เก่า→ใหม่ (รอบ 1 ขึ้นก่อน) — ตรงกับประวัติตั๋ว และของลอตแรกมักถึงก่อน
+  // (เคส Kimimaro 2026-09-21: รอบเปิดขายเคยอยู่บนสุด เจ้าของกดถึงไทยรอบ 2 โดยไม่เห็นว่ารอบ 1 ต้องกดแยก)
+  const lotsOrdered = [...batches].sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
       {/* หัวการ์ด = ตัวสินค้า (SKU) — สรุปรวมทุกลอต */}
@@ -860,6 +861,12 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
             <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">ตั๋วรวม {allTickets.length}</span>
             {p && !p.is_stock && <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">คลัง {stockRemaining(db, p)}</span>}
             {p?.eta_note && <span className="rounded-md bg-[#2563eb]/[0.12] px-1.5 py-0.5 text-[#93c5fd]">{p.eta_note}</span>}
+            {(() => {
+              // ของกำลังเดินพร้อมกันหลายลอต → เตือนให้รู้ว่า "ถึงไทย" ต้องกดทีละลอต (เคส Kimimaro 2026-09-21)
+              const movingIn = (ts: PreorderTicket[]) => ts.some((t) => t.status !== 'shipped' && ['production', 'shipping'].includes(t.product_status));
+              const n = batches.filter((b) => movingIn(allTickets.filter((t) => t.batch_id === b.id))).length + (movingIn(normalTickets) ? 1 : 0);
+              return n >= 2 ? <span className="animate-blink rounded-md bg-[#d97706]/[0.18] px-1.5 py-0.5 text-[#fbbf24]">🚚 ของเดิน {n} ลอต — ถึงไทยกดแยกทีละลอต</span> : null;
+            })()}
           </div>
         </div>
       </div>
@@ -874,11 +881,7 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
             <StatusRow product={p} />
           </div>
         )}
-        {openBatches.map((b) => <RoundRow key={b.id} batch={b} inGroup />)}
-        {!stage && movingClosed.length > 0 && (
-          <div className="pt-1 text-[10.5px] font-bold text-ink-faint">รอบที่ปิดขายแล้ว — ของยังเดินอยู่ กดถึงไทยแยกรอบได้ที่นี่</div>
-        )}
-        {movingClosed.map((b) => <RoundRow key={b.id} batch={b} readOnly inGroup />)}
+        {lotsOrdered.map((b) => <RoundRow key={b.id} batch={b} readOnly={b.status !== 'open'} inGroup />)}
       </div>
     </div>
   );
@@ -1190,11 +1193,20 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
     //   ขายอยู่ทิ้ง + ดันของทั้งก้อนเป็น In-Stock (audit 2026-08-08). ตัว mutation กันไว้แล้ว
     //   ตรงนี้บอกแอดมินให้รู้ตัวก่อนกด จะได้ไม่งงว่าทำไมของไม่กลายเป็นพร้อมส่ง
     const otherOpen = db.batches.some((x) => x.product_id === b.product_id && x.id !== b.id && x.status === 'open');
-    const msg = moving.length === 0
+    // ⚠ ลอตอื่นของ SKU เดียวกันที่ยังเดินทาง/ผลิตอยู่ — ปุ่มนี้เป็น "รายลอต" ไม่แตะลอตนั้น
+    //   (เคส Kimimaro 2026-09-21: เจ้าของกดรอบ 2 (5 ใบ) แล้วงงว่าทำไมไม่แจ้งรอบ 1 (10 ใบ) —
+    //   ต้องบอกตรงนี้เลยว่ายังเหลือลอตไหน กี่ใบ และให้ไปกดที่ลอตนั้น)
+    const otherMoving = db.tickets.filter((t) => t.product_id === b.product_id && t.batch_id !== b.id
+      && t.status !== 'shipped' && ['production', 'shipping'].includes(t.product_status));
+    const otherLots = new Set(otherMoving.map((t) => t.batch_id ?? 'กระดานหลัก')).size;
+    const otherNote = otherMoving.length > 0
+      ? `\n\n⚠ ปุ่มนี้เฉพาะ "${b.label}" เท่านั้น — SKU นี้ยังมีอีก ${otherLots} ลอต (${otherMoving.length} ใบ) ที่ยังไม่ถึง\nถ้าของลอตนั้นมาด้วย ให้กด "ถึงไทย" ที่การ์ดลอตนั้นแยกอีกครั้ง`
+      : '';
+    const msg = (moving.length === 0
       ? (otherOpen
         ? `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้างในรอบนี้\n\n⚠ SKU นี้ยังมีรอบอื่นเปิดขายอยู่ — ของจะยังไม่กลายเป็น In-Stock (ต้องปิดรอบที่เปิดอยู่ก่อน)`
         : `ของรอบนี้ถึงไทยแล้ว? ไม่มีลูกค้าค้าง — สต๊อกที่เหลือ ${remaining} ชิ้นจะกลายเป็นสินค้า In-Stock (มือ 1) ทันที`)
-      : `ของรอบนี้ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`;
+      : `ของรอบนี้ ("${b.label}") ถึงไทยแล้ว? ตั๋ว ${moving.length} ใบจะเป็น "ถึงไทย" + แจ้งเตือนลูกค้า ${owners.length} คน`) + otherNote;
     if (!confirm(msg)) return;
     dispatch(arriveSpecialRound(b.id));
     // DNA save: เซฟให้ผ่านก่อนค่อย push "ถึงไทยแล้ว" — แจ้งลูกค้าให้มาจ่ายส่วนต่างทั้งที่สถานะ
@@ -1215,9 +1227,17 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
     let becameStock = false, stockNow = 0;
     dispatch((d) => { const pp = d.products.find((x) => x.id === b.product_id); becameStock = !!pp?.is_stock; stockNow = pp?.stock_qty ?? 0; return d; });
     const bell = owners.length === 0 ? '' : notified > 0 ? ` · 🔔 แจ้งเตือน ${notified} เครื่อง (${withBell}/${owners.length} คนเปิดกระดิ่ง)` : ` · (ลูกค้า ${owners.length} คนยังไม่เปิดกระดิ่ง — แจ้งในแชทเพิ่ม)`;
+    // ย้ำอีกครั้งหลังสำเร็จ — ลอตอื่นยังเดินทาง ต้องไปกดแยก (นับสดหลัง dispatch)
+    let leftAfter = 0, lotsAfter = 0;
+    dispatch((d) => {
+      const om = d.tickets.filter((t) => t.product_id === b.product_id && t.batch_id !== b.id && t.status !== 'shipped' && ['production', 'shipping'].includes(t.product_status));
+      leftAfter = om.length; lotsAfter = new Set(om.map((t) => t.batch_id ?? 'main')).size;
+      return d;
+    });
+    const leftNote = leftAfter > 0 ? ` · ⚠ อีก ${lotsAfter} ลอต (${leftAfter} ใบ) ยังเดินทาง — กดถึงไทยที่ลอตนั้นแยก` : '';
     flash(becameStock
       ? `ถึงไทยแล้ว ✓ ของเหลือกลายเป็น In-Stock มือ 1 · สต๊อก ${stockNow} ชิ้น (ปรับราคาต่อได้ที่ In-Stock)`
-      : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓${bell}`);
+      : `ถึงไทยแล้ว · ${moving.length} ตั๋ว ✓${bell}${leftNote}`);
   };
 
   // ── ร่าง → เปิดขาย (publish): ตั้งราคา/มัดจำ/จำนวนของล็อตนี้ก่อน แล้วค่อยขึ้นหน้าร้าน + push ──
@@ -1359,7 +1379,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold">{inGroup ? <span className="text-[#c4b5fd]">⚡ {b.label}</span> : <>{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span></>} <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}</div>
+          <div className="truncate text-sm font-bold">{inGroup ? <span className="text-[#c4b5fd]">⚡ {b.label}</span> : <>{p?.series_name ?? '—'} <span className="font-normal text-ink-faint">· {b.label}</span></>} <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">รอบ {roundNo}</span> {isDraft && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#fbbf24]">📝 ร่าง · ยังไม่ขึ้นหน้าร้าน</span>}{inGroup && b.status !== 'open' && <span className="ml-1 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-semibold text-ink-faint">ปิดขายแล้ว · กดสถานะแยกรอบได้</span>}</div>
           {/* ตัวเลขให้อ่านแบบเดียวกับที่เจ้าของคิด (เคส Orochimaru "ไม่ 14 หรอ"): ขาย/เปิดกด/ติดจอง/เก็บ
               ⏳ ติดจอง = คนกำลังจ่าย/สลิปรอตรวจ — ฝั่งลูกค้าเห็น "หมดชั่วคราว" ตอนเลขนี้กินของเหลือหมด */}
           <div className="mt-0.5 font-mono text-[11px] text-ink-faint">
