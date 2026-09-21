@@ -8,13 +8,12 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth, canLogin } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { uploadImage } from '@/lib/upload';
-import { reserveStock, payReservation, confirmReservation } from '@/lib/reserve';
+import { reserveStock, payReservation } from '@/lib/reserve';
 import { Icon } from '@/components/Icon';
 import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder, markPlanPaid } from '@/data/mutations';
-import { reserveTicketNos } from '@/lib/ticketno';
-import { ticketPrefixCounts, canBuySpecialWithLines } from '@/domain/services/tickets';
+import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel, inLiveAuction } from '@/domain/services/catalog';
 import { batchAvailable, availableFor, isPendingHold, pendingHeld, myPendingHold, userTakenInBatch, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { store } from '@/data/store';
@@ -235,17 +234,15 @@ export default function CheckoutPage() {
     if (validLines.some((l) => l.batchId) && !canBuySpecialWithLines(db, currentUserId, validLines))
       return flash('🔒 รอบพิเศษเฉพาะลูกค้าที่มีใบพรี — เพิ่มพรีปกติลงตะกร้า หรือเปิดพรีก่อนนะครับ');
     setBusy(true);
-    // Diamond / coupon-covered (payNow 0) → auto-approve issues the ticket right here in the CUSTOMER
-    // session, where RLS hides other customers' tickets → client numbering would collide. Reserve the
-    // numbers from the server first (migration v47); seed/preview returns {} → mutation falls back.
-    const startNos = noPayment ? await reserveTicketNos(ticketPrefixCounts(db, validLines.map((l) => l.productId))) : undefined;
-    // อ่านจำนวนออเดอร์ "ตอนนี้จริงๆ" หลังรอ RPC เสร็จ แล้วค่อย dispatch — เพื่อให้ read-back เชื่อถือได้
+    // ออเดอร์ 0 บาท (Diamond / คูปองคลุมเต็ม) ไม่ auto-approve ฝั่งลูกค้าอีกแล้ว — ด่าน DB (v63) ไม่ให้
+    // ลูกค้าอนุมัติออเดอร์ตัวเอง (เคสจริง 2026-09-03: ตั๋วถูกปฏิเสธทุกใบ ลูกค้าค้าง retry) → เข้าคิวแอดมิน
+    // เหมือนใบอื่น แอดมินกดยืนยัน 1 ครั้ง (เซสชันแอดมินจองเลขตั๋ว + มินต์ตั๋วเอง ที่ /admin/orders/[id])
     let ordersBefore = 0;
     dispatch((d) => { ordersBefore = d.orders.length; return d; });
-    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, noPayment, selected ? { grantId: selected.grant.id, discount } : undefined, startNos, ptsUse));
+    dispatch(submitOrder(currentUserId, validLines, slip ?? '', resIds, false, selected ? { grantId: selected.grant.id, discount } : undefined, undefined, ptsUse));
     // read-back: submitOrder guard อาจปัดตกเงียบ (gate รอบพิเศษ ฯลฯ) — ห้ามเคลียร์ตะกร้า/บอกสำเร็จมั่ว
     // ⚠ ต้องเทียบกับ "จำนวนก่อนหน้าที่อ่านจาก store จริง" ไม่ใช่ db ที่ผูกไว้ตอน render:
-    //   ระหว่างรอ reserveTicketNos ตัว poll อาจดึงออเดอร์ของคนอื่นเข้ามา แล้วนับว่าสำเร็จมั่ว (regression #6)
+    //   poll 40 วิอาจดึงออเดอร์ของคนอื่นเข้ามาระหว่างที่หน้านี้เปิดค้าง แล้วนับว่าสำเร็จมั่ว (regression #6)
     let submitted = false;
     let newOrderId = '';
     dispatch((d) => { submitted = d.orders.length > ordersBefore; newOrderId = d.orders[0]?.id ?? ''; return d; });
@@ -262,10 +259,8 @@ export default function CheckoutPage() {
     // ผลลัพธ์ payReservation ต้องไม่ถูกทิ้ง: ถ้าล้ม (timeout/เน็ต) hold ยังเป็น active มีนาฬิกาเดินอยู่
     // ฝั่ง server → อาจหลุดก่อนแอดมินตรวจ. บอกลูกค้าตามจริงว่าให้รีบแจ้ง ไม่ใช่เงียบ
     const payFailed = payResults.filter((r) => r && r.error).length;
-    // coupon fully covered an in-stock order → we auto-approve here with no admin step, so the stock
-    // holds must be CONFIRMED now (the admin approve screen normally does this). Otherwise they'd
-    // stay 'paid' and the stock would be held forever.
-    if (noPayment) await Promise.all(resIds.map((rid) => confirmReservation(rid)));
+    // (hold ของออเดอร์ 0 บาท: ถูก confirm ตอนแอดมินอนุมัติที่ /admin/orders/[id] เหมือนใบอื่น — ไม่ทำฝั่งนี้แล้ว
+    //  เดิม confirm ตรงนี้แล้วตั๋วถูก DB ปฏิเสธ → hold หายแต่ไม่มีตั๋ว = ของนับกลับมาว่าง ขายเกินได้)
     // ปิดนัดชำระ "ตอนส่งสลิป" (ไม่ใช่ตอนแอดมินอนุมัติ) — นัดจบหน้าที่แล้ว เตือนต่อไม่มีประโยชน์
     // ต้องสั่งก่อน flush() เพื่อให้ไปกับรอบเซฟเดียวกับออเดอร์
     if (planId) dispatch(markPlanPaid(planId, newOrderId));
@@ -289,12 +284,12 @@ export default function CheckoutPage() {
     // ping the shop owner's LINE (fire-and-forget; no-op if LINE env isn't set)
     const buyerName = db.users.find((x) => x.id === currentUserId)?.display_name ?? 'ลูกค้า';
     notifyAdminLine(noPayment
-      ? `🎫 ออเดอร์อนุมัติอัตโนมัติ: ${buyerName} · ${validLines.length} รายการ (ไม่ต้องโอน)`
+      ? `💎 ออเดอร์ไม่ต้องโอน รอกดยืนยัน: ${buyerName} · ${validLines.length} รายการ (${couponFree ? 'คูปองคลุมเต็ม' : 'Diamond'})`
       : `🧾 สลิปใหม่รอตรวจ: ${buyerName} · ${validLines.length} รายการ · ยอด ${payNow.toLocaleString()} บาท`);
     setBusy(false);
     flash(payFailed > 0
       ? 'ส่งคำขอแล้ว ✓ แต่การกันของสะดุด (เน็ต) — ถ้าแอดมินยังไม่ตรวจภายใน 15 นาที รบกวนทักแจ้งด้วยนะครับ'
-      : noPayment ? 'ยืนยันแล้ว · ได้ตั๋วเลย 🎉' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
+      : noPayment ? 'ส่งคำขอแล้ว · ไม่ต้องโอน ✓ รอแอดมินกดยืนยัน (ปกติไม่กี่นาที)' : 'ส่งคำขอแล้ว · รอ Admin ตรวจสอบ');
     router.push('/wallet');
   };
 
@@ -405,7 +400,7 @@ export default function CheckoutPage() {
         <div className="mb-4 rounded-card border border-[#8b5cf6]/40 bg-[#8b5cf6]/[0.10] p-[18px] text-center">
           <Icon name="verified" size={26} className="mx-auto mb-1.5 text-[#c4b5fd]" />
           <div className="text-sm font-bold text-[#c4b5fd]">{couponFree ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · ไม่ต้องมัดจำ'}</div>
-          <div className="mt-1 text-[12.5px] text-ink-muted2">{couponFree ? 'กดยืนยันรับตั๋วได้เลย — ไม่ต้องโอน' : diamondFree ? 'กดยืนยันรับตั๋วได้เลย — จ่ายเต็มจำนวนตอนของถึงไทย' : 'กดยืนยันรับตั๋วได้เลย'}</div>
+          <div className="mt-1 text-[12.5px] text-ink-muted2">{couponFree ? 'ไม่ต้องโอน — กดยืนยันแล้วแอดมินจะออกตั๋วให้ (ปกติไม่กี่นาที)' : diamondFree ? 'ไม่ต้องโอน — กดยืนยันแล้วแอดมินจะออกตั๋วให้ · จ่ายเต็มจำนวนตอนของถึงไทย' : 'ไม่ต้องโอน — กดยืนยันแล้วแอดมินจะออกตั๋วให้'}</div>
         </div>
       ) : (
         <>
@@ -475,14 +470,14 @@ export default function CheckoutPage() {
           {!blockedByStock && (
             <>
               <Button disabled={(!slip && !noPayment) || busy || saveStuck} onClick={submit}>
-                {saveStuck ? '⏳ กำลังบันทึกอัตโนมัติ… (ห้ามกดซ้ำ)' : noPayment ? 'ยืนยัน · รับตั๋วเลย' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}
+                {saveStuck ? '⏳ กำลังบันทึกอัตโนมัติ… (ห้ามกดซ้ำ)' : noPayment ? 'ยืนยัน · ไม่ต้องโอน' : 'ส่งคำขอ · รอ Admin ตรวจสอบ'}
               </Button>
               {saveStuck && (
                 <div className="mt-2 rounded-xl border border-[#d97706]/45 bg-[#d97706]/[0.1] px-3.5 py-2.5 text-[12px] text-[#fbbf24]">
                   ออเดอร์ถูกบันทึกไว้ในเครื่องแล้ว ระบบกำลังส่งให้อัตโนมัติเมื่อเน็ตกลับมา — เปิดหน้านี้ค้างไว้สักครู่ ถ้าไม่ขึ้นในประวัติภายใน 5 นาที ทักแอดมินพร้อมสลิปได้เลยครับ
                 </div>
               )}
-              <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">{noPayment ? 'ยืนยันแล้วได้ตั๋วทันที · จ่ายเต็มจำนวนตอนของถึงไทย' : 'เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ'}</div>
+              <div className="mt-2.5 text-center text-[11.5px] text-ink-faint">{noPayment ? 'ไม่ต้องโอน · แอดมินกดยืนยัน 1 ครั้ง ระบบจะออกตั๋วให้ · จ่ายเต็มจำนวนตอนของถึงไทย' : 'เมื่อ Admin อนุมัติสลิป ระบบจะออก Ticket ให้อัตโนมัติ'}</div>
             </>
           )}
         </>

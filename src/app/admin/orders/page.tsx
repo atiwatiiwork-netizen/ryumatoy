@@ -126,9 +126,12 @@ export default function OrdersHubPage() {
                 <div className="grid h-[52px] w-[42px] place-items-center rounded-lg bg-stripe"><Icon name="copy" size={17} className="text-ink-faint" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{userName(o.user_id)}</div>
-                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}</div>
+                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}
+                    {/* ออเดอร์ 0 บาท (Diamond/คูปองคลุมเต็ม) ไม่มีสลิปโดยธรรมชาติ — ป้ายกันเข้าใจผิดว่าเป็นขยะแล้วกดปฏิเสธ (เคสจริง 2026-09-03) */}
+                    {(o.total_deposit ?? 0) <= 0 && <span className="ml-1 rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-bold text-[#c4b5fd]">💎 ไม่ต้องโอน · กดยืนยันได้เลย</span>}
+                  </div>
                 </div>
-                <button onClick={() => router.push(`/admin/orders/${o.id}`)} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">ตรวจสลิป</button>
+                <button onClick={() => router.push(`/admin/orders/${o.id}`)} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white">{(o.total_deposit ?? 0) <= 0 ? 'ยืนยัน' : 'ตรวจสลิป'}</button>
               </div>
             ))}
           </div>

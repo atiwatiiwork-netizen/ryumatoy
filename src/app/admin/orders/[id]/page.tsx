@@ -124,6 +124,14 @@ export default function SlipApprovalPage() {
             <a href={order.slip_url} target="_blank" rel="noreferrer">
               <img src={order.slip_url} alt="สลิปโอนเงิน" className="max-h-[460px] rounded-xl object-contain" />
             </a>
+          ) : (order.total_deposit ?? 0) <= 0 ? (
+            // ออเดอร์ 0 บาท (Diamond / คูปองคลุมเต็ม) ไม่มีสลิปโดยธรรมชาติ — บอกชัดว่ากดอนุมัติได้เลย
+            // (เคสจริง 2026-09-03: ลูกค้า Diamond สั่ง → ระบบไม่ให้ลูกค้า approve เอง → ค้างคิวจนแอดมินกด)
+            <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.06] px-4 text-center text-[#c4b5fd]">
+              <Icon name="verified" size={30} />
+              <div className="mt-2 text-sm font-bold">💎 ไม่ต้องโอน</div>
+              <div className="mt-1 text-[12px] text-ink-muted2">{order.coupon_grant_id ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · มัดจำ 0 บาท'}<br />ไม่มีสลิปเป็นเรื่องปกติ — กด "อนุมัติ" เพื่อออกตั๋วได้เลย</div>
+            </div>
           ) : (
             <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-subtle text-ink-faint">
               <Icon name="camera" size={28} />

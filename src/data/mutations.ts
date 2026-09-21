@@ -202,9 +202,14 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     //   → mutation คิดส่วนลดใหม่ได้ 0 → ยอดกลับเป็น 500 แต่ยัง approve ให้ = ออกตั๋วฟรี ไม่ได้เก็บเงิน
     //   และออเดอร์ที่ไม่มีรายการเลย (ของถูกลบหมด) ก็เข้าเงื่อนไข 0 บาทเหมือนกัน (audit ลูกค้า #2/#3)
     if (items.length === 0) return db;
-    return autoApprove && order.total_deposit <= 0
-      ? approveOrder(orderId, { mintRewards: false, startNos })(withOrder)
-      : withOrder;
+    // ⛔ เลิก auto-approve ในเซสชันลูกค้า (เคสจริง Chayapon/Diamond 2026-09-03 หลังรัน v63):
+    //   ด่าน DB ryuma_guard_orders บังคับออเดอร์ที่ลูกค้า insert ให้เป็น pending_approval เสมอ และ
+    //   ryuma_guard_tickets ออกตั๋วให้เฉพาะออเดอร์ที่ approved แล้ว → ตั๋วที่มินต์ตรงนี้ถูก DB ปฏิเสธทุกใบ
+    //   ออเดอร์ไปค้างคิวแบบไม่มีสลิป + เครื่องลูกค้า retry เซฟไม่จบ. ทางเดียวที่ผ่านด่านคือแอดมินกดอนุมัติ
+    //   (เซสชันแอดมินมินต์ตั๋วเอง) — ออเดอร์ 0 บาทจึงเข้าคิวเหมือนใบอื่น แค่ติดป้าย "ไม่ต้องโอน" (total_deposit=0)
+    //   ถ้าจะให้ "ได้ตั๋วทันที" จริง ต้องทำเป็น RPC SECURITY DEFINER ฝั่ง server ไม่ใช่เขียนตารางจาก client
+    void autoApprove; void startNos; // คงพารามิเตอร์ไว้ให้ signature เดิมเรียกได้ (ไม่มีผลแล้ว)
+    return withOrder;
   };
 }
 
