@@ -99,14 +99,23 @@ export function grantedTicketIds(db: Database): Set<string> {
   //   ที่เจอ → ป้าย ให้ตั๋ว/ซื้อ สลับใบกันได้ (ยอดเงินต่อคนไม่ผิด แต่ประวัติชี้ผิดใบ)
   //   ตอนนี้เลือกใบที่ "มัดจำตรงกับออเดอร์" ก่อน แล้วค่อยใบที่เวลาใกล้ตอนอนุมัติสุด
   const covered = new Set<string>();
+  // จัดกลุ่มตั๋วตาม (เจ้าของ|สินค้า|รอบ|ตัวเลือก) ครั้งเดียว — เดิม filter ตั๋วทั้งร้านต่อ "ทุกรายการในออเดอร์" (~90 ms ที่ 2.5k ตั๋ว)
+  // ลำดับในกลุ่ม = ลำดับเดิมใน db.tickets → sort (stable) ได้ผลเหมือนเดิมทุกกรณี · null/undefined ใช้เครื่องหมายแยกจาก ''
+  const NUL = ' ';
+  const gkey = (owner: string, product: string, batch: string | null | undefined, variant: string | null | undefined) =>
+    `${owner}|${product}|${batch ?? NUL}|${variant ?? NUL}`;
+  const groups = new Map<string, PreorderTicket[]>();
+  for (const x of db.tickets) {
+    const k = gkey(x.owner_id, x.product_id, x.batch_id, x.variant_id);
+    const g = groups.get(k);
+    if (g) g.push(x); else groups.set(k, [x]);
+  }
   for (const o of db.orders) {
     if (o.status !== 'approved') continue;
     const oTime = new Date(o.approved_at ?? o.created_at).getTime();
     for (const it of o.items) {
       if (!(it.qty > 0)) continue; // รายการที่ถูกยกเลิก (แอดมินลบตั๋วของมัน) ไม่ "คุ้ม" ตั๋วใบไหนอีก
-      const cands = db.tickets.filter((x) => !covered.has(x.id) && x.owner_id === o.user_id
-        && x.product_id === it.product_id && (x.batch_id ?? null) === (it.batch_id ?? null)
-        && (x.variant_id ?? null) === (it.variant_id ?? null));
+      const cands = (groups.get(gkey(o.user_id, it.product_id, it.batch_id, it.variant_id)) ?? []).filter((x) => !covered.has(x.id));
       if (cands.length === 0) continue;
       const score = (x: PreorderTicket) =>
         ((x.deposit_paid ?? 0) === (it.unit_deposit ?? 0) * x.qty ? 0 : 1e12)

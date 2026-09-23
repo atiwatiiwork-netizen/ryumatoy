@@ -79,3 +79,6 @@ export function walletTabOf(db: Database, t: PreorderTicket): WalletTab {
   if (live && !(ticketPaidFull(t) && ticketIsFullPay(db, t))) return 'preorder';
   return 'done';
 }
+
+/** id แถว "รับเงินส่วนต่างนอกระบบ" ของ completeTicketOffline (ตัดจบข้างนอก) — ผูกตั๋ว = กดซ้ำได้แถวเดิม */
+export const offlineRpIdFor = (ticketId: string) => `rp-off-${ticketId}`;

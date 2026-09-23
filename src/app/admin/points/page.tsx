@@ -8,8 +8,9 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
-import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, simulateAfterLaunch, preparePointsLaunch, enablePointsLaunch } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows, SPECIAL_ROUND_POINTS_DEFAULT } from '@/domain/services/points';
+import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, simulateAfterLaunch, preparePointsLaunch, enablePointsLaunch, setBatchPoints } from '@/data/mutations';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows, SPECIAL_ROUND_POINTS_DEFAULT, SPECIAL_ROUND_POINT_CHOICES } from '@/domain/services/points';
+import { launchBreakdown } from '@/domain/services/pointsReport';
 import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
 import { PointsLaunchNotice } from '@/components/PointsLaunchNotice';
@@ -420,6 +421,20 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
   );
 }
 
+/** ปุ่ม +20 / +40 ของรอบพิเศษในการ์ดเปิดตัว — ตัวเดียวกับที่ตั้งในหน้าสต๊อกใบพรี (app_config points_batch:<id>) */
+function RoundPtsToggle({ batchId, value }: { batchId: string; value: number }) {
+  const dispatch = useDispatch();
+  const { flash } = useToast();
+  return (
+    <div className="inline-flex overflow-hidden rounded-md border border-[#d4af37]/50">
+      {SPECIAL_ROUND_POINT_CHOICES.map((v) => (
+        <button key={v} type="button" onClick={() => { if (v !== value) { dispatch(setBatchPoints(batchId, v)); flash(`รอบนี้ = +${v}/ใบ`); } }}
+          className={cx('px-2 py-0.5 text-[11.5px] font-extrabold', value === v ? 'bg-[#d4af37] text-black' : 'bg-surface-3 text-[#f1d27a]')}>+{v}</button>
+      ))}
+    </div>
+  );
+}
+
 // ── เปิดตัว (เจ้าของ 2026-09-12 ค่ำ): โชว์แต้มจากใบพรีที่ปิดแล้ว (รอบปกติ+รอบพิเศษ) · ยังไม่เปิดใช้แต้ม ──
 function LaunchCard() {
   const db = useDatabase();
@@ -443,8 +458,9 @@ function LaunchCard() {
     // เคยหักมือ (admin_adjust ติดลบ) ช่วงพรีวิว + จะโดนดึงคืนตอนเปิดตัวอีก = อาจหักซ้ำ → ให้แอดมินตรวจก่อนกด (audit ความถูกต้อง 2026-09-23)
     const fixUsers = new Set(fix.filter((r) => r.delta < 0).map((r) => r.user_id));
     const doubleRisk = [...new Set(d.pointLedger.filter((e) => e.kind === 'admin_adjust' && e.delta < 0 && fixUsers.has(e.user_id)).map((e) => e.user_id))];
-    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size, fixRows: fix.length, fixPts: fix.reduce((a, r) => a - r.delta, 0), doubleRisk };
+    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size, fixRows: fix.length, fixNet: fix.reduce((a, r) => a + r.delta, 0), doubleRisk, breakdown: launchBreakdown(d) };
   }, [db]);
+  const bd = preview.breakdown;
   const run = async () => {
     if (busy) return;
     if (!confirm(`เปิดระบบคะแนนให้ลูกค้า (นับเฉพาะใบพรี)?\n\n1) อัตราพร้อมส่ง → 0 (ยังไม่ให้คะแนนของพร้อมส่ง)\n2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้ว ${preview.tickets} ใบ รวม ${num(preview.points)} คะแนน ให้ ${preview.customers} คน\n3) เปิดสวิตช์ระบบ → ลูกค้าเห็นแต้มทันที\n\n"ใช้แต้มตัดยอด" ยังปิดอยู่ — ค่อยเปิดทีหลังที่ปุ่มด้านล่าง`)) return;
@@ -485,8 +501,53 @@ function LaunchCard() {
         <span>ใบพรีที่จะได้ย้อนหลัง <b className="text-ink">{preview.tickets}</b> ใบ</span>
         <span>รวม <b className="text-[#fbbf24]">{num(preview.points)}</b> คะแนน</span>
         <span>ลูกค้า <b className="text-ink">{preview.customers}</b> คน</span>
-        {preview.fixRows > 0 && <span className="text-[#fbbf24]">ปรับ/ดึงคืนแต้มที่ให้ผิดกติกา <b>{preview.fixRows}</b> แถว (สุทธิ −{num(preview.fixPts)})</span>}
+        {preview.fixRows > 0 && <span className="text-[#fbbf24]">ปรับ/ดึงคืนแต้มที่ให้ไว้ก่อนตามกติกาใหม่ <b>{preview.fixRows}</b> แถว (สุทธิ {preview.fixNet >= 0 ? '+' : '−'}{num(Math.abs(preview.fixNet))})</span>}
       </div>
+      {/* ตรวจก่อนกด (เจ้าของ 2026-09-23: "เชคคะแนนที่ลูกค้าจะได้ ว่ามีอะไรแปลกๆ ไหม รวมถึงเคสมอบใบพรีให้ ตัดจบข้างนอก") */}
+      <details open className="mb-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[12px] text-ink-muted2">
+        <summary className="cursor-pointer text-[12.5px] font-bold text-ink">🔍 ตรวจก่อนกด — แต้มย้อนหลังแยกตามที่มา</summary>
+        <div className="mt-2 flex flex-col gap-1">
+          {bd.cats.map((c) => (
+            <div key={c.key} className="flex items-center gap-2">
+              <span className="flex-1">{c.label} <span className="text-[11px] text-ink-faint">· {c.hint}</span></span>
+              <span className="w-24 text-right">{num(c.tickets)} ใบ{c.pieces !== c.tickets && <span className="block text-[10.5px] text-ink-faint">{num(c.pieces)} ชิ้น</span>}</span>
+              <b className="w-20 text-right text-[#fbbf24]">+{num(c.points)}</b>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex flex-col gap-0.5 text-[11.5px]">
+          <div>🤝 ในจำนวนนี้ปิดด้วย "ตัดจบข้างนอก" <b className="text-ink">{num(bd.offlineClosed.tickets)}</b> ใบ (+{num(bd.offlineClosed.points)}) — นับเหมือนปิดใบปกติ (เงินส่วนต่างถูกบันทึกว่ารับแล้ว){bd.samples.offline.length > 0 && <span className="block pl-4 text-[10.5px] text-ink-faint">เช่น {bd.samples.offline.join(' / ')}</span>}</div>
+          <div>💵 ตั๋วมอบที่ "จ่ายครบตั้งแต่ตอนมอบ" <b className="text-ink">{num(bd.grantedPrepaid.tickets)}</b> ใบ (+{num(bd.grantedPrepaid.points)}) — ถ้ามีใบไหนเป็นของแถม/ชดเชยที่ไม่ได้จ่ายจริง ให้หักแต้มคืนที่ &quot;🛠️ เติม / หักคะแนนมือ&quot; หลังเปิด{bd.samples.prepaid.length > 0 && <span className="block pl-4 text-[10.5px] text-ink-faint">เช่น {bd.samples.prepaid.join(' / ')}</span>}</div>
+          {bd.multiPiece.tickets > 0 && <div>📦 ตั๋วที่มีหลายชิ้นในใบเดียว <b className="text-ink">{num(bd.multiPiece.tickets)}</b> ใบ ({num(bd.multiPiece.pieces)} ชิ้น) — คิดแต้ม "ต่อชิ้น" ตามกติกาเดิม (ใบละ 2 ชิ้น = 2 เท่า) · ได้เพิ่มจากคิดใบละครั้ง +{num(bd.multiPiece.extra)}{bd.samples.multi.length > 0 && <span className="block pl-4 text-[10.5px] text-ink-faint">เช่น {bd.samples.multi.join(' / ')}</span>}</div>}
+          {bd.alreadyEarned > 0 && <div>✔ ได้แต้มไปแล้วก่อนหน้า {num(bd.alreadyEarned)} ใบ — ไม่ให้ซ้ำ</div>}
+        </div>
+        {bd.rounds.length > 0 && (
+          <div className="mt-2.5">
+            <div className="mb-1 text-[11.5px] font-bold text-ink">รอบพิเศษที่มีแต้มย้อนหลัง — ปรับ +20 / +40 ได้ตรงนี้ก่อนกด (รอบไล่เก็บใบพรีเก่า อาจอยากให้ +20 เท่ารอบปกติ)</div>
+            <div className="max-h-64 overflow-auto rounded-lg border border-white/10">
+              {bd.rounds.map((r) => (
+                <div key={r.batchId} className="flex flex-wrap items-center gap-2 border-b border-white/5 px-2.5 py-1.5 last:border-0">
+                  <span className="min-w-0 flex-1 truncate"><b className="text-ink">{r.label}</b> · {r.product}{r.fullPay && <span className="ml-1 rounded bg-[#16a34a]/15 px-1 text-[10px] font-bold text-[#4ade80]">จ่ายเต็ม · ของในมือ</span>}</span>
+                  <span className="text-[11px] text-ink-faint">สั่ง {r.bought} · มอบ {r.granted}{r.explicit ? '' : ' · ค่าเริ่มต้น'}</span>
+                  <RoundPtsToggle batchId={r.batchId} value={r.perTicket} />
+                  <b className="w-16 text-right text-[#fbbf24]">+{num(r.points)}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {bd.skipped.length > 0 && (
+          <div className="mt-2.5 text-[11.5px]">
+            <div className="mb-0.5 font-bold text-ink">ปิดยอดแล้วแต่ไม่ได้แต้ม</div>
+            {bd.skipped.map((x) => (
+              <div key={x.key}>· {x.label} — {num(x.tickets)} ใบ
+                {x.key === 'instock' && bd.samples.instock.length > 0 && <span className="block pl-3 text-[10.5px] text-ink-faint">เช่น {bd.samples.instock.join(' / ')}</span>}
+                {x.key === 'granted-full' && bd.samples.grantedFull.length > 0 && <span className="block pl-3 text-[10.5px] text-ink-faint">เช่น {bd.samples.grantedFull.join(' / ')} — ถ้าใบไหนเป็นใบพรีจริง (เก็บเงินครบทางแชท) เติมแต้ม +20 ที่ &quot;🛠️ เติม / หักคะแนนมือ&quot; หลังเปิดได้</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </details>
       {preview.doubleRisk.length > 0 && (
         <div className="mb-3 rounded-lg border border-[#f87171]/40 bg-[#b91c1c]/[0.10] px-3 py-2 text-[12px] text-[#fca5a5]">
           ⚠ ลูกค้า {preview.doubleRisk.length} คนเคยถูก "หักแต้มมือ" ไปแล้ว และจะถูกดึงคืนตอนเปิดตัวอีก — อาจหักซ้ำ ตรวจในสมุดคะแนนก่อนกด: {preview.doubleRisk.map((uid) => db.users.find((u) => u.id === uid)?.display_name ?? uid).join(', ')}

@@ -1200,6 +1200,7 @@ export const revokeGrant = (grantId: string) => (db: Database): Database => ({
 
 // ── Event ภารกิจ (mission quest — ryuma-event-spec) ─────────────────────────
 import { MISSION_KEY, missionConfig as readMissionConfig, missionSubmissionFor, type MissionConfig } from '../domain/services/missions';
+import { offlineRpIdFor } from '../domain/services/payments';
 
 /** Save the mission-event config (app_config key → jsonb; no schema change). Admin session. */
 export const setMissionConfig = (cfg: MissionConfig) => (db: Database): Database => ({
@@ -1800,7 +1801,7 @@ export const markShippedOffline = (ticketId: string) => (db: Database): Database
 };
 
 /** id แถวรับเงินนอกระบบ — ผูกกับตั๋ว = กดซ้ำ/เซฟล้มแล้วลองใหม่ ได้แถวเดิม ไม่บวกเงินซ้ำ */
-export const offlineRpId = (ticketId: string) => `rp-off-${ticketId}`;
+export const offlineRpId = offlineRpIdFor; // ตัวจริงอยู่ domain/services/payments (รายงานแต้มใช้ร่วม)
 
 /**
  * "จบงานตั๋วนี้เลย" — เคลียร์กันนอกระบบ (เจ้าของ 2026-09-21): ลูกค้ามารับเอง/โอนตรง/ตกลงกันทางแชท

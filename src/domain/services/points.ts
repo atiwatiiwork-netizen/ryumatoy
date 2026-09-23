@@ -85,7 +85,7 @@ export function batchPointsSet(db: Database, batchId: string): number | null {
 /** คะแนนต่อใบของรอบพิเศษนี้ */
 export const batchPoints = (db: Database, batchId: string) => batchPointsSet(db, batchId) ?? SPECIAL_ROUND_POINTS_DEFAULT;
 /** ตั๋วรอบพิเศษ (ไม่ใช่ตั๋วหาของ) — ใช้ตัดสินป้าย/เพดานการใช้แต้ม */
-export const isSpecialRoundTicket = (db: Database, t: PreorderTicket) => !!t.batch_id && !isSourcingTicket(db, t);
+export const isSpecialRoundTicket = (db: Database, t: PreorderTicket) => !!t.batch_id && !isSourcingTicket(db, t) && db.batches.find((b) => b.id === t.batch_id)?.label !== 'หาของ';
 
 /** คะแนน "เต็มใบ" ตามสูตร (ไม่ดูเกณฑ์/ปิดยอด) — ใช้โชว์ "จะได้เมื่อปิดยอด" */
 export const rawPointsForTicket = (db: Database, t: PreorderTicket) => ratePerPiece(db, t) * Math.max(1, t.qty ?? 1);
@@ -108,6 +108,8 @@ export function ticketEarnBlock(db: Database, t: PreorderTicket): string | null 
   // บัญชีทีมงาน/แอดมิน — ตั๋วทดสอบไม่ควรพองหนี้คะแนนร้าน
   if (isStaffAccount(db, t.owner_id)) return 'บัญชีแอดมิน/ทีมงาน';
   if (isSourcingTicket(db, t)) return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
+  // ตั๋วในรอบ "หาของ" แต่เรื่องหาของถูกลบไปแล้ว → isSourcingTicket จับไม่ได้ → เดิมจะกลายเป็นรอบพิเศษ +40 (audit 2026-09-23)
+  if (t.batch_id && db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ') return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
   // ออเดอร์ที่เป็นตัวจ่ายค่าประมูล (v61) — คะแนนประมูลค่อยว่ากันเฟสหน้า
   if (t.id.startsWith('t-')) {
     const orderId = orderItemById(db).get(t.id.slice(2))?.orderId;
