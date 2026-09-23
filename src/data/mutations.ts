@@ -26,7 +26,7 @@ import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orpha
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
-import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow, POINTS_LAUNCH_KEY, pointsLaunchInfo, launchCorrectionRows, heldPointsFor } from '../domain/services/points';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow, POINTS_LAUNCH_KEY, pointsLaunchInfo, launchCorrectionRows, heldPointsFor, redeemRules, redeemKindFor, batchPointsKey, SPECIAL_ROUND_POINT_CHOICES, orderPointsIssue } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 
@@ -163,7 +163,9 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
     // แต้ม (v67): ใช้ได้กับ "บรรทัดพร้อมส่ง" เท่านั้น ≤ 400/ออเดอร์ ≤ ยอด in-stock หลังคูปอง ≤ คงเหลือ — ไม่เข้าเกณฑ์ = ตัดลง/0
     // (ไม่ปัดตกออเดอร์ทั้งใบ) · ด่านจริงคือ trigger ryuma_points_hold_order ตอน insert (ล็อกต่อคน กัน 2 เครื่อง)
     const instockBase = items.reduce((s, i) => s + ((db.products.find((x) => x.id === i.product_id)?.is_stock ?? false) ? i.deposit_amount : 0), 0);
-    const usePoints = clampRedeem(db, userId, 'instock', Math.max(0, instockBase - discount), points ?? 0);
+    // เพดานต่อใบ (เจ้าของ 2026-09-23: ของพร้อมส่งสูงสุด 400/ใบ) → × จำนวนรายการพร้อมส่งในออเดอร์
+    const instockLines = items.filter((i) => db.products.find((x) => x.id === i.product_id)?.is_stock ?? false).length;
+    const usePoints = clampRedeem(db, userId, 'instock', Math.max(0, instockBase - discount), points ?? 0, instockLines);
     const now = new Date().toISOString();
     const order: Order = {
       id: orderId,
@@ -306,7 +308,7 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
     const order = db.orders.find((o) => o.id === orderId);
     if (!order || order.status !== 'pending_approval') return db;
     // อ้างใช้แต้มแต่ DB ไม่ได้จองจริง → ไม่อนุมัติ (ให้รีเฟรช หรือปฏิเสธ) — audit 2026-09-23
-    if ((order.points_redeemed ?? 0) > 0 && heldPointsFor(db, orderId, order.points_redeemed) === 0) return db;
+    if (orderPointsIssue(db, order)) return db; // แต้มไม่ถูกจอง / เกินเพดาน 400/ใบ / เกินยอดพร้อมส่ง → ไม่อนุมัติ
 
     const when = new Date();
     const now = when.toISOString();
@@ -343,14 +345,18 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
     // ซึ่ง DB ตรวจไม่ได้ตอน insert เพราะยังไม่มี order_items) ค่อยหักจากตั๋วพรี **ไม่คืนแต้ม** เพราะ total_deposit
     // ถูกลดไปแล้ว = ลูกค้าโอนเงินน้อยลงจริง คืนแต้มซ้ำจะได้ 2 ต่อ · เพดาน 400/ออเดอร์ที่ DB คุมจำกัดความเสียหาย
     if (order.points_redeemed) {
+      // เจ้าของ 2026-09-23: แต้มใช้กับ "ของพร้อมส่ง" เท่านั้น สูงสุด 400/ใบ — เดิมส่วนเกินไหลไปหักมัดจำใบพรี
+      // (DB มองไม่เห็นรายการตอนจอง → ออเดอร์ที่ยิงเองอ้างแต้มเกินได้) ตอนนี้: ลงไม่หมด = ไม่อนุมัติ ให้แอดมินปฏิเสธ (แต้มคืนเอง)
       let left = order.points_redeemed;
-      const byStockFirst = [...newTickets].sort((a, b) => Number(db.products.find((p) => p.id === b.product_id)?.is_stock ?? false) - Number(db.products.find((p) => p.id === a.product_id)?.is_stock ?? false));
-      for (const t of byStockFirst) {
+      const cap = redeemRules(db.settings, 'instock').cap;
+      for (const t of newTickets) {
         if (left <= 0) break;
-        const off = Math.min(left, t.deposit_paid);
+        if (!(db.products.find((p) => p.id === t.product_id)?.is_stock ?? false)) continue;
+        const off = Math.min(left, cap, t.deposit_paid);
         t.deposit_paid -= off;
         left -= off;
       }
+      if (left > 0) return db; // แต้มเกินสิทธิ์ของออเดอร์นี้ (เกินเพดาน/เกินยอดพร้อมส่ง) → ไม่อนุมัติ
     }
 
     const updated: Database = {
@@ -499,7 +505,7 @@ export const removeBatch = (batchId: string) => (db: Database): Database => {
   // NOTE (ค้าง): ของที่ถูกบวกเข้าคลังตอนสร้างรอบแบบ legacy (addSurplus) ยังไม่ถูกคืนออกตอนลบรอบ
   //   → เหลือ "ของผี" ใน surplus_qty. คืนแม่นยำไม่ได้จนกว่า stock_additions จะมีคอลัมน์ batch_id
   //   (การเดาจาก note ชนกันเองได้เมื่อสองรอบชื่อเหมือนกัน = ตัดคลังผิดตัว ซึ่งแย่กว่าปล่อยไว้)
-  return { ...db, batches: db.batches.filter((x) => x.id !== batchId) };
+  return { ...db, batches: db.batches.filter((x) => x.id !== batchId), appConfig: db.appConfig.filter((c) => c.key !== batchPointsKey(batchId)) };
 };
 
 // ── สต๊อกใบพรี / พรีรอบพิเศษ (special pre-order round) ─────────────────────────
@@ -507,7 +513,7 @@ export const removeBatch = (batchId: string) => (db: Database): Database => {
  *  round per SKU. `addSurplus` (legacy: physical stock we already hold) bumps surplus first; without it
  *  the round sells existing surplus (from a production close). Deposit = the SKU's deposit unless
  *  `fullPay` (จ่ายเต็ม/พร้อมส่ง → deposit = price). Existing buyers keep their snapshot (ryuma-preorder-stock-spec). */
-export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number; published?: boolean; startStatus?: 'production' | 'shipping' | 'arrived' }) => (db: Database): Database => {
+export const openSpecialRound = (productId: string, opts: { qty: number; price: number; fullPay: boolean; label?: string; addSurplus?: boolean; deposit?: number; published?: boolean; points?: number; startStatus?: 'production' | 'shipping' | 'arrived' }) => (db: Database): Database => {
   const p = db.products.find((x) => x.id === productId);
   if (!p) return db;
   if (p.is_stock) return db; // สินค้าพร้อมส่งขายผ่าน stock_qty — ห้ามเปิดรอบพรีทับ (concept 2026-07-23)
@@ -545,7 +551,16 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
     ...(opts.published === false ? { published: false } : {}),
     created_at: now,
   };
-  return { ...db, products, stockAdditions, batches: [batch, ...db.batches] };
+  // คะแนนต่อใบของรอบนี้ (+20/+40 — เลือกก่อนเปิดให้ลูกค้า) · ไม่ระบุ = ค่าเริ่มต้น 40
+  const withRound: Database = { ...db, products, stockAdditions, batches: [batch, ...db.batches] };
+  return opts.points != null ? setBatchPoints(batch.id, opts.points)(withRound) : withRound;
+};
+
+/** ตั้งคะแนนต่อใบของรอบพิเศษ (เจ้าของ 2026-09-23: +20 / +40) — app_config แถวละรอบ · ใบที่ปิดไปแล้วได้ตามค่าเดิม (snapshot ในสมุด) */
+export const setBatchPoints = (batchId: string, points: number) => (db: Database): Database => {
+  if (!(SPECIAL_ROUND_POINT_CHOICES as readonly number[]).includes(points)) return db;
+  const key = batchPointsKey(batchId);
+  return { ...db, appConfig: [{ key, value: { points } }, ...db.appConfig.filter((c) => c.key !== key)] };
 };
 
 /** เปิดขายรอบร่าง (publish) — ขึ้นหน้าร้านตั้งแต่ตอนนี้; ผู้เรียก (UI) เป็นคนยิง push เอง.
@@ -556,7 +571,7 @@ export const openSpecialRound = (productId: string, opts: { qty: number; price: 
  *  คนที่ซื้อจากหน้าร้านหลังเปิดขาย (แต่ละล็อตก็ snapshot ของตัวเอง ไม่ปนกันข้ามรอบ)
  *  จำนวน: ลดต่ำกว่าที่มอบ+จองค้างไปแล้วไม่ได้ (คลาดเคลื่อน = คืน db เดิม ให้ UI แจ้ง)
  *  ปรับจำนวนแล้วคลัง SKU (surplus) ขยับตาม + ลง stockAdditions ให้ตรวจย้อนหลังได้. */
-export const publishBatch = (batchId: string, patch?: { price?: number; deposit?: number; qty?: number }) => (db: Database): Database => {
+export const publishBatch = (batchId: string, patch?: { price?: number; deposit?: number; qty?: number; points?: number }) => (db: Database): Database => {
   const b = db.batches.find((x) => x.id === batchId);
   if (!b || b.status !== 'open' || b.published !== false) return db;
   const wasFullPay = b.deposit_amount >= b.price_total;
@@ -581,7 +596,7 @@ export const publishBatch = (batchId: string, patch?: { price?: number; deposit?
   const required = soldAll + (qty - soldThis); // ของที่คลังต้องมีรองรับ: ขายไปแล้วทุกรอบ + ที่รอบนี้ยังขายได้
   const grow = Math.max(0, required - (p?.surplus_qty ?? 0));
   const now = new Date().toISOString();
-  return {
+  const published: Database = {
     ...db,
     batches: db.batches.map((x) => (x.id === batchId
       ? { ...x, published: true, price_total: price, deposit_amount: deposit, stock_qty: qty }
@@ -593,6 +608,8 @@ export const publishBatch = (batchId: string, patch?: { price?: number; deposit?
       ? [{ id: id('sa'), product_id: b.product_id, qty: grow, note: `เพิ่มของตอนเปิดขาย "${b.label}" +${grow}`, created_at: now }, ...db.stockAdditions]
       : db.stockAdditions,
   };
+  // คะแนนต่อใบของรอบ (+20/+40) เลือกตอนเปิดขาย (เจ้าของ 2026-09-23)
+  return patch?.points != null ? setBatchPoints(batchId, patch.points)(published) : published;
 };
 
 /**
@@ -711,6 +728,7 @@ export const createLegacyStockProduct = (data: {
   deposit?: number; // custom มัดจำ (e.g. finished-goods rate 1000฿); falls back to the WCF/Mega rate
   startStatus?: 'production' | 'shipping'; // pre-order rounds: 'production' waits for the warehouse gate
   published?: boolean; // false = ร่าง (ไล่เก็บใบพรีเก่า: มอบตั๋วก่อน ค่อยกดเปิดขาย)
+  points?: number; // คะแนนต่อใบของรอบ (+20/+40) · ไม่ระบุ = 40
 }) => (db: Database): Database => {
   const pid = id('p');
   const now = new Date().toISOString();
@@ -733,7 +751,7 @@ export const createLegacyStockProduct = (data: {
     surplus_qty: 0, stock_origin: 'manual', created_at: now,
   };
   const withProduct = { ...db, products: [product, ...db.products] };
-  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit, published: data.published })(withProduct);
+  return openSpecialRound(pid, { qty: data.qty, price: data.price, fullPay: data.fullPay, label: data.label, addSurplus: true, deposit, published: data.published, points: data.points })(withProduct);
 };
 
 /** สร้าง SKU ใหม่ + เปิดรอบพิเศษ **หลายรายการในครั้งเดียว** (เจ้าของ 2026-07-26).
@@ -965,7 +983,7 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
   // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติถ้าใบนี้อยู่ใน N ใบแรกของเดือนที่ปิดแล้ว — หักตอนอนุมัติ (approveRemainingPayment คำนวณซ้ำเอง)
   const bonus = pendingBonusDiscount(db, ticket);
   // แต้ม (v67): ≤ 200/ใบ ≤ ยอดค้างหลังคูปอง+โบนัส ≤ คงเหลือ ≥ ขั้นต่ำ — ไม่เข้าเกณฑ์ = ตัดลง/0 · ด่านจริง = trigger ryuma_points_hold_rp
-  const usePoints = clampRedeem(db, userId, 'pre', Math.max(0, due - discount - bonus), opts.points ?? 0);
+  const usePoints = clampRedeem(db, userId, redeemKindFor(db, ticket), Math.max(0, due - discount - bonus), opts.points ?? 0);
   const net = Math.max(0, due - discount - bonus - usePoints);
   const payAmount = Math.max(0, Math.min(net, amount || net));
   const rpId = id('rp');

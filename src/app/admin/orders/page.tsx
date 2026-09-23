@@ -18,7 +18,7 @@ import { cx } from '@/components/ui';
 import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { pendingRpGroups, type RpGroup } from '@/domain/services/payments';
-import { heldPointsFor } from '@/domain/services/points';
+import { heldPointsFor, orderPointsIssue } from '@/domain/services/points';
 import type { PreorderTicket, RemainingPayment } from '@/domain/entities';
 
 /** ศูนย์การเงินออเดอร์: สลิปมัดจำ + ส่วนต่าง + รอถึงไทย. งานจัดส่งทั้งหมดย้ายไปแท็บ "จัดส่ง"
@@ -127,7 +127,7 @@ export default function OrdersHubPage() {
                 <div className="grid h-[52px] w-[42px] place-items-center rounded-lg bg-stripe"><Icon name="copy" size={17} className="text-ink-faint" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{userName(o.user_id)}</div>
-                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}{(o.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> · ⭐ ใช้แต้ม −{baht(o.points_redeemed ?? 0)}{heldPointsFor(db, o.id, o.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ แต้มยังไม่ถูกจอง — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>}</span> : null}
+                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}{(o.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> · ⭐ ใช้แต้ม −{baht(o.points_redeemed ?? 0)}{orderPointsIssue(db, o) && <span className="text-[#f87171]"> ⚠ {orderPointsIssue(db, o)} — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>}</span> : null}
                     {/* ออเดอร์ 0 บาท (Diamond/คูปองคลุมเต็ม) ไม่มีสลิปโดยธรรมชาติ — ป้ายกันเข้าใจผิดว่าเป็นขยะแล้วกดปฏิเสธ (เคสจริง 2026-09-03) */}
                     {(o.total_deposit ?? 0) <= 0 && <span className="ml-1 rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-bold text-[#c4b5fd]">💎 ไม่ต้องโอน · กดยืนยันได้เลย</span>}
                   </div>

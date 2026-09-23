@@ -13,9 +13,10 @@ import { cx } from '@/components/ui';
 import { TicketPeek } from '@/components/TicketPeek';
 import { franchiseOf, manufacturerOf, seriesForFranchise, stockRemaining, batchRemaining, batchSoldQty, batchBuyers, hasOpenBatch, productLabel, inOpenBoard, groupByMakerSeries } from '@/domain/services/catalog';
 import { StatusRow } from '../products/StatusRow';
-import { openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, grantFromSurplus, setSpecialGate, logActivity } from '@/data/mutations';
+import { setBatchPoints, openSpecialRound, departSpecialRound, revertRoundStatus, createLegacyStockProduct, editBatch, removeBatch, closeBatch, uncloseBatch, restockSpecialRound, setProductSf, setSourcingSf, confirmWarehouse, setProductStatus, arriveSpecialRound, publishBatch, grantSpecialTicket, grantSpecialTickets, grantFromSurplus, setSpecialGate, logActivity } from '@/data/mutations';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { BulkNewSku } from './BulkNewSku';
+import { batchPoints, batchPointsSet, SPECIAL_ROUND_POINTS_DEFAULT, SPECIAL_ROUND_POINT_CHOICES } from '@/domain/services/points';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { ticketPrefixCounts, specialGateEnabled } from '@/domain/services/tickets';
 import { ticketSourceOf, ticketOrigin } from '@/domain/services/ticketSource';
@@ -88,6 +89,20 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 }
 function SubBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button onClick={onClick} className={cx('rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold', active ? 'border-accent bg-surface-3 text-ink' : 'border-subtle bg-surface-2 text-ink-faint')}>{children}</button>;
+}
+/** คะแนนต่อใบของรอบพิเศษ +20 / +40 (เจ้าของ 2026-09-23: "ก่อนจะเปิดรอบพิเศษให้ลูกค้า ให้เพิ่ม Element แต้มคะแนนให้เลือก")
+ *  ลูกค้าได้เท่านี้ต่อใบตอนปิดใบ (จ่ายครบ) · ค่าเริ่มต้น 40 · ใบที่ปิดไปแล้วได้ตามค่าเดิม */
+function RoundPointsPick({ value, onChange, label = true }: { value: number; onChange: (v: number) => void; label?: boolean }) {
+  return (
+    <div className="inline-flex items-center gap-1.5" title="ลูกค้าได้คะแนนเท่านี้ต่อใบ เมื่อปิดใบ (จ่ายครบ)">
+      {label && <span className="text-[11.5px] font-bold text-[#f1d27a]">⭐ คะแนน/ใบ</span>}
+      <div className="inline-flex overflow-hidden rounded-lg border border-[#d4af37]/50">
+        {SPECIAL_ROUND_POINT_CHOICES.map((v) => (
+          <button key={v} type="button" onClick={() => onChange(v)} className={cx('px-2.5 py-1.5 text-[12px] font-extrabold', value === v ? 'bg-[#d4af37] text-black' : 'bg-surface-3 text-[#f1d27a]')}>+{v}</button>
+        ))}
+      </div>
+    </div>
+  );
 }
 function ModeToggle({ fullPay, onToggle, deposit }: { fullPay: boolean; onToggle: () => void; deposit: number }) {
   return <button onClick={onToggle} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', fullPay ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}>{fullPay ? 'พร้อมส่ง · จ่ายเต็ม' : `เก็บมัดจำ ${baht(deposit)}`}</button>;
@@ -258,6 +273,7 @@ function LegacyCreate() {
   // DEFAULT = ร่าง (เจ้าของ 2026-07-20: "กดสร้างแล้วยังไม่เปิดขาย — แอดมินมากดเองถึงจะเปิดขาย + push")
   // สลับเป็น 🚀 ได้ถ้าอยากเปิดขาย+แจ้งลูกค้าทันทีตอนสร้าง
   const [publish, setPublish] = useState(false);
+  const [pts, setPts] = useState<number>(SPECIAL_ROUND_POINTS_DEFAULT); // คะแนน/ใบของรอบนี้ (+20/+40)
   const [images, setImages] = useState<string[]>([]);
   const [imgBusy, setImgBusy] = useState(false);
 
@@ -289,7 +305,7 @@ function LegacyCreate() {
     if (q <= 0 || pr <= 0) return flash('กรอกจำนวน + ราคา');
     // startStatus เข้า mutation ตรงๆ — เซ็ตเฉพาะตัวสินค้า ไม่ cascade ตั๋วรอบเก่า (concept 2026-07-23:
     // รอบพิเศษเลือกจุดเริ่ม ผลิต/เดินทาง ได้แม้ SKU มีผู้พรีเดิม; full-pay = ของในมือ → arrived)
-    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined, published: publish, startStatus: fullPay ? 'arrived' : startStatus }));
+    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: true, deposit: depNum > 0 ? depNum : undefined, published: publish, points: pts, startStatus: fullPay ? 'arrived' : startStatus }));
     if (publish) pushNewRound(p, p.series_name, `/shop/${p.id}`, pr, fullPay ? pr : (depNum > 0 ? depNum : p.deposit_amount), fullPay);
     flash(`เปิดรอบพิเศษ ${p.series_name} · ${q} ตัว @ ${baht(pr)}${publish ? ' · แจ้งลูกค้าแล้ว' : ' · ร่างไว้ (ยังไม่ขึ้นหน้าร้าน)'}`);
     setQty(''); setPrice(''); setLabel(''); setDep('');
@@ -301,7 +317,7 @@ function LegacyCreate() {
     if (!fullPay && depNum > 0 && depNum >= pr) return flash('มัดจำต้องน้อยกว่าราคาขาย (หรือสลับเป็นจ่ายเต็ม)');
     const sname = seriesOpts.find((s) => s.id === sid)?.name;
     const finalName = sname ? `${cname.trim()} - ${sname}` : cname.trim();
-    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus, published: publish }));
+    dispatch(createLegacyStockProduct({ franchise_id: fr, manufacturer_id: mk, series_id: sid || undefined, character_name: cname.trim(), series_name: finalName, height_cm: height ? Number(height) : undefined, wcf_type: wcf, images, qty: q, price: pr, fullPay, label: label.trim() || undefined, deposit: depNum > 0 ? depNum : undefined, startStatus, published: publish, points: pts }));
     // อ่าน id สินค้าที่เพิ่งสร้าง (no-op dispatch) เพื่อลิงก์ push ให้ตรงตัว
     let newPid = '';
     dispatch((d) => { newPid = d.products.find((x) => x.manufacturer_id === mk && x.franchise_id === fr && x.series_name === finalName)?.id ?? ''; return d; });
@@ -381,6 +397,7 @@ function LegacyCreate() {
           </div>
         )}
         <span className="text-[11.5px] text-ink-faint">{fullPay ? 'ลูกค้าจ่ายเต็มตอนสั่ง (ของอยู่ในมือ)' : startStatus === 'production' ? 'ของยังผลิต → ยืนยันโกดังก่อนเปลี่ยนเป็นเดินทาง' : 'ของออกจากจีนแล้ว'}</span>
+        <RoundPointsPick value={pts} onChange={setPts} />
         {/* ร่าง: ยังไม่ขึ้นหน้าร้าน — ไว้ไล่เก็บใบพรีเก่า (มอบตั๋วลูกค้าเดิมก่อน ค่อยกด 🚀 เปิดขาย) */}
         <button onClick={() => setPublish((v) => !v)} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', publish ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.14] text-[#4ade80]' : 'border-[#d97706]/50 bg-[#d97706]/[0.14] text-[#fbbf24]')}>
           {publish ? '🚀 เปิดขายทันที + แจ้งลูกค้า' : '📝 ร่างไว้ก่อน (ยังไม่ขึ้นหน้าร้าน)'}
@@ -458,11 +475,12 @@ function SurplusRow({ product: p }: { product: Product }) {
   const [fullPay, setFullPay] = useState(false);
   const [label, setLabel] = useState('รอบพิเศษ');
   const [grant, setGrant] = useState(false);
+  const [pts, setPts] = useState<number>(SPECIAL_ROUND_POINTS_DEFAULT); // คะแนน/ใบของรอบนี้ (+20/+40)
   const setQtyClamped = (v: string) => setQty(v === '' ? '' : String(Math.max(0, Math.min(Number(v) || 0, remaining))));
   const open = () => {
     const q = Math.min(Number(qty) || 0, remaining), pr = Number(price) || p.price_total;
     if (q <= 0) return flash('จำนวนต้อง > 0 และไม่เกินส่วนเกิน');
-    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: false }));
+    dispatch(openSpecialRound(p.id, { qty: q, price: pr, fullPay, label: label.trim() || undefined, addSurplus: false, points: pts }));
     // DNA: push ไม่บอกจำนวน/สต๊อก (key 'restock')
     if (pushEnabled(db, 'restock'))
       sendPush(subsForNewProduct(db, p), { title: '🔥 เปิดพรีรอบพิเศษ!', body: `${p.series_name} · ${baht(pr)}${fullPay ? ' · พร้อมส่ง' : ` · มัดจำ ${baht(p.deposit_amount)}`}`, url: `/shop/${p.id}` }, dispatch).catch(() => {});
@@ -485,6 +503,7 @@ function SurplusRow({ product: p }: { product: Product }) {
         <input className="w-24 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-sm outline-none" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ''))} placeholder="ราคา" />
         <input className="w-16 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-sm outline-none" inputMode="numeric" value={qty} onChange={(e) => setQtyClamped(e.target.value)} />
         <ModeToggle fullPay={fullPay} onToggle={() => setFullPay((v) => !v)} deposit={p.deposit_amount} />
+        <RoundPointsPick value={pts} onChange={setPts} label={false} />
         {/* มอบตั๋วได้เลยโดยไม่ต้องประกาศขายก่อน (เจ้าของ 2026-08-08) — ระบบเปิด "รอบร่าง" ให้เอง */}
         <button onClick={() => setGrant((v) => !v)} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', grant ? 'border-[#8b5cf6] bg-[#8b5cf6] text-white' : 'border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] text-[#c4b5fd]')}>🎁 มอบตั๋ว</button>
         <button onClick={open} className="rounded-lg bg-cta px-3.5 py-2 text-[12.5px] font-bold text-white">เปิดรอบ</button>
@@ -1254,6 +1273,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
   // ช่องจำนวน = "เปิดขายหน้าร้านกี่ชิ้น" ไม่รวมที่มอบไปแล้ว (บั๊ก Orochimaru 2026-07-30:
   // เดิมช่องนี้คือ "ทั้งรอบ" — แอดมินใส่ 5 ตั้งใจขาย 5 แต่ 5 ที่มอบแล้วกินโควตาหมด → ขึ้นสินค้าหมดทันที)
   const [pubQty, setPubQty] = useState(String(Math.max(0, b.stock_qty - sold)));
+  const [pubPts, setPubPts] = useState<number>(batchPoints(db, b.id)); // คะแนน/ใบของรอบ — เลือกก่อนเปิดขาย
   const doPublish = () => {
     const pr = Number(pubPrice) || 0;
     const dp = Number(pubDep) || 0;
@@ -1264,7 +1284,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
     const q = sold + sell; // ทั้งรอบ = มอบแล้ว + เปิดขาย
     const effDep = fullPay ? pr : (dp > 0 ? dp : Math.min(b.deposit_amount, pr));
     if (!confirm(`เปิดขาย "${p?.series_name}" · ${baht(pr)}${fullPay ? ' (จ่ายเต็ม)' : ` · มัดจำ ${baht(effDep)}`}\nเปิดให้กดหน้าร้าน ${sell} ชิ้น${sold > 0 ? ` (รวมทั้งรอบ ${q}: มอบแล้ว ${sold} + ขาย ${sell})` : ''}\nขึ้นหน้าร้าน + แจ้งลูกค้าทันที${tickets.length > 0 ? `\nตั๋วที่มอบแล้ว ${tickets.length} ใบ ราคาเดิมไม่เปลี่ยน (snapshot)` : ''}`)) return;
-    dispatch(publishBatch(b.id, { price: pr, deposit: fullPay ? undefined : (dp > 0 ? dp : undefined), qty: q }));
+    dispatch(publishBatch(b.id, { price: pr, deposit: fullPay ? undefined : (dp > 0 ? dp : undefined), qty: q, points: pubPts }));
     // อ่านกลับ — จำนวนต่ำกว่าที่มอบ+จองค้าง (hold ที่มองไม่เห็นบนหน้า) จะถูก mutation ปัดตก
     let live: ProductBatch | undefined;
     dispatch((d) => { live = d.batches.find((x) => x.id === b.id); return d; });
@@ -1402,6 +1422,12 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
             </>)}
             {/* สถานะเก็บเงินของลอต (เจ้าของ 2026-09-05): ชำระแล้ว x/y · ค้างจ่าย · รอใส่เลขพัสดุ */}
             <PayChips tickets={tickets} />
+            {/* คะแนน/ใบของรอบนี้ (เจ้าของ 2026-09-23) — กดสลับได้ · ใบที่ปิดไปแล้วได้ตามค่าเดิม */}
+            {b.label !== 'หาของ' && (readOnly
+              ? <span className="rounded-md bg-[#d4af37]/15 px-1.5 py-0.5 text-[#f1d27a]">⭐ +{batchPoints(db, b.id)}/ใบ</span>
+              : <button type="button" onClick={() => { const next = batchPoints(db, b.id) === 40 ? 20 : 40; if (confirm(`เปลี่ยนคะแนนรอบ "${b.label}" เป็น +${next}/ใบ?
+ใบที่ปิดไปแล้วได้ตามค่าเดิม · ใบที่ยังไม่ปิดจะได้ค่าใหม่`)) { dispatch(setBatchPoints(b.id, next)); flash(`คะแนนรอบนี้ = +${next}/ใบ`); } }}
+                  className="rounded-md bg-[#d4af37]/15 px-1.5 py-0.5 text-[#f1d27a] hover:bg-[#d4af37]/25">⭐ +{batchPoints(db, b.id)}/ใบ{batchPointsSet(db, b.id) == null ? ' (ค่าเริ่มต้น)' : ''}</button>)}
           </div>
         </div>
       </div>
@@ -1485,6 +1511,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
             <label className="text-[11px] text-ink-faint">เปิดขายหน้าร้าน (ชิ้น)
               <input value={pubQty} onChange={(e) => setPubQty(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" className="mt-0.5 block w-20 rounded-lg border border-subtle bg-surface-3 px-2 py-1.5 text-center text-[13px] text-ink outline-none focus:border-accent" />
             </label>
+            <RoundPointsPick value={pubPts} onChange={setPubPts} />
             <button onClick={doPublish} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white">ยืนยันเปิดขาย + แจ้งลูกค้า</button>
           </div>
           {/* สรุปเลขให้เห็นก่อนกด — กันตีความช่องจำนวนผิด (เคส Orochimaru: ใส่ 5 = ขาย 5 ไม่ใช่ทั้งรอบ 5) */}

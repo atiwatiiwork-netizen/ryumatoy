@@ -73,7 +73,9 @@ export default function CheckoutPage() {
   // (มัดจำพรีในตะกร้าไม่เข้าเกณฑ์ — submitOrder/approveOrder คุมซ้ำ, DB trigger คุมยอดคงเหลือ)
   const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
   const instockBase = validLines.reduce((s, l) => (db.products.find((pp) => pp.id === l.productId)?.is_stock ? s + unitDeposit(l) * l.qty : s), 0);
-  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, currentUserId), kind: 'instock', payable: Math.max(0, instockBase - discount) }) : 0;
+  // เพดานต่อใบ (เจ้าของ 2026-09-23: ของพร้อมส่งสูงสุด 400/ใบ) × จำนวนรายการพร้อมส่ง — สูตรเดียวกับ submitOrder/approveOrder
+  const instockLines = validLines.filter((l) => db.products.find((pp) => pp.id === l.productId)?.is_stock).length;
+  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, currentUserId), kind: 'instock', payable: Math.max(0, instockBase - discount), units: instockLines }) : 0;
   const ptsUse = Math.min(usePts, ptsMax);
 
   const payNow = Math.max(0, grossPay - discount - ptsUse);
@@ -340,7 +342,7 @@ export default function CheckoutPage() {
       {/* ใช้แต้ม (v67) — เฉพาะยอดพร้อมส่ง ≤ 400/ออเดอร์ · เห็นเมื่อเปิดระบบคะแนน */}
       {pointsOn && ptsMax > 0 && (
         <div className="mb-3.5 rounded-card border border-[#d4af37]/30 bg-[#0d0909] p-[14px]">
-          <div className="mb-2 flex items-center justify-between text-[13px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดของพร้อมส่ง</span><span className="text-[11.5px] text-ink-faint">มี {balanceOf(db, currentUserId).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, 'instock').cap}/ครั้ง</span></div>
+          <div className="mb-2 flex items-center justify-between text-[13px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดของพร้อมส่ง</span><span className="text-[11.5px] text-ink-faint">มี {balanceOf(db, currentUserId).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, 'instock').cap}/ใบ</span></div>
           <div className="flex flex-wrap gap-1.5">
             <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
             {redeemPicks(ptsMax, redeemRules(db.settings, 'instock').min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}

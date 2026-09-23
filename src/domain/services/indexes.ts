@@ -81,3 +81,8 @@ export const lastApprovedRpAt = (db: Database) =>
     }
     return m;
   });
+
+const cfgCache = new WeakMap<readonly Database['appConfig'][number][], Slot<Map<string, Record<string, unknown>>>>();
+/** app_config ตาม key (ค่าตั้งต่อรอบพิเศษเก็บเป็นแถวละรอบ → ถูกอ่านต่อตั๋ว) */
+export const appConfigByKey = (db: Database) =>
+  arrayIndex(cfgCache, db.appConfig, (a) => new Map(a.map((c) => [c.key, c.value])));

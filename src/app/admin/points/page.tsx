@@ -9,7 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
 import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, simulateAfterLaunch, preparePointsLaunch, enablePointsLaunch } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows } from '@/domain/services/points';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows, SPECIAL_ROUND_POINTS_DEFAULT } from '@/domain/services/points';
 import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
 import { PointsLaunchNotice } from '@/components/PointsLaunchNotice';
@@ -48,7 +48,7 @@ export default function AdminPointsPage() {
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', on ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>{on ? '● เปิดใช้งาน' : '○ โหมดพรีวิว (ยังไม่ให้คะแนนจริง)'}</span>
         {on && <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-extrabold', redeemEnabled(db) ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-surface-3 text-ink-muted2')}>{redeemEnabled(db) ? '🎟️ ใช้แต้มตัดยอดได้' : '🔒 ยังไม่เปิดใช้แต้ม (โชว์อย่างเดียว)'}</span>}
       </div>
-      <div className="mb-5 text-[13px] text-ink-faint">คะแนน "คงที่ต่อชิ้น" (กำไรร้าน fix ต่อชิ้น ไม่ขึ้นกับราคา): ใบพรี <b className="text-ink">{rate.pre}</b> · พร้อมส่ง/จ่ายเต็ม <b className="text-ink">{rate.instock}</b> · ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ใบพรี = งวดสุดท้ายอนุมัติ · พร้อมส่ง = อนุมัติออเดอร์) · 1 คะแนน = 1฿ · ไม่ให้ตอนมัดจำ / ตั๋วหาของ / ประมูล</div>
+      <div className="mb-5 text-[13px] text-ink-faint">คะแนน "คงที่ต่อชิ้น" (กำไรร้าน fix ต่อชิ้น ไม่ขึ้นกับราคา): ใบพรีรอบปกติ <b className="text-ink">{rate.pre}</b> · รอบพิเศษ <b className="text-ink">+20/+40 ตั้งต่อรอบ</b> (ค่าเริ่มต้น {SPECIAL_ROUND_POINTS_DEFAULT} · เลือกตอนเปิดรอบที่ <Link href="/admin/stock" className="underline">สต๊อกใบพรี</Link>) · พร้อมส่ง/จ่ายเต็ม <b className="text-ink">{rate.instock}</b> · ได้ครั้งเดียวตอน "ตั๋วปิดยอด" (ใบพรี = งวดสุดท้ายอนุมัติ · พร้อมส่ง = อนุมัติออเดอร์) · 1 คะแนน = 1฿ · ไม่ให้ตอนมัดจำ / ตั๋วหาของ / ประมูล</div>
 
       {/* KPIs */}
       <div className="mb-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
@@ -121,8 +121,8 @@ function SettingsPanel() {
         <NumField s={s} onChange={set} k="points_per_piece_pre" label="คะแนน/ชิ้น · ใบพรี" hint="กำไร 200-250/ชิ้น → 20 = ~10% ทุกราคา" />
         <NumField s={s} onChange={set} k="points_per_piece_instock" label="คะแนน/ชิ้น · พร้อมส่ง / จ่ายเต็ม (0 = ยังไม่ให้ นับเฉพาะใบพรี)" hint="กำไร in-stock สูงกว่า (ราคาบวก 200-400)" />
         <NumField s={s} onChange={set} k="points_min_redeem" label="ใช้แต้มขั้นต่ำต่อครั้ง" hint="50 · ปุ่มเลือกขั้นละ 50" />
-        <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="ใช้แต้มสูงสุด · ปิดใบพรี (ต่อใบ)" hint="เจ้าของ 2026-09-12: 200 ต่อใบ" />
-        <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="ใช้แต้มสูงสุด · พร้อมส่ง (ต่อออเดอร์)" hint="เจ้าของ 2026-09-12: 400 ต่อออเดอร์" />
+        <NumField s={s} onChange={set} k="points_max_per_piece_pre" label="ใช้แต้มสูงสุด · ปิดใบพรีรอบปกติ (ต่อใบ)" hint="เจ้าของ 2026-09-23: 200 ต่อใบ (1,600−300=1,300 → ใช้ 200 → 1,100)" />
+        <NumField s={s} onChange={set} k="points_max_per_piece_instock" label="ใช้แต้มสูงสุด · รอบพิเศษ / พร้อมส่ง (ต่อใบ)" hint="เจ้าของ 2026-09-23: 400 ต่อใบ" />
         <NumField s={s} onChange={set} k="points_expire_months" label="หมดอายุเมื่อไม่เคลื่อนไหว (เดือน)" hint="ตัวกวาดยังไม่เปิด — ปีแรกไม่มีใครถึง" />
       </div>
 

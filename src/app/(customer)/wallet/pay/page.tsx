@@ -13,7 +13,7 @@ import { productLabel, lineImage } from '@/domain/services/catalog';
 import { ticketDue } from '@/domain/services/money';
 import { ticketSelectable } from '@/domain/services/payments';
 import { pendingBonusDiscount, monthlyBonusForTicket, ymShort } from '@/domain/services/monthly';
-import { balanceOf, redeemRules, redeemPicks, POINT_STEP, redeemEnabled } from '@/domain/services/points';
+import { balanceOf, redeemRules, redeemPicks, POINT_STEP, redeemEnabled, redeemKindFor } from '@/domain/services/points';
 import { usableGrantsFor, scopeAllows, couponMatchesProduct, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitRemainingPayment } from '@/data/mutations';
@@ -76,8 +76,10 @@ function PayInner() {
   const afterCouponBonus = (t: PreorderTicket) => Math.max(0, ticketDue(t) - (couponTicket?.id === t.id ? couponOff : 0) - bonusOf(t));
   // แต้ม (v67): เพดานต่อใบ × จำนวนใบ · กระจาย "เติมใบที่ค้างมากสุดให้เต็มเพดานก่อน" (เจ้าของ 2026-09-12) · เห็นเฉพาะเมื่อเปิดระบบคะแนน
   const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
-  const prule = redeemRules(db.settings, 'pre');
-  const ptsCapAll = tickets.reduce((s, t) => s + Math.min(prule.cap, afterCouponBonus(t)), 0);
+  const prule = redeemRules(db.settings, 'pre'); // ขั้นต่ำเท่ากันทุกชนิด
+  // เพดานต่อใบตามชนิด (เจ้าของ 2026-09-23): รอบปกติ 200 · รอบพิเศษ 400
+  const capOf = (t: PreorderTicket) => redeemRules(db.settings, redeemKindFor(db, t)).cap;
+  const ptsCapAll = tickets.reduce((s, t) => s + Math.min(capOf(t), afterCouponBonus(t)), 0);
   const ptsMax = pointsOn ? Math.floor(Math.min(balanceOf(db, uid), ptsCapAll) / POINT_STEP) * POINT_STEP : 0;
   const ptsUse = Math.min(usePts, ptsMax >= prule.min ? ptsMax : 0);
   const ptsByTicket = useMemo(() => {
@@ -86,7 +88,7 @@ function PayInner() {
     for (const t of [...tickets].sort((a, b) => afterCouponBonus(b) - afterCouponBonus(a))) {
       if (left <= 0) break;
       // ต่อใบต้อง ≥ ขั้นต่ำ (ด่าน DB) — ใบที่เหลือให้ไม่ถึงขั้นต่ำ ข้ามไป
-      const give = Math.min(left, prule.cap, afterCouponBonus(t));
+      const give = Math.min(left, capOf(t), afterCouponBonus(t));
       if (give >= prule.min) { m.set(t.id, give); left -= give; }
     }
     return m;
@@ -184,7 +186,7 @@ function PayInner() {
           {/* ใช้แต้ม (v67) — เห็นเฉพาะเมื่อเปิดระบบคะแนน · ปุ่มขั้นละ 50 · กระจายให้ใบที่ค้างมากสุดก่อน ใบละไม่เกินเพดาน */}
           {pointsOn && ptsMax >= prule.min && (
             <div className="mb-4 rounded-card border border-[#d4af37]/30 bg-[#0d0909] p-4">
-              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มตัดยอด</span><span className="text-ink-faint">มี {balanceOf(db, uid).toLocaleString('en-US')} · ใช้ได้สูงสุด {ptsMax.toLocaleString('en-US')} ({prule.cap}/ใบ × {tickets.length} ใบ)</span></div>
+              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มตัดยอด</span><span className="text-ink-faint">มี {balanceOf(db, uid).toLocaleString('en-US')} · ใช้ได้สูงสุด {ptsMax.toLocaleString('en-US')} (ปกติ {prule.cap} · รอบพิเศษ {redeemRules(db.settings, 'special').cap} ต่อใบ)</span></div>
               <div className="flex flex-wrap gap-1.5">
                 <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
                 {redeemPicks(ptsMax, prule.min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}

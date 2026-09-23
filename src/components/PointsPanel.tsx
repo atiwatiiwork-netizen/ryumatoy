@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag, batchPoints, SPECIAL_ROUND_POINTS_DEFAULT } from '@/domain/services/points';
 import type { Database } from '@/domain/entities';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
 import { isStaffAccount } from '@/domain/services/admins';
@@ -40,7 +40,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
   const uid = userId;
   const s = db.settings;
   const rate = pointsRates(s);
-  const rules = { pre: redeemRules(s, 'pre'), instock: redeemRules(s, 'instock') };
+  const rules = { pre: redeemRules(s, 'pre'), special: redeemRules(s, 'special'), instock: redeemRules(s, 'instock') };
   const simulating = mode === 'preview' && simulateEnabled === true;
   const enabled = simulating ? true : s.points_enabled;
   const visible = mode === 'preview' ? enabled : pointsVisibleTo(db, uid);
@@ -64,6 +64,12 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
   // "รางวัลสะสม" บอกเฉพาะทางที่ให้แต้มจริงตอนนี้ (audit 2026-09-23: Event/ภารกิจที่ยังแจกคูปองบาท ห้ามบอกว่าได้แต้ม)
   const liveEvent = activeCampaign(db);
   const liveMission = missionLive(db);
+  // รอบพิเศษ: คะแนนต่อใบตั้งต่อรอบ (+20/+40) — โชว์ค่าของรอบที่เปิดอยู่ (ไม่มีรอบเปิด = ค่าเริ่มต้น)
+  const specialVals = [...new Set(db.batches.filter((b) => b.status === 'open' && b.label !== 'หาของ').map((b) => batchPoints(db, b.id)))].sort((a, b) => a - b);
+  const specialText = specialVals.length > 1 ? `+${specialVals.join(' / +')} คะแนน/ใบ (ตามรอบ)` : `+${specialVals[0] ?? SPECIAL_ROUND_POINTS_DEFAULT} คะแนน/ใบ`;
+  // ตัวอย่างการใช้แต้ม (เจ้าของ 2026-09-23): ราคา 1,600 มัดจำ 300 → ของมาเหลือ 1,300 → ใช้ 200 → จ่าย 1,100
+  const exPrice = 1600, exDep = 300, exDue = exPrice - exDep;
+  const rewardLive = liveEvent?.reward_scope === 'points' || (!!liveMission && db.coupons.find((c) => c.id === liveMission.reward_coupon_id)?.scope === 'points');
   const rewardSources = [
     liveEvent?.reward_scope === 'points' ? `Event ${liveEvent.name}` : null,
     liveMission && db.coupons.find((c) => c.id === liveMission.reward_coupon_id)?.scope === 'points' ? 'ภารกิจ' : null,
@@ -193,15 +199,40 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
         </div>
       )}
 
-      {/* how to earn / use */}
+      {/* วิธีได้คะแนน (เจ้าของ 2026-09-23: ปิดใบพรีรอบปกติ 20 · รอบพิเศษ 40 · ยอดสะสมรายเดือน) */}
       <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
         <div className="mb-1.5 text-[13.5px] font-bold text-ink">วิธีได้คะแนน</div>
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (จ่ายส่วนต่างครบ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (รอบปกติ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">⚡</span><span className="flex-1">ปิดใบพรี รอบพิเศษ</span><b className="text-[#f1d27a]">{specialText}</b></div>
+          <div className="flex items-start gap-2">
+            <span className="w-5 text-center">🏆</span>
+            <span className="flex-1">ยอดสะสมรายเดือน — ยศ {mcfg.tiers.map((t) => t.label).join(' / ')}<span className="block text-[11px] text-ink-faint">พรีครบ {mcfg.tiers.map((t) => t.pieces).join(' / ')} ใบในเดือน · สรุปยศทุกสิ้นเดือน</span></span>
+            {mcfg.enabled
+              ? <b className="text-[#f1d27a]">ลดใบละ {mcfg.tiers.map((t) => num(sharePerPiece(t))).join(' · ')}</b>
+              : <b className="text-[#fbbf24]">เร็วๆ นี้</b>}
+          </div>
           {rate.instock > 0 && <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>}
-          {showMonthly && <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — ส่วนลดตอนปิดใบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `${num(sharePerPiece(t))}/ใบ`).join(' · ')}</b></div>}
-          <div className="flex items-center gap-2"><span className="w-5 text-center">🎁</span><span className="flex-1">รางวัลสะสม — {rewardSources}</span><b className="text-[#f1d27a]">เข้าแต้มทันที</b></div>
-          <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · {canRedeem ? 'ใช้ลดได้' : 'เร็วๆ นี้ใช้ลดได้'}ตอนปิดใบพรี (สูงสุด {num(rules.pre.cap)}/ใบ) และซื้อของพร้อมส่ง (สูงสุด {num(rules.instock.cap)}/ครั้ง) · ครั้งละอย่างน้อย {rules.pre.min}{!canRedeem && ' — ร้านจะประกาศวันเปิดใช้แต้มอีกครั้ง'}</div>
+          {rewardLive && <div className="flex items-center gap-2"><span className="w-5 text-center">🎁</span><span className="flex-1">รางวัลกิจกรรม — {rewardSources}</span><b className="text-[#f1d27a]">เข้าแต้มทันที</b></div>}
+        </div>
+      </div>
+
+      {/* วิธีใช้คะแนน (เจ้าของ 2026-09-23) — ใช้ตอนจ่าย ไม่ใช้กับมัดจำ · ปิดสวิตช์ใช้แต้ม = เร็วๆ นี้ */}
+      <div className="mb-4 rounded-card border border-subtle bg-surface-2 p-4 text-[12.5px] text-ink-muted2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[13.5px] font-bold text-ink">วิธีใช้คะแนน</span>
+          <span className={cx('rounded-md px-2 py-0.5 text-[11px] font-bold', canRedeem ? 'bg-[#16a34a]/[0.16] text-[#4ade80]' : 'bg-[#d97706]/[0.16] text-[#fbbf24]')}>{canRedeem ? 'ใช้ได้แล้ว' : 'เร็วๆ นี้ · ร้านจะประกาศ'}</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (รอบปกติ)</span><b className="text-ink">สูงสุด {num(rules.pre.cap)} คะแนน/ใบ</b></div>
+          <div className="ml-7 rounded-lg border border-white/5 bg-black/30 px-3 py-2 text-[11.5px] leading-relaxed">
+            <div className="font-bold text-ink-muted">ตัวอย่าง</div>
+            <div>ราคา {num(exPrice)} · มัดจำ {num(exDep)} → ของมาเหลือจ่าย <b className="text-ink">{num(exDue)}</b></div>
+            <div>ใช้ {num(rules.pre.cap)} คะแนน → จ่ายเพียง <b className="text-[#4ade80]">{num(Math.max(0, exDue - rules.pre.cap))}</b></div>
+          </div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">⚡</span><span className="flex-1">ปิดใบพรี รอบพิเศษ</span><b className="text-ink">สูงสุด {num(rules.special.cap)} คะแนน/ใบ</b></div>
+          <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-ink">สูงสุด {num(rules.instock.cap)} คะแนน/ใบ</b></div>
+          <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1 บาท · ใช้ครั้งละอย่างน้อย {rules.pre.min} (ขั้นละ 50) · ใช้ตอนจ่ายส่วนต่าง/ซื้อพร้อมส่ง ไม่ใช้กับมัดจำ{!canRedeem && ' — ร้านจะประกาศวันเปิดใช้แต้มอีกครั้ง'}</div>
         </div>
       </div>
 

@@ -200,23 +200,23 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   const sp = db.tickets.find((t) => t.id === sp0.id)!;
   const full = preTicket(db, U2, 5, { closed: true, price: 900, deposit: 900 });        // จ่ายเต็มไม่มีรอบ = พร้อมส่ง
   const cfg = monthlyConfig(db);
-  ok('I1 รอบพิเศษจ่ายเต็ม = ใบพรี (20 + นับรายเดือน) · จ่ายเต็มไม่มีรอบ = พร้อมส่ง (30 ไม่นับ)',
-    ticketIsPre(db, sp) && rawPointsForTicket(db, sp) === 20 && countsForMonthly(db, cfg, sp) && !ticketIsPre(db, full) && rawPointsForTicket(db, full) === 30 && !countsForMonthly(db, cfg, full));
+  ok('I1 รอบพิเศษจ่ายเต็ม = ใบพรีรอบพิเศษ (40 ค่าเริ่มต้น + นับรายเดือน) · จ่ายเต็มไม่มีรอบ = พร้อมส่ง (30 ไม่นับ)',
+    ticketIsPre(db, sp) && rawPointsForTicket(db, sp) === 40 && countsForMonthly(db, cfg, sp) && !ticketIsPre(db, full) && rawPointsForTicket(db, full) === 30 && !countsForMonthly(db, cfg, full));
   const mine = (d: Database) => ticketsMissingEarn(d).filter((t) => [pre1.id, sp.id, full.id].includes(t.id)).length;
   ok('I1b ก่อนเปิดตัว (พร้อมส่ง 30): ทั้ง 3 ใบค้างให้คะแนน (seed มีใบค้างของตัวเองอยู่แล้ว ไม่นับ)', mine(db) === 3, ticketsMissingEarn(db).length);
   db = launchPointsPreOnly('u-admin')(db);
   ok('I2 เปิดตัว: พร้อมส่ง=0 + ระบบเปิด + ใช้แต้มยังปิด', db.settings.points_per_piece_instock === 0 && db.settings.points_enabled === true && !redeemEnabled(db));
-  ok('I3 ย้อนหลังเฉพาะใบพรี: pre1 + รอบพิเศษ = 40 · พร้อมส่ง 0', balanceOf(db, U) === 40 && balanceOf(db, U2) === 0 && db.pointLedger.some((e) => e.id === earnIdFor(pre1.id)) && db.pointLedger.some((e) => e.id === earnIdFor(sp.id)) && !db.pointLedger.some((e) => e.id === earnIdFor(full.id)), { u: balanceOf(db, U), u2: balanceOf(db, U2) });
+  ok('I3 ย้อนหลังเฉพาะใบพรี: pre1 20 + รอบพิเศษ 40 = 60 · พร้อมส่ง 0', balanceOf(db, U) === 60 && balanceOf(db, U2) === 0 && db.pointLedger.some((e) => e.id === earnIdFor(pre1.id)) && db.pointLedger.some((e) => e.id === earnIdFor(sp.id)) && !db.pointLedger.some((e) => e.id === earnIdFor(full.id)), { u: balanceOf(db, U), u2: balanceOf(db, U2) });
   ok('I4 หลังเปิด ไม่มีใบค้าง (พร้อมส่ง 0 ไม่นับเป็นค้าง)', ticketsMissingEarn(db).length === 0);
   const n = db.pointLedger.length;
   db = launchPointsPreOnly('u-admin')(db);
-  ok('I5 กดซ้ำ ไม่ให้ซ้ำ', db.pointLedger.length === n && balanceOf(db, U) === 40);
+  ok('I5 กดซ้ำ ไม่ให้ซ้ำ', db.pointLedger.length === n && balanceOf(db, U) === 60);
   const pre2 = preTicket(db, U, 6);
   db = closeTicket(db, pre2, U).db;
   const full2 = preTicket(db, U2, 7, { closed: true, price: 900, deposit: 900 });
-  ok('I6 หลังเปิด: ปิดใบพรี +20 · พร้อมส่งปิดยอด = ไม่มีแถว (0)', balanceOf(db, U) === 60 && earnRowForTicket(db, full2) === null && earnRowForTicket(db, full2, { force: true }) === null);
+  ok('I6 หลังเปิด: ปิดใบพรี +20 · พร้อมส่งปิดยอด = ไม่มีแถว (0)', balanceOf(db, U) === 80 && earnRowForTicket(db, full2) === null && earnRowForTicket(db, full2, { force: true }) === null);
   ok('I7 pointsRates พร้อมส่ง 0 จริง (ไม่ fallback 30) · ใบพรียัง 20', pointsRates(db.settings).instock === 0 && pointsRates(db.settings).pre === 20);
-  ok('I8 note แถวย้อนหลังของรอบพิเศษบอก "ใบพรี 20/ใบ"', (db.pointLedger.find((e) => e.id === earnIdFor(sp.id))?.note ?? '').includes('ใบพรี 20/ใบ'));
+  ok('I8 note แถวย้อนหลังของรอบพิเศษบอก "รอบพิเศษ 40/ใบ"', (db.pointLedger.find((e) => e.id === earnIdFor(sp.id))?.note ?? '').includes('รอบพิเศษ 40/ใบ'));
 }
 
 // ── J) ประกาศเปิดระบบ "คะแนนของคุณคือ xx" (เจ้าของ 2026-09-23) ─────────────────────────────
@@ -314,10 +314,10 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   db.pointLedger.unshift({ id: earnIdFor(sp.id), user_id: U2, delta: 30, kind: 'earn_ticket', ref_type: 'ticket', ref_id: sp.id, note: 'preview 30', created_at: at(4) } as any);
   let k8 = launchPointsPreOnly('u-admin')(db);
   const fixRow = k8.pointLedger.find((e) => e.id === earnFixIdFor(sp.id));
-  ok('K8a ปรับส่วนต่าง 30 → 20 (แถว earn_adjust −10) · คงเหลือ 20 · ยอดสะสม 20', fixRow?.delta === -10 && fixRow.kind === 'earn_adjust' && balanceOf(k8, U2) === 20 && lifetimeOf(k8, U2) === 20, { fixRow, bal: balanceOf(k8, U2) });
+  ok('K8a ปรับส่วนต่าง 30 → 40 ตามกติการอบพิเศษ (แถว earn_adjust +10) · คงเหลือ 40 · ยอดสะสม 40', fixRow?.delta === 10 && fixRow.kind === 'earn_adjust' && balanceOf(k8, U2) === 40 && lifetimeOf(k8, U2) === 40, { fixRow, bal: balanceOf(k8, U2) });
   ok('K8b เปิดตัวซ้ำไม่ปรับซ้ำ', launchCorrectionRows(k8, 'u-admin').length === 0);
   k8 = deleteTicket(sp.id)(k8);
-  ok('K8c ลบตั๋ว → ดึงคืนสุทธิ 20 → คงเหลือ 0', balanceOf(k8, U2) === 0 && k8.pointLedger.find((e) => e.id === reverseIdFor(sp.id))?.delta === -20);
+  ok('K8c ลบตั๋ว → ดึงคืนสุทธิ 40 → คงเหลือ 0', balanceOf(k8, U2) === 0 && k8.pointLedger.find((e) => e.id === reverseIdFor(sp.id))?.delta === -40);
 
   // K9: เติมแต้มอัตโนมัติ (AdminShell) เฉพาะตั๋วปิดยอด "หลังวันเปิดตัว" — ปรับอัตราพร้อมส่งขึ้นทีหลังไม่แจกย้อนหลังเงียบๆ
   db = structuredClone(base);

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useReady } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { launchNotice, pointsLaunchInfo } from '@/domain/services/points';
+import { launchNotice, pointsLaunchInfo, SPECIAL_ROUND_POINTS_DEFAULT } from '@/domain/services/points';
 import type { Database } from '@/domain/entities';
 import { Embers, Rune } from './PointsPanel';
 
@@ -78,7 +78,7 @@ export function PointsLaunchNotice({ mode = 'live', userId, dbOverride }: {
       </div>
 
       <div className="relative mt-4 rounded-xl border border-white/10 bg-black/40 px-3.5 py-2.5 text-left text-[12px] leading-relaxed text-ink-muted2">
-        <div>📝 ปิดใบพรี (จ่ายส่วนต่างครบ) <b className="text-[#f1d27a]">+{n.rate} แต้ม/ใบ</b> — ทั้งรอบปกติและรอบพิเศษ</div>
+        <div>📝 ปิดใบพรี รอบปกติ <b className="text-[#f1d27a]">+{n.rate}</b> · รอบพิเศษ <b className="text-[#f1d27a]">+{SPECIAL_ROUND_POINTS_DEFAULT}</b> แต้ม/ใบ</div>
         <div className="mt-0.5">{n.canRedeem ? '🎟️ ใช้แต้มลดได้ตอนปิดใบพรี / ซื้อของพร้อมส่ง' : '🎟️ การใช้แต้มลดราคา — เร็วๆ นี้ ร้านจะประกาศอีกครั้ง'}</div>
       </div>
 

@@ -2,7 +2,7 @@ import type { Database, OrderItem, PointLedgerEntry, PreorderTicket, ShopSetting
 import { ticketPaid, ticketDue, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
 import { isAdminUser, isStaffAccount } from './admins';
-import { ledgerById, ledgerTotals, orderItemById, auctionPayOrderIds, approvedRpTicketIds, ticketById, lastApprovedRpAt } from './indexes';
+import { ledgerById, ledgerTotals, orderItemById, auctionPayOrderIds, approvedRpTicketIds, ticketById, lastApprovedRpAt, appConfigByKey } from './indexes';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -65,9 +65,27 @@ export const ticketIsPre = (db: Database, t: PreorderTicket) => !!t.batch_id || 
 
 /** อัตราคะแนนต่อชิ้นของตั๋วใบนี้ — ตั้งอัตราพร้อมส่ง = 0 คือ "นับเฉพาะใบพรี" (โหมดเปิดตัว) */
 export function ratePerPiece(db: Database, t: PreorderTicket): number {
+  // รอบพิเศษ (สต๊อกใบพรี — เปิดหลังรอบปกติ) ได้ตามที่ตั้งไว้ต่อรอบ +20/+40 (เจ้าของ 2026-09-23, ค่าเริ่มต้น 40)
+  if (t.batch_id) return batchPoints(db, t.batch_id);
   const r = pointsRates(db.settings);
-  return ticketIsPre(db, t) ? r.pre : r.instock;
+  return ticketIsFullPay(db, t) ? r.instock : r.pre;
 }
+
+// ── รอบพิเศษ: คะแนนต่อใบตั้งได้ต่อรอบ (เจ้าของ 2026-09-23: "ก่อนจะเปิดรอบพิเศษให้ลูกค้า ให้เพิ่ม Element แต้มคะแนนให้เลือก +20 +40") ──
+/** ค่าเริ่มต้นของรอบพิเศษที่ยังไม่ได้เลือก (กติกาเจ้าของ: ปิดใบพรีรอบพิเศษ +40/ใบ) */
+export const SPECIAL_ROUND_POINTS_DEFAULT = 40;
+export const SPECIAL_ROUND_POINT_CHOICES = [20, 40] as const;
+/** เก็บแถวละรอบใน app_config (ไม่ต้องรัน migration · แอดมิน 2 เครื่องแก้คนละรอบไม่ทับกัน) */
+export const batchPointsKey = (batchId: string) => `points_batch:${batchId}`;
+/** ค่าที่แอดมินเลือกไว้ให้รอบนี้ (null = ยังไม่เลือก → ใช้ค่าเริ่มต้น) */
+export function batchPointsSet(db: Database, batchId: string): number | null {
+  const v = appConfigByKey(db).get(batchPointsKey(batchId)) as { points?: unknown } | undefined;
+  return typeof v?.points === 'number' && Number.isFinite(v.points) && v.points >= 0 ? Math.trunc(v.points) : null;
+}
+/** คะแนนต่อใบของรอบพิเศษนี้ */
+export const batchPoints = (db: Database, batchId: string) => batchPointsSet(db, batchId) ?? SPECIAL_ROUND_POINTS_DEFAULT;
+/** ตั๋วรอบพิเศษ (ไม่ใช่ตั๋วหาของ) — ใช้ตัดสินป้าย/เพดานการใช้แต้ม */
+export const isSpecialRoundTicket = (db: Database, t: PreorderTicket) => !!t.batch_id && !isSourcingTicket(db, t);
 
 /** คะแนน "เต็มใบ" ตามสูตร (ไม่ดูเกณฑ์/ปิดยอด) — ใช้โชว์ "จะได้เมื่อปิดยอด" */
 export const rawPointsForTicket = (db: Database, t: PreorderTicket) => ratePerPiece(db, t) * Math.max(1, t.qty ?? 1);
@@ -119,7 +137,7 @@ export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorI
   const pts = pointsForTicket(db, t);
   if (pts <= 0) return null;
   const product = db.products.find((p) => p.id === t.product_id);
-  const kindLabel = ticketIsPre(db, t) ? 'ใบพรี' : 'พร้อมส่ง';
+  const kindLabel = t.batch_id ? 'รอบพิเศษ' : ticketIsPre(db, t) ? 'ใบพรี' : 'พร้อมส่ง';
   return {
     id: earnIdFor(t.id),
     user_id: t.owner_id,
@@ -199,19 +217,26 @@ export function milestoneProgress(lifetime: number): { reached: Milestone[]; nex
 
 /** ขั้นของปุ่มเลือกแต้ม (50 / 100 / 150 …) */
 export const POINT_STEP = 50;
-export type RedeemKind = 'pre' | 'instock';
+/** pre = ปิดใบพรีรอบปกติ · special = ปิดใบพรีรอบพิเศษ · instock = ของพร้อมส่ง (เจ้าของ 2026-09-23) */
+export type RedeemKind = 'pre' | 'special' | 'instock';
 
 /** เพดาน/ขั้นต่ำการใช้แต้ม (เจ้าของ 2026-09-12): ปิดใบพรี 200 **ต่อใบ** · พร้อมส่ง 400 **ต่อออเดอร์** · ขั้นต่ำ 50
  *  (คอลัมน์ยังชื่อ *_per_piece จาก v66 แต่ความหมายคือ "ต่อรายการ" ไม่คูณ qty — DB trigger v67 ใช้ค่าเดียวกัน) */
 export function redeemRules(settings: ShopSettings, kind: RedeemKind): { cap: number; min: number } {
   const n = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : d);
-  return { cap: n(kind === 'instock' ? settings.points_max_per_piece_instock : settings.points_max_per_piece_pre, kind === 'instock' ? 400 : 200), min: n(settings.points_min_redeem, 50) };
+  // เจ้าของ 2026-09-23: ปิดใบพรีปกติ สูงสุด 200/ใบ · ปิดใบพรีรอบพิเศษ / ของพร้อมส่ง สูงสุด 400/ใบ (ใช้ค่าเดียวกัน)
+  const big = kind !== 'pre';
+  return { cap: n(big ? settings.points_max_per_piece_instock : settings.points_max_per_piece_pre, big ? 400 : 200), min: n(settings.points_min_redeem, 50) };
 }
 
+/** ชนิดเพดานของตั๋วที่กำลังปิดใบ (ส่วนต่าง): รอบพิเศษ = special · อื่นๆ = pre */
+export const redeemKindFor = (db: Database, t: PreorderTicket): RedeemKind => (isSpecialRoundTicket(db, t) ? 'special' : 'pre');
+
 /** แต้มสูงสุดที่ใช้ได้กับรายการนี้ = min(คงเหลือ, เพดาน, ยอดค้างหลังคูปอง) ปัดลงเป็นขั้น 50 · ต่ำกว่าขั้นต่ำ = 0 */
-export function maxRedeemable(settings: ShopSettings, args: { balance: number; kind: RedeemKind; payable: number }): number {
+export function maxRedeemable(settings: ShopSettings, args: { balance: number; kind: RedeemKind; payable: number; units?: number }): number {
   const { cap, min } = redeemRules(settings, args.kind);
-  const raw = Math.max(0, Math.floor(Math.min(args.balance, cap, args.payable)));
+  // units = จำนวนใบ (ของพร้อมส่งหลายรายการในออเดอร์เดียว → เพดาน × ใบ)
+  const raw = Math.max(0, Math.floor(Math.min(args.balance, cap * Math.max(1, Math.trunc(args.units ?? 1)), args.payable)));
   const stepped = Math.floor(raw / POINT_STEP) * POINT_STEP;
   return stepped >= min ? stepped : 0;
 }
@@ -225,12 +250,12 @@ export function redeemPicks(max: number, min = 50, step = POINT_STEP): number[] 
 
 /** ตัวเลขแต้มที่ "ใช้จริง" ตามที่ลูกค้าขอ — ด่านฝั่งแอป (DB trigger v67 เป็นด่านจริงอีกชั้น):
  *  ระบบปิด / ต่ำกว่าขั้นต่ำ / เกินเพดาน / เกินยอดค้าง / เกินคงเหลือ → ตัดลงหรือ 0 (ไม่ปัดตกทั้งรายการ) */
-export function clampRedeem(db: Database, userId: string, kind: RedeemKind, payable: number, requested: number): number {
+export function clampRedeem(db: Database, userId: string, kind: RedeemKind, payable: number, requested: number, units = 1): number {
   if (!redeemEnabled(db)) return 0; // สวิตช์ใช้แต้มปิด (หรือระบบคะแนนปิด) → ไม่รับแต้มเลย
   const { cap, min } = redeemRules(db.settings, kind);
   const r = Math.max(0, Math.trunc(requested || 0));
   if (r < min) return 0;
-  return Math.max(0, Math.floor(Math.min(r, cap, payable, balanceOf(db, userId))));
+  return Math.max(0, Math.floor(Math.min(r, cap * Math.max(1, Math.trunc(units)), payable, balanceOf(db, userId))));
 }
 
 // ── แถว "จองแต้ม/คืนแต้ม" (v67) — DB trigger เป็นคนสร้างจริง; แอปใส่สำเนา id เดียวกันไว้โชว์ล่วงหน้า (adapter ไม่ส่งขึ้น) ──
@@ -416,4 +441,18 @@ export function sweepCandidates(db: Database): PreorderTicket[] {
   const li = pointsLaunchInfo(db);
   if (!li || !db.settings.points_enabled) return [];
   return ticketsMissingEarn(db).filter((t) => ticketClosedAt(db, t) >= li.at);
+}
+
+/** ออเดอร์นี้อ้างใช้แต้มได้ไหม (ใช้ทั้งตอนอนุมัติ และโชว์เหตุผลให้แอดมิน) — null = ปกติ
+ *  กติกา (เจ้าของ 2026-09-23): แต้มใช้กับของพร้อมส่งเท่านั้น สูงสุด 400/ใบ · ≤ ยอดพร้อมส่งหลังคูปอง · ต้องถูก DB จองจริง */
+export function orderPointsIssue(db: Database, order: { id: string; points_redeemed?: number; coupon_discount?: number; items: { product_id: string; deposit_amount: number; qty: number }[] }): string | null {
+  const pts = Math.max(0, Math.trunc(order.points_redeemed ?? 0));
+  if (pts <= 0) return null;
+  if (heldPointsFor(db, order.id, pts) === 0) return 'แต้มยังไม่ถูกจอง';
+  const lines = order.items.filter((i) => i.qty > 0 && (db.products.find((p) => p.id === i.product_id)?.is_stock ?? false));
+  const cap = redeemRules(db.settings, 'instock').cap;
+  if (pts > cap * lines.length) return `เกินเพดาน ${cap}/ใบ ของพร้อมส่ง`;
+  const base = lines.reduce((s, i) => s + i.deposit_amount, 0) - (order.coupon_discount ?? 0);
+  if (pts > Math.max(0, base)) return 'เกินยอดของพร้อมส่ง';
+  return null;
 }

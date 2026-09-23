@@ -17,7 +17,7 @@ import { submitRemainingPayment, chooseDelivery } from '@/data/mutations';
 import { deliveryReady, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
 import { ticketPayable } from '@/domain/services/payments';
 import { monthlyBonusForTicket, pendingBonusDiscount, ymShort } from '@/domain/services/monthly';
-import { balanceOf, maxRedeemable, redeemPicks, redeemRules, redeemEnabled } from '@/domain/services/points';
+import { balanceOf, maxRedeemable, redeemPicks, redeemRules, redeemEnabled, redeemKindFor } from '@/domain/services/points';
 import { store } from '@/data/store';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
@@ -99,7 +99,7 @@ export default function TicketDetailPage() {
   const bonusOff = pendingBonusDiscount(db, ticket);
   // แต้ม (v67): เห็นเฉพาะเมื่อเปิดระบบคะแนน — ด่านจริงคือ DB trigger; หน้าจอแค่จำกัดตัวเลือก
   const pointsOn = redeemEnabled(db); // สวิตช์ "ใช้แต้มตัดยอด" (แยกจากสวิตช์โชว์แต้ม) — points.ts ตัวเดียว
-  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, CURRENT_USER_ID), kind: 'pre', payable: Math.max(0, due - couponOff - bonusOff) }) : 0;
+  const ptsMax = pointsOn ? maxRedeemable(db.settings, { balance: balanceOf(db, CURRENT_USER_ID), kind: redeemKindFor(db, ticket), payable: Math.max(0, due - couponOff - bonusOff) }) : 0; // รอบพิเศษ 400 · ปกติ 200 ต่อใบ
   const ptsUse = Math.min(usePts, ptsMax);
   const payable = Math.max(0, due - couponOff - bonusOff - ptsUse);
 
@@ -251,10 +251,10 @@ export default function TicketDetailPage() {
           {/* ใช้แต้ม (v67) — ปุ่มขั้นละ 50 ไม่เกินเพดาน/ยอดค้าง/คงเหลือ */}
           {pointsOn && ptsMax > 0 && (
             <div className="mb-3.5 rounded-xl border border-[#d4af37]/30 bg-[#0d0909] p-3 text-left">
-              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดใบนี้</span><span className="text-ink-faint">มี {balanceOf(db, CURRENT_USER_ID).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, 'pre').cap}/ใบ</span></div>
+              <div className="mb-1.5 flex items-center justify-between text-[12.5px]"><span className="font-bold text-[#f1d27a]">⭐ ใช้แต้มลดใบนี้</span><span className="text-ink-faint">มี {balanceOf(db, CURRENT_USER_ID).toLocaleString('en-US')} · สูงสุด {redeemRules(db.settings, redeemKindFor(db, ticket)).cap}/ใบ</span></div>
               <div className="flex flex-wrap gap-1.5">
                 <button onClick={() => setUsePts(0)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === 0 ? 'border-primary bg-primary text-white' : 'border-subtle bg-surface-3 text-ink-muted2')}>ไม่ใช้</button>
-                {redeemPicks(ptsMax, redeemRules(db.settings, 'pre').min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}
+                {redeemPicks(ptsMax, redeemRules(db.settings, redeemKindFor(db, ticket)).min).map((v) => <button key={v} onClick={() => setUsePts(v)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', ptsUse === v ? 'border-[#d4af37] bg-[#d4af37] text-black' : 'border-subtle bg-surface-3 text-ink-muted2')}>{v}</button>)}
               </div>
               {ptsUse > 0 && <div className="mt-1.5 flex justify-between text-[12.5px] text-[#4ade80]"><span>ใช้แต้ม (จองทันที คืนถ้าสลิปไม่ผ่าน)</span><span className="font-semibold">−{baht(ptsUse)}</span></div>}
             </div>

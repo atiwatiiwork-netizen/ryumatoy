@@ -5,6 +5,8 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import { submitRemainingPayment, approveRemainingPayment, rejectRemainingPayment, submitOrder, approveOrder, rejectOrder, adjustPoints } from '../../src/data/mutations';
 import { balanceOf, clampRedeem, maxRedeemable, redeemPicks, redeemHoldId, refundId, earnIdFor, redeemEnabled, redeemFlag, REDEEM_KEY } from '../../src/domain/services/points';
 import { setPointsRedeem } from '../../src/data/mutations';
+import { openSpecialRound, publishBatch, removeBatch, setBatchPoints } from '../../src/data/mutations';
+import { batchPoints, batchPointsSet, batchPointsKey, SPECIAL_ROUND_POINTS_DEFAULT, rawPointsForTicket, redeemKindFor, redeemRules, orderPointsIssue } from '../../src/domain/services/points';
 import type { Database } from '../../src/domain/entities';
 
 let pass = 0, fail = 0;
@@ -116,6 +118,56 @@ const withBalance = (n: number) => adjustPoints('u-admin', U, n, 'seed')(structu
   ok('G4 เปิดสวิตช์ → ใช้ได้ + มี activity log', redeemEnabled(on) && clampRedeem(on, U, 'pre', 5000, 200) === 200 && on.activityLogs.some((l) => JSON.stringify(l).includes('points_redeem')));
   const off2 = setPointsRedeem('u-admin', false)(on);
   ok('G5 ปิดสวิตช์กลับ → 0 + เหลือ config แถวเดียว', clampRedeem(off2, U, 'pre', 5000, 200) === 0 && off2.appConfig.filter((c) => c.key === REDEEM_KEY).length === 1);
+}
+
+// ── S) รอบพิเศษ + เพดานใหม่ (เจ้าของ 2026-09-23): ได้ รอบปกติ 20 / รอบพิเศษ 40 (ตั้งต่อรอบ 20/40) · ใช้ ปกติ 200/ใบ · รอบพิเศษ/พร้อมส่ง 400/ใบ ──
+{
+  const P = 'p-sp-audit';
+  let db: Database = structuredClone(base);
+  db.products.push({ ...structuredClone(db.products.find((p) => !p.is_stock)!), id: P, series_name: 'Special Audit', is_stock: false, surplus_qty: 10 } as any);
+  db = openSpecialRound(P, { qty: 3, price: 2000, fullPay: false, deposit: 500, addSurplus: false, points: 20 })(db);
+  const b1 = db.batches.find((b) => b.product_id === P)!;
+  ok('S1 เปิดรอบพร้อมเลือก +20 → เก็บต่อรอบ (app_config points_batch:<id>)', batchPointsSet(db, b1.id) === 20 && batchPoints(db, b1.id) === 20);
+  ok('S2 ค่าที่ไม่ใช่ 20/40 ถูกปฏิเสธ', setBatchPoints(b1.id, 30)(db) === db);
+  const noPick = { ...db, appConfig: db.appConfig.filter((c) => c.key !== batchPointsKey(b1.id)) };
+  ok('S3 รอบที่ไม่ได้เลือก → ค่าเริ่มต้น 40', batchPointsSet(noPick, b1.id) === null && batchPoints(noPick, b1.id) === SPECIAL_ROUND_POINTS_DEFAULT && SPECIAL_ROUND_POINTS_DEFAULT === 40);
+  // ตั๋วรอบพิเศษ: ได้ตามรอบ · เพดานใช้แต้ม 400
+  const t = { id: 't-sp1', ticket_no: 'SP-1', product_id: P, owner_id: U, original_buyer_id: U, qty: 1, batch_id: b1.id, deposit_paid: 500, remaining_amount: 1500, remaining_paid: 0, status: 'active', product_status: 'arrived', qr_code_url: '', created_at: '2026-09-01' } as any;
+  db.tickets.push(t);
+  ok('S4 ตั๋วรอบพิเศษ (+20 ที่ตั้งไว้) → rawPoints 20 · ชนิดใช้แต้ม special · เพดาน 400', rawPointsForTicket(db, t) === 20 && redeemKindFor(db, t) === 'special' && redeemRules(db.settings, 'special').cap === 400);
+  const normal = openTicket(db);
+  ok('S5 ตั๋วรอบปกติ → ชนิด pre · เพดาน 200', redeemKindFor(db, normal) === 'pre' && redeemRules(db.settings, 'pre').cap === 200);
+  // ใช้แต้มจริง (สวิตช์เปิดใน base): รอบพิเศษใช้ได้ 400 · ปกติถูกตัดที่ 200
+  db = adjustPoints('u-admin', U, 1000, 'seed')(db);
+  let d1 = submitRemainingPayment(t.id, U, 1100, 'slip', undefined, { points: 400 })(db);
+  const rpS = d1.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending')!;
+  ok('S6 ปิดใบรอบพิเศษ ใช้ 400 ได้', rpS?.points_redeemed === 400, rpS);
+  d1 = submitRemainingPayment(normal.id, U, 0, 'slip', undefined, { points: 400 })(db);
+  const rpN = d1.remainingPayments.find((r) => r.ticket_id === normal.id && r.status === 'pending')!;
+  ok('S7 ปิดใบรอบปกติ ขอ 400 → ถูกตัดเหลือ 200', rpN?.points_redeemed === 200, rpN);
+  // publish ร่างพร้อมเลือกคะแนน · ลบรอบ = ลบค่าตั้ง
+  let d2: Database = structuredClone(base);
+  d2.products.push({ ...structuredClone(d2.products.find((p) => !p.is_stock)!), id: P, series_name: 'Special Audit', is_stock: false, surplus_qty: 10 } as any);
+  d2 = openSpecialRound(P, { qty: 2, price: 1800, fullPay: true, addSurplus: false, published: false })(d2);
+  const b2 = d2.batches.find((b) => b.product_id === P)!;
+  d2 = publishBatch(b2.id, { price: 1800, qty: 2, points: 20 })(d2);
+  ok('S8 เปิดขายรอบร่างพร้อมเลือก +20 → ตั้งค่าแล้ว + รอบ published', batchPointsSet(d2, b2.id) === 20 && d2.batches.find((b) => b.id === b2.id)?.published === true);
+  d2 = removeBatch(b2.id)(d2);
+  ok('S9 ลบรอบ (ไม่มีตั๋ว) → ค่าตั้งคะแนนถูกลบด้วย', !d2.appConfig.some((c) => c.key === batchPointsKey(b2.id)));
+}
+
+// ── T) ของพร้อมส่ง: เพดาน 400 "ต่อใบ" × จำนวนรายการ · แต้มห้ามไหลไปหักมัดจำพรี ──
+{
+  const stock = base.products.filter((p) => p.is_stock).slice(0, 2);
+  ok('T0 seed มีของพร้อมส่ง ≥ 2 รายการ', stock.length >= 2);
+  ok('T1 maxRedeemable พร้อมส่ง 2 ใบ = 800 (ถ้ายอด/คงเหลือพอ)', maxRedeemable(base.settings, { balance: 5000, kind: 'instock', payable: 5000, units: 2 }) === 800);
+  ok('T2 clampRedeem พร้อมส่ง 2 ใบ ขอ 900 → 800', clampRedeem(withBalance(5000), U, 'instock', 5000, 900, 2) === 800);
+  const fake: any = { id: 'o-fake', points_redeemed: 400, coupon_discount: 0, items: [{ product_id: base.products.find((p) => !p.is_stock)!.id, deposit_amount: 500, qty: 1 }] };
+  const withHold = { ...withBalance(1000), pointLedger: [{ id: redeemHoldId('o-fake'), user_id: U, delta: -400, kind: 'redeem_order', created_at: '2026-09-01' } as any, ...withBalance(1000).pointLedger] };
+  ok('T3 ออเดอร์พรีล้วนอ้างใช้แต้ม → orderPointsIssue เกินเพดาน (ไม่มีใบพร้อมส่ง)', !!orderPointsIssue(withHold, fake), orderPointsIssue(withHold, fake));
+  const ok1: any = { id: 'o-fake', points_redeemed: 400, coupon_discount: 0, items: [{ product_id: stock[0].id, deposit_amount: 1500, qty: 1 }] };
+  ok('T4 ของพร้อมส่ง 1 ใบ ยอด 1,500 ใช้ 400 → ปกติ', orderPointsIssue(withHold, ok1) === null, orderPointsIssue(withHold, ok1));
+  ok('T5 ไม่มีแถวจอง → แต้มยังไม่ถูกจอง', orderPointsIssue(withBalance(1000), ok1) === 'แต้มยังไม่ถูกจอง');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
