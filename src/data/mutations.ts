@@ -29,6 +29,8 @@ import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions'
 import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow, POINTS_LAUNCH_KEY, pointsLaunchInfo, launchCorrectionRows, heldPointsFor, redeemRules, redeemKindFor, batchPointsKey, SPECIAL_ROUND_POINT_CHOICES, orderPointsIssue } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
+import { marketLocked, hasMarketHistory, depositGap } from '../domain/services/market';
+import { ticketPayer } from '../domain/services/tickets';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -959,14 +961,29 @@ export const editBatch = (batchId: string, patch: { price?: number; qty?: number
 /** Customer submits a remaining-balance payment (slip) awaiting admin approval. A pre-order coupon
  *  applied here permanently reduces the ticket's remaining_amount (so `amount` = the discounted due)
  *  and consumes the grant (single use). */
-export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply, opts: { points?: number; groupId?: string } = {}) => (db: Database): Database => {
+export const submitRemainingPayment = (ticketId: string, userId: string, amount: number, slipUrl: string, coupon?: CouponApply, opts: { points?: number; groupId?: string; purpose?: 'topup' } = {}) => (db: Database): Database => {
   const now = new Date().toISOString();
   const ticket = db.tickets.find((t) => t.id === ticketId);
   // guards (money audit F8): ต้องเป็นตั๋วของตัวเอง · ยังค้างจริง · ไม่มีสลิปค้างตรวจอยู่แล้ว
   if (!ticket || ticket.owner_id !== userId) return db;
   if (ticket.remaining_paid >= ticket.remaining_amount) return db;
   if (db.remainingPayments.some((r) => r.ticket_id === ticketId && r.status === 'pending')) return db;
+  // ตลาดใบพรี: ใบที่ลงขายอยู่ห้ามจ่ายส่วนต่างซ้อนดีล (ผู้ซื้อกำลังรับหนี้ก้อนนี้ไป) — ด่านต้องอยู่ใน mutation
+  if (marketLocked(db, ticketId)) return db;
   const due = ticket.remaining_amount - ticket.remaining_paid;
+  // เติมมัดจำก่อนลงขาย (ข้อ 9): จ่ายได้ตั้งแต่ของยังไม่ออกจากจีน · ยอด = ส่วนที่ขาดพอดี · ไม่มีคูปอง/แต้ม
+  //   เงินเข้า remaining_paid ตามปกติตอนอนุมัติ → ส่วนต่างที่ค้างลดลงเท่ากัน ราคารวมของใบเท่าเดิม
+  if (opts.purpose === 'topup') {
+    const gap = Math.min(depositGap(db, ticket), due);
+    if (gap <= 0) return db;
+    return {
+      ...db,
+      remainingPayments: [
+        { id: id('rp'), ticket_id: ticketId, user_id: userId, amount: gap, slip_url: slipUrl, status: 'pending', created_at: now, purpose: 'topup' },
+        ...db.remainingPayments,
+      ],
+    };
+  }
   // SECURITY: re-derive from the coupon TEMPLATE + re-validate (active/expiry/scope=pre-order/target)
   // — never trust the client-passed discount. (audit H1/H2)
   let validGrant = coupon ? db.couponGrants.find((g) => g.id === coupon.grantId && g.user_id === userId && g.status === 'active') : undefined;
@@ -1571,23 +1588,8 @@ export const grantRewardsSweep = () => (db: Database): Database =>
 export const grantAllCampaignRewards = (userId: string) => (db: Database): Database =>
   db.campaigns.filter((c) => c.active).reduce((acc, c) => grantCampaignRewards(c.id, userId)(acc), db);
 
-/** List one of my tickets on the P2P marketplace (PRD §12). */
-export function listForResale(ticketId: string, fromUserId: string, askingPrice: number) {
-  return (db: Database): Database => ({
-    ...db,
-    transfers: [
-      {
-        id: id('tr'),
-        ticket_id: ticketId,
-        from_user_id: fromUserId,
-        asking_price: askingPrice,
-        status: 'listed',
-        listed_at: new Date().toISOString(),
-      },
-      ...db.transfers,
-    ],
-  });
-}
+// (listForResale เดิมถูกถอดออก 2026-09-23) — ตลาดใบพรีเขียนประกาศผ่าน RPC ryuma_market_* เท่านั้น (lib/market.ts)
+//   การเขียนแถวเองฝั่งแอปข้าม RLS/ด่านทั้งหมด (คนขายตั้ง status เองได้ · สองคนจองชนกัน)
 
 // ---- Admin catalog CRUD (PRD §16 จัดการสินค้า) ------------------------------
 
@@ -1744,6 +1746,7 @@ export const arriveSpecialRound = (batchId: string) => (db: Database): Database 
 export const chooseDelivery = (ticketId: string, userId: string, method: DeliveryMethod, custom?: { name: string; phone: string; address: string }) => (db: Database): Database => {
   const t = db.tickets.find((x) => x.id === ticketId);
   if (!t || t.owner_id !== userId || t.status === 'shipped') return db;
+  if (marketLocked(db, ticketId)) return db; // ลงขายอยู่ในตลาด — ถอนประกาศก่อนถึงเลือกวิธีรับของได้
   if (t.remaining_paid < t.remaining_amount) return db; // ยังจ่ายไม่ครบ = ยังเลือกไม่ได้
   if (t.delivery?.accepted_at) return db; // แอดมินยืนยันแล้ว ห้ามสลับเอง (ให้ทักแอดมิน)
   if (method === 'custom' && !(custom?.name.trim() && custom.phone.trim() && custom.address.trim())) return db;
@@ -1796,6 +1799,7 @@ export const closeDelivery = (ticketId: string) => (db: Database): Database => {
 export const markShippedOffline = (ticketId: string) => (db: Database): Database => {
   const t = db.tickets.find((x) => x.id === ticketId);
   if (!t || t.status === 'shipped' || t.remaining_paid < t.remaining_amount) return db;
+  if (marketLocked(db, ticketId)) return db; // ลงขายอยู่ในตลาด — ปิดงานไม่ได้จนกว่าจะยกเลิกประกาศ
   const now = new Date().toISOString();
   return { ...db, tickets: db.tickets.map((x) => (x.id === ticketId ? { ...x, status: 'shipped' as const, shipped_out_at: now } : x)) };
 };
@@ -1817,6 +1821,7 @@ export const offlineRpId = offlineRpIdFor; // ตัวจริงอยู่ 
 export const completeTicketOffline = (ticketId: string, opts?: { collectRemaining?: boolean }) => (db: Database): Database => {
   const t = db.tickets.find((x) => x.id === ticketId);
   if (!t || t.status === 'shipped') return db;
+  if (marketLocked(db, ticketId)) return db; // ลงขายอยู่ในตลาด — ห้ามปิดใบ (ผู้ซื้ออาจกำลังโอนเงินอยู่)
   const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
   if (due > 0 && !opts?.collectRemaining) return db; // ยังค้างเงินแต่ไม่ได้ยืนยันว่ารับเงินแล้ว → ไม่ปิด
   const now = new Date().toISOString();
@@ -2005,6 +2010,8 @@ export const setStockCond = (productId: string, cond: StockCond) => (db: Databas
 export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: Database): Database => {
   const t0 = db.tickets.find((t) => t.id === ticketId);
   if (!t0) return db;
+  // ลงขายอยู่ในตลาด: ผู้ซื้อเห็นยอดค้างของใบนี้บนกระดานแล้ว — ห้ามขยับตัวเลขใต้เท้าดีล (ยกเลิกประกาศก่อน)
+  if (marketLocked(db, ticketId)) return db;
   // ราคาเต็มของตั๋วตาม snapshot = มัดจำ + ส่วนต่างทั้งก้อน (remaining_paid เป็นส่วนหนึ่งของ
   // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
   const grandTotal = t0.deposit_paid + t0.remaining_amount;
@@ -2043,10 +2050,14 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
  *  เก็บแถวรายการไว้ (ไม่ลบทิ้ง) เพื่อรักษาเส้นเงิน: ยอดโอนของออเดอร์ยังเป็นหลักฐานเดิม. */
 export const deleteTicket = (ticketId: string) => (db: Database): Database => {
   const gone = db.tickets.find((t) => t.id === ticketId);
+  // ตลาดใบพรี: ตั๋วที่เคยผ่านตลาด (ขาย/แตกขาย/เป็นตั๋วลูก) ลบไม่ได้ — หลักฐานว่าใครขายให้ใคร + เงินที่
+  //   แบ่งไปตั๋วลูกจะหายไปด้วย (เดิมลบ ticket_transfers ทิ้งพ่วง) → ตัวเรียกต้อง read-back แล้วบอกเหตุผล
+  if (gone && hasMarketHistory(db, gone)) return db;
   const rest = db.tickets.filter((t) => t.id !== ticketId);
   let voided = false;
   const orders = !gone ? db.orders : db.orders.map((o) => {
-    if (voided || o.user_id !== gone.owner_id || o.status !== 'approved') return o;
+    // รายการในออเดอร์ผูกกับ "คนสั่ง" (ticketPayer) — ไม่ใช่คนถือปัจจุบัน
+    if (voided || o.user_id !== ticketPayer(gone) || o.status !== 'approved') return o;
     const items = o.items.map((it) => {
       if (voided || isVoidedItem(it)) return it;
       // ตั๋วรุ่นใหม่ผูก id กับรายการอยู่แล้ว; รุ่นเก่าต้องเดา — และต้องไม่ไปยกเลิกรายการ
@@ -2069,7 +2080,6 @@ export const deleteTicket = (ticketId: string) => (db: Database): Database => {
     //   เดิมลบทิ้งหมด → รายได้ของเดือนย้อนหลังหดลงเงียบๆ โดยไม่มีร่องรอย (audit 2026-08-08)
     //   แถวที่เหลือกลายเป็นกำพร้า (ticket_id ชี้ตั๋วที่ไม่มีแล้ว) ซึ่ง cashIn ยังนับได้ถูกต้อง
     remainingPayments: db.remainingPayments.filter((r) => r.ticket_id !== ticketId || r.status === 'approved'),
-    transfers: db.transfers.filter((tr) => tr.ticket_id !== ticketId),
     // คะแนนสะสม (v66): ตั๋วที่เคยได้คะแนนแล้วถูกลบ → ดึงคะแนนกลับด้วยแถวติดลบ (ไม่ลบแถวเดิม — สมุด append-only)
     pointLedger: (() => { const r = reverseRowForTicket(db, ticketId); return r ? [r, ...db.pointLedger] : db.pointLedger; })(),
   };

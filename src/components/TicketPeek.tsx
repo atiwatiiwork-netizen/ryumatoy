@@ -6,6 +6,8 @@ import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { productLabel } from '@/domain/services/catalog';
+import { ticketPayer } from '@/domain/services/tickets';
+import { marketLocked } from '@/domain/services/market';
 import { baht } from '@/lib/theme';
 import { completeTicketOffline, logActivity } from '@/data/mutations';
 import { store } from '@/data/store';
@@ -34,6 +36,7 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
   /** "จบงานตั๋วนี้เลย" — เคลียร์กันนอกระบบ (มารับเอง/โอนตรง/ตกลงทางแชท)
    *  ใบที่ยังค้างเงินต้องยืนยันว่ารับเงินแล้ว ไม่งั้นหนี้หายจากบัญชีแต่รายได้ไม่ขึ้น = เงินหายจากสมุด */
   const complete = async () => {
+    if (marketLocked(db, live.id)) { flash('ใบนี้ลงขายอยู่ในตลาดใบพรี — ยกเลิกประกาศก่อนถึงจบงานได้'); return; }
     const dueNow = Math.max(0, live.remaining_amount - live.remaining_paid);
     const msg = dueNow > 0
       ? `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nใบนี้ยังค้าง ${baht(dueNow)}\n`
@@ -58,8 +61,9 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
   };
 
   const tTime = new Date(t.created_at).getTime();
+  // สลิปมัดจำอยู่ในออเดอร์ของ "คนสั่ง" — ใบที่ซื้อต่อจากตลาด คนถือไม่ใช่คนโอนมัดจำ (ticketPayer)
   const order = db.orders
-    .filter((o) => o.user_id === t.owner_id && o.items.some((i) =>
+    .filter((o) => o.user_id === ticketPayer(t) && o.items.some((i) =>
       i.product_id === t.product_id && (i.batch_id ?? null) === (t.batch_id ?? null) && (i.variant_id ?? null) === (t.variant_id ?? null)))
     .sort((a, b) => Math.abs(new Date(a.approved_at ?? a.created_at).getTime() - tTime) - Math.abs(new Date(b.approved_at ?? b.created_at).getTime() - tTime))[0];
   const rps = db.remainingPayments.filter((r) => r.ticket_id === t.id && r.slip_url);

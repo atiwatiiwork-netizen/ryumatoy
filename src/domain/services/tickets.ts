@@ -1,5 +1,41 @@
-import type { Database } from '../entities';
+import type { Database, PreorderTicket } from '../entities';
 import { franchiseOf } from './catalog';
+
+/**
+ * ตลาดใบพรี (v71): ตั๋วเปลี่ยนมือได้ → "คนถือ" กับ "คนจ่ายมัดจำ" อาจเป็นคนละคน
+ *   owner_id          = ใครถือสิทธิ์ตอนนี้ (จ่ายส่วนต่าง / เลือกวิธีรับของ / แต้มปิดใบ / สิทธิ์บิด)
+ *   original_buyer_id = ใครสั่งและจ่ายมัดจำ (ผูกตั๋วกับออเดอร์ / นับเงิน / ยศ-Event / เพดานต่อคน)
+ * ⚠ ทุกที่ที่ถาม "เงินใบนี้มาจากออเดอร์ไหน" ต้องใช้ ticketPayer — เดิมใช้ owner_id ทั้งหมด
+ *   ใบที่เปลี่ยนมือจะหาออเดอร์ไม่เจอ → ถูกตีเป็นตั๋วมอบ → มัดจำนับซ้ำใน cashIn.granted
+ */
+export const ticketPayer = (t: { owner_id: string; original_buyer_id?: string }) => t.original_buyer_id || t.owner_id;
+/** ใบนี้ยังอยู่กับคนสั่งเดิม (ไม่เคยเปลี่ยนมือ) */
+export const heldByPayer = (t: { owner_id: string; original_buyer_id?: string }) => t.owner_id === ticketPayer(t);
+
+/** ตั๋วต้นทางของตั๋วลูกที่แตกขาย (split_from) — ตั๋วปกติคืนตัวเอง. ไล่ไม่เกิน 20 ชั้น (กันวนจากข้อมูลเพี้ยน) */
+export function ticketRoot(db: Database, t: PreorderTicket): PreorderTicket | undefined {
+  let cur: PreorderTicket | undefined = t;
+  for (let i = 0; cur?.split_from && i < 20; i++) cur = db.tickets.find((x) => x.id === cur!.split_from);
+  return cur && !cur.split_from ? cur : undefined;
+}
+
+/** สถานะดีลที่ "ปิดการขายแล้ว" (ตั๋วเปลี่ยนมือจริง) — รวมชื่อเก่า 'approved' ของ scaffold ก่อน v71 */
+export const TRANSFER_DONE = new Set(['done', 'approved']);
+
+/**
+ * รายการในออเดอร์ที่ตั๋ว "ถูกขายออกไปทั้งใบ" ในตลาด — ในเซสชันคนขาย RLS ซ่อนตั๋วใบนั้นแล้ว
+ * ตัวกู้ตั๋วต้องไม่ตีว่าหาย (ไม่งั้นมินต์ id `t-<item>` ชนแถวของผู้ซื้อ → เซฟล้มค้างทั้งบัญชี
+ * หรือได้ตั๋วฟรีสำหรับตั๋วรุ่นเก่าที่ id ไม่ผูกรายการ). แตกขายบางชิ้น = ตั๋วแม่ยังอยู่ ไม่นับ
+ */
+export function soldAwayItemIds(db: Database): Set<string> {
+  const out = new Set<string>();
+  for (const tr of db.transfers) {
+    if (!TRANSFER_DONE.has(tr.status) || tr.child_ticket_id) continue;
+    if (tr.order_item_id) out.add(tr.order_item_id);
+    else if (tr.ticket_id?.startsWith('t-')) out.add(tr.ticket_id.slice(2));
+  }
+  return out;
+}
 
 /**
  * Ticket number generator — `{abbr}-{year}-{month}-{seq}` (PRD §8).
@@ -24,7 +60,8 @@ export function padTicketSeq(n: number): string {
  */
 export function hasPreorderTicket(db: Database, userId: string): boolean {
   return db.tickets.some((t) => {
-    if (t.owner_id !== userId) return false;
+    // "เคยพรี" = คนสั่งเอง (ticketPayer) — ใบที่ซื้อต่อจากตลาดไม่ปลดด่าน, ใบที่ขายออกไปแล้วยังนับว่าเคยพรี
+    if (ticketPayer(t) !== userId) return false;
     if (t.batch_id) return true; // รอบพิเศษ / หาของ / มอบตั๋วสต๊อกใบพรี
     const p = db.products.find((x) => x.id === t.product_id);
     return !(p?.is_stock && t.remaining_amount === 0); // ตัดเฉพาะซื้อพร้อมส่งล้วน
@@ -101,14 +138,15 @@ export function isVoidedItem(item: { qty: number }): boolean {
   return !(item.qty > 0);
 }
 
-type TicketLike = { id: string; owner_id: string; product_id: string; variant_id?: string; batch_id?: string };
+type TicketLike = { id: string; owner_id: string; original_buyer_id?: string; split_from?: string; product_id: string; variant_id?: string; batch_id?: string };
 type ItemLike = Database['orders'][number]['items'][number];
 
-/** ตั๋วใบนี้เป็นของรายการนี้ไหม (ตั๋วรุ่นเก่าที่ id ไม่ได้ผูกกับรายการ ต้องเดาจาก สินค้า/รุ่น/รอบ) */
+/** ตั๋วใบนี้เป็นของรายการนี้ไหม (ตั๋วรุ่นเก่าที่ id ไม่ได้ผูกกับรายการ ต้องเดาจาก สินค้า/รุ่น/รอบ)
+ *  ownerId = คนสั่ง (order.user_id) → เดาด้วย ticketPayer ไม่ใช่คนถือ · ตั๋วลูกที่แตกขายไม่ใช่ตัวแทนรายการ */
 export function ticketForItem<T extends TicketLike>(tickets: T[], ownerId: string, item: ItemLike): T | undefined {
   const key = (a?: string) => a ?? null;
   return tickets.find((t) => t.id === orderTicketId(item.id)) ??
-    tickets.find((t) => t.owner_id === ownerId && t.product_id === item.product_id &&
+    tickets.find((t) => !t.split_from && ticketPayer(t) === ownerId && t.product_id === item.product_id &&
       key(t.variant_id) === key(item.variant_id) && key(t.batch_id) === key(item.batch_id));
 }
 
@@ -130,7 +168,7 @@ export function pairItemsWithTickets<T extends TicketLike>(
   for (const row of out) {
     if (row.ticket) continue;
     const guess = tickets.find((t) =>
-      !used.has(t.id) && t.owner_id === ownerId && t.product_id === row.item.product_id &&
+      !used.has(t.id) && !t.split_from && ticketPayer(t) === ownerId && t.product_id === row.item.product_id &&
       key(t.variant_id) === key(row.item.variant_id) && key(t.batch_id) === key(row.item.batch_id));
     if (guess) { row.ticket = guess; used.add(guess.id); }
   }
@@ -140,6 +178,7 @@ export function pairItemsWithTickets<T extends TicketLike>(
 export function unmatchedApprovedItems(db: Database, userId?: string, settledMs: number = HEAL_SETTLE_MS): { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] {
   const used = new Set<string>();
   const now = Date.now();
+  const sold = soldAwayItemIds(db); // ขายออกไปในตลาดแล้ว — ไม่ใช่ตั๋วหาย (ดู soldAwayItemIds)
   const out: { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] = [];
   for (const order of db.orders) {
     if (order.status !== 'approved') continue;
@@ -154,7 +193,7 @@ export function unmatchedApprovedItems(db: Database, userId?: string, settledMs:
       if (!Number.isFinite(approvedAt) || now - approvedAt < settledMs) continue;
     }
     // แอดมินลบตั๋วของรายการไหน = ตั้งใจให้รายการนั้นไม่มีตั๋ว (qty 0) — ห้ามมินต์คืน
-    const live = order.items.filter((i) => !isVoidedItem(i));
+    const live = order.items.filter((i) => !isVoidedItem(i) && !sold.has(i.id));
     for (const { item, ticket } of pairItemsWithTickets(db.tickets, order.user_id, live, used)) {
       if (!ticket) out.push({ order, item });
     }

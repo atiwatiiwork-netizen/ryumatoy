@@ -1,6 +1,7 @@
 import type { Database, PreorderTicket } from '../entities';
 import { ticketDue, ticketPaid, ticketTotal } from './money';
 import { DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from './delivery';
+import { ticketPayer } from './tickets';
 
 /**
  * "เส้นทางของตั๋ว" — ร้อยเรียงทุกฟีเจอร์ให้เห็นเป็นเส้นเดียว (flow review 2026-07-25).
@@ -32,11 +33,13 @@ export interface Journey {
   anomalies: string[];
 }
 
-/** หา order ที่ออกตั๋วใบนี้ (จับคู่ด้วย product+variant+batch ของเจ้าของ ใกล้เวลาออกตั๋วที่สุด). */
+/** หา order ที่ออกตั๋วใบนี้ (จับคู่ด้วย product+variant+batch ของ "คนสั่ง" ใกล้เวลาออกตั๋วที่สุด).
+ *  ใบที่เปลี่ยนมือในตลาด/ตั๋วลูกที่แตกขาย → ออเดอร์เดิมของคนสั่ง (ticketPayer) ไม่ใช่ของคนถือ */
 export function orderOfTicket(db: Database, t: PreorderTicket) {
   const tTime = new Date(t.created_at).getTime();
+  const payer = ticketPayer(t);
   return db.orders
-    .filter((o) => o.user_id === t.owner_id && o.items.some((i) =>
+    .filter((o) => o.user_id === payer && o.items.some((i) =>
       i.product_id === t.product_id && (i.batch_id ?? null) === (t.batch_id ?? null) && (i.variant_id ?? null) === (t.variant_id ?? null)))
     .sort((a, b) => Math.abs(new Date(a.approved_at ?? a.created_at).getTime() - tTime) - Math.abs(new Date(b.approved_at ?? b.created_at).getTime() - tTime))[0];
 }
@@ -120,7 +123,7 @@ export function ticketJourney(db: Database, t: PreorderTicket): Journey {
   if (shipped && ticketDue(t) > 0) anomalies.push(`ส่งของแล้วแต่ยังค้าง ${ticketDue(t)} บาท`);
   if (t.parcel_no && !shipped) anomalies.push('มีเลขพัสดุแต่สถานะตั๋วไม่จบ (เซฟไม่สมบูรณ์)');
   if (d?.accepted_at && !paidFull) anomalies.push('รับเรื่องจัดส่งแล้วแต่ยอดยังไม่ครบ');
-  if (!order && !sourcing && db.orders.some((o) => o.user_id === t.owner_id && o.status === 'approved')) {
+  if (!order && !sourcing && db.orders.some((o) => o.user_id === ticketPayer(t) && o.status === 'approved')) {
     // ตั๋วที่หา order ไม่เจอ = มอบตรง (ปกติ) — ไม่ใช่ anomaly ถ้าไม่มี order ตรงกันจริงๆ
   }
   if (p && !p.is_stock && !t.batch_id && t.product_status !== p.status && !shipped && !t.warehouse_at)

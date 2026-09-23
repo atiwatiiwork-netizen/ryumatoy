@@ -1,6 +1,7 @@
 import type { Database, PreorderTicket } from '../entities';
 import { ymOf } from './analytics';
 import { sourcingKeys } from './indexes';
+import { ticketPayer, ticketRoot } from './tickets';
 
 /**
  * เส้นเงิน — แหล่งความจริงเดียวของ "เงินเข้า/เงินค้าง" ทั้งระบบ (flow review 2026-07-25).
@@ -86,7 +87,8 @@ const grantedCache = new WeakMap<Database, Set<string>>();
  * `r.user_id` บน `pid` เท่านั้น) และถ้าผูกรอบ รอบนั้นต้องเป็นรอบของงานหาของ
  */
 export function isSourcingTicket(db: Database, t: PreorderTicket): boolean {
-  if (!sourcingKeys(db).has(`${t.product_id}|${t.owner_id}`)) return false; // ดัชนี (เดิมวนทุกเรื่องหาของต่อตั๋ว)
+  // คนขอหาของ = คนจ่ายมัดจำ (ticketPayer) ไม่ใช่คนถือ — ตั๋วที่เปลี่ยนมือในตลาดต้องยังรู้ว่ามาจากงานหาของ
+  if (!sourcingKeys(db).has(`${t.product_id}|${ticketPayer(t)}`)) return false; // ดัชนี (เดิมวนทุกเรื่องหาของต่อตั๋ว)
   if (!t.batch_id) return true;
   return db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ';
 }
@@ -106,7 +108,11 @@ export function grantedTicketIds(db: Database): Set<string> {
     `${owner}|${product}|${batch ?? NUL}|${variant ?? NUL}`;
   const groups = new Map<string, PreorderTicket[]>();
   for (const x of db.tickets) {
-    const k = gkey(x.owner_id, x.product_id, x.batch_id, x.variant_id);
+    // ⚠ ตลาดใบพรี: จับคู่ด้วย "คนสั่ง" (ticketPayer) ไม่ใช่คนถือ — ใบที่เปลี่ยนมือต้องยังผูกออเดอร์เดิม
+    //   ไม่งั้นถูกตีเป็นตั๋วมอบแล้วมัดจำเข้า cashIn.granted ซ้ำกับ deposits ของออเดอร์นั้น
+    // ตั๋วลูกที่แตกขาย (split_from) ไม่มีรายการของตัวเอง → ไม่ลงกลุ่ม ให้ตามแม่ข้างล่าง
+    if (x.split_from) continue;
+    const k = gkey(ticketPayer(x), x.product_id, x.batch_id, x.variant_id);
     const g = groups.get(k);
     if (g) g.push(x); else groups.set(k, [x]);
   }
@@ -129,7 +135,14 @@ export function grantedTicketIds(db: Database): Set<string> {
   //   ⚠ ตัวชี้ขาด "ตั๋วหาของ" ต้องใช้ isSourcingTicket ตัวเดียวกับ ticketSourceOf เสมอ —
   //   เช็คแค่ product_id จะตัดตั๋วที่แอดมินมอบ/ขายรอบพิเศษบน SKU ที่เคยหาของทิ้งไปด้วย
   //   (เงินหายจากยอด granted) ส่วนเช็ค !batch_id ก็ผิด เพราะตั๋วหาของ **มี** batch (label 'หาของ')
-  const granted = new Set(db.tickets.filter((t) => !covered.has(t.id) && !isSourcingTicket(db, t)).map((t) => t.id));
+  const granted = new Set(db.tickets.filter((t) => !t.split_from && !covered.has(t.id) && !isSourcingTicket(db, t)).map((t) => t.id));
+  // ตั๋วลูก = แหล่งเดียวกับแม่: แม่เป็นตั๋วมอบ → ลูกก็นับในช่อง granted (มัดจำแม่ถูกหั่นไปให้ลูก ยอดรวมเท่าเดิม)
+  //   แม่มาจากออเดอร์ → ลูกไม่ใช่ granted (เงินอยู่ใน deposits ของออเดอร์แม่แล้ว)
+  for (const t of db.tickets) {
+    if (!t.split_from) continue;
+    const root = ticketRoot(db, t);
+    if (root && granted.has(root.id)) granted.add(t.id);
+  }
   grantedCache.set(db, granted);
   return granted;
 }

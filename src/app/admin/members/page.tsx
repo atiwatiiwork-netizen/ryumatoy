@@ -15,6 +15,7 @@ import { baht } from '@/lib/theme';
 import { updateUser, removeUser, setSuspended, editTicketDeposit, deleteTicket, repairTickets, logActivity } from '@/data/mutations';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { unmatchedApprovedItems } from '@/domain/services/tickets';
+import { marketLocked, hasMarketHistory } from '@/domain/services/market';
 import { store } from '@/data/store';
 import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
@@ -265,6 +266,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
       ? `ตั้งได้สูงสุด ${baht(cap)} — ลูกค้าจ่ายส่วนต่างมาแล้ว ${baht(paidRem)} ตั้งเกินนี้เงินที่จ่ายแล้วจะหาย`
       : `มัดจำต้องอยู่ระหว่าง 0–${baht(total)}`);
     if (dep === t.deposit_paid) { setEditId(null); return; }
+    if (marketLocked(db, t.id)) return flash('ใบนี้ลงขายอยู่ในตลาดใบพรี — ยกเลิกประกาศก่อนถึงแก้มัดจำได้');
     dispatch(editTicketDeposit(t.id, dep));
     // read-back: mutation อาจปัดตกเงียบ → ห้ามขึ้น ✓ มั่ว
     let applied = false;
@@ -279,6 +281,8 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
 
   const del = async (t: PreorderTicket) => {
     const product = db.products.find((p) => p.id === t.product_id);
+    // ตั๋วที่เคยผ่านตลาดใบพรี (ขาย/แตกขาย/เป็นตั๋วลูก) ลบไม่ได้ — mutation ปัดตกอยู่แล้ว บอกเหตุผลก่อนให้แอดมินรู้
+    if (hasMarketHistory(db, t)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — ใบนี้มีประวัติซื้อขายในตลาดใบพรี (ต้องเก็บเป็นหลักฐาน)`);
     if (!confirm(`ลบตั๋ว ${t.ticket_no} (${product?.series_name ?? ''}) ออกถาวร?\nจะตัดออกจากระบบจริง${product?.is_stock ? ' + คืนสต๊อกสินค้า' : ' (ยอดจองของสินค้านี้จะลดลง)'}`)) return;
     // return stock for in-stock items by releasing a matching confirmed/paid hold
     if (product?.is_stock) {
@@ -286,6 +290,10 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
       if (res) await releaseReservation(res.id).catch(() => {});
     }
     dispatch(deleteTicket(t.id));
+    // read-back: mutation อาจปัดตก (ข้อมูลเพิ่งเปลี่ยนจากอีกเครื่อง) — ห้ามบอก "ลบแล้ว" + ลง log ทั้งที่ตั๋วยังอยู่
+    let stillThere = false;
+    dispatch((d) => { stillThere = d.tickets.some((x) => x.id === t.id); return d; });
+    if (stillThere) return flash(`ลบ ${t.ticket_no} ไม่สำเร็จ — รีเฟรชแล้วลองใหม่`);
     // การลบตั๋วคือการกระทำที่ย้อนกลับไม่ได้ที่สุดในระบบ — ต้องมีร่องรอยเสมอว่าใครลบ ใบไหน ของใคร
     dispatch(logActivity(adminId, 'delete_ticket', `ลบตั๋ว ${t.ticket_no} · ${product?.series_name ?? ''} (${user?.display_name ?? ''})`, { targetId: t.id, targetLabel: t.ticket_no, amount: t.deposit_paid + (t.remaining_paid ?? 0) }));
     if (await store.flush()) return flash('ลบไม่สำเร็จ — บันทึกไม่ผ่าน ลองใหม่อีกครั้ง');

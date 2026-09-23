@@ -10,7 +10,11 @@ export type TicketStatus = 'pending_approval' | 'active' | 'paid_full' | 'transf
 /** ขนส่งในไทย (พัสดุถึงหน้าบ้านลูกค้า). */
 export type Carrier = 'ems' | 'jt' | 'flash' | 'kerry';
 export type OrderStatus = 'pending_approval' | 'approved' | 'rejected';
-export type TransferStatus = 'listed' | 'pending_admin' | 'approved' | 'cancelled';
+/** ตลาดใบพรี (v71 · ryuma-p2p-spec): listed → reserved → paid → seller_ok → done
+ *  + reviewing (คนขายเงียบเกินเวลา / แจ้งว่าไม่ได้รับเงิน → แอดมินตรวจ) · cancelled · expired.
+ *  'pending_admin' / 'approved' = ชื่อเก่าของ scaffold ก่อน v71 (= seller_ok / done) — อ่านได้ ไม่เขียนใหม่ */
+export type TransferStatus = 'listed' | 'reserved' | 'paid' | 'reviewing' | 'seller_ok' | 'done' | 'cancelled' | 'expired'
+  | 'pending_admin' | 'approved';
 export type RankName = 'bronze' | 'silver' | 'gold' | 'diamond' | 'legend';
 
 /** ประเภท / Type — top category that groups makers (WCF, Resin, Bandai...). */
@@ -253,6 +257,9 @@ export interface PreorderTicket {
   warehouse_slip?: string;                  // the warehouse-table screenshot (evidence, admin-only)
   // ── การรับของ (delivery choice) — jsonb v52; ไม่มี = ตั๋วเก่า ใช้ flow เดิม ──
   delivery?: TicketDelivery;
+  /** ตั๋วลูกที่ "แตกขาย" ออกจากตั๋วหลายชิ้นในตลาด (v71 · ข้อ 3B) → id ของตั๋วแม่. ตั๋วลูกไม่มีรายการในออเดอร์
+   *  ของตัวเอง: เส้นเงินตามแม่เสมอ (ticketRoot) — ห้ามนับเป็นตั๋วมอบ/ตั๋วหาย */
+  split_from?: string;
   created_at: string;
   approved_at?: string;
 }
@@ -272,18 +279,52 @@ export interface RemainingPayment {
   coupon_discount?: number; // baht discounted (already removed from the ticket's remaining_amount)
   points_redeemed?: number; // แต้มที่ใช้ลดส่วนต่างงวดนี้ (v67) — จองใน point_ledger ตอนส่งสลิป (pl-redeem-<id>) หักจากหนี้ตอนอนุมัติ
   group_id?: string;        // สลิปเดียวจ่ายหลายใบ (v67) — แถวของใบต่างๆ ที่ส่งพร้อมกันใช้ group_id เดียวกัน
+  /** 'topup' = เติมมัดจำให้ครบก่อนลงขายในตลาด (v71 · ข้อ 9) — จ่ายได้ก่อนของออกจากจีน หักจากส่วนต่างตามปกติ */
+  purpose?: 'topup';
 }
 
+/** ประกาศขายใบพรี 1 รายการ (ตลาดใบพรี v71). ทุกการเปลี่ยนสถานะผ่าน RPC `ryuma_market_*` เท่านั้น —
+ *  แอปไม่เขียนตารางนี้เอง (adapter ไม่ sync) · ลูกค้าเห็นเฉพาะแถวที่ตัวเองเป็นคนขาย/คนซื้อ (กระดานมาจาก RPC feed) */
 export interface TicketTransfer {
   id: string;
   ticket_id: string;
   from_user_id: string;
-  to_user_id?: string;
-  asking_price: number;
+  to_user_id?: string;      // ผู้ซื้อ (ตั้งตอนจอง)
+  asking_price: number;     // ราคาที่ผู้ซื้อโอนให้คนขาย (ไม่รวมส่วนต่างที่ค้างร้าน)
   status: TransferStatus;
   note?: string;
   listed_at: string;
-  approved_at?: string;
+  approved_at?: string;     // เวลาแอดมินไฟนอล (ตั๋วเปลี่ยนมือ)
+  qty?: number;             // จำนวนชิ้นที่ขาย (แตกขายได้ · ข้อ 3B) — ไม่มี = ทั้งใบ
+  hold_until?: string;      // จองถึงเมื่อไหร่ (reserved)
+  slip_url?: string;        // สลิปที่ผู้ซื้อโอนให้คนขาย
+  paid_at?: string;
+  seller_confirmed_at?: string;
+  review_reason?: 'seller_silent' | 'not_received' | 'admin';
+  review_note?: string;
+  review_evidence?: string[];
+  reviewing_at?: string;
+  finalized_by?: string;    // แอดมินที่กดไฟนอล
+  prev_ticket_no?: string;
+  new_ticket_no?: string;
+  child_ticket_id?: string; // แตกขาย: ตั๋วลูกที่ผู้ซื้อได้ (ตั๋วแม่อยู่กับคนขายต่อ)
+  order_item_id?: string;   // รายการในออเดอร์ของคนขายที่ตั๋วใบนี้เกิดมา — กันตัวกู้ตั๋วฝั่งคนขายเสกคืน
+  // snapshot สินค้าตอนลงประกาศ — หลังขายแล้ว RLS ซ่อนตั๋วจากคนขาย แต่ประวัติ "ขายแล้ว" + เพดานต่อรอบยังต้องรู้ว่าเป็นของอะไร
+  product_id?: string;
+  variant_id?: string;
+  batch_id?: string;
+  expires_at?: string;      // ประกาศหมดอายุ (14 วัน · ข้อ 17)
+  cancelled_at?: string;
+  cancel_reason?: string;
+  updated_at?: string;
+}
+
+/** บัญชีรับเงินของคนขายในตลาด (users.payout_info jsonb · v71) — ผู้ซื้อเห็นผ่าน RPC เฉพาะตอนจองอยู่ */
+export interface PayoutInfo {
+  promptpay?: string;       // เบอร์/เลขบัตรพร้อมเพย์ (สร้าง QR ใส่ยอด)
+  bank?: string;            // ธนาคาร (สำรอง)
+  account_no?: string;
+  account_name: string;     // ชื่อบัญชี (ผู้ซื้อเทียบกับที่แอปธนาคารโชว์)
 }
 
 /**
@@ -419,6 +460,7 @@ export interface User {
    *  และ phone ที่เป็นเบอร์ล็อกอิน ซึ่งลูกค้าแก้เองไม่ได้เพราะ guard คุ้มครอง) */
   shipping_info?: ShippingInfo;
   line_id?: string;
+  payout_info?: PayoutInfo; // บัญชีรับเงินตอนขายใบพรีในตลาด (v71)
   created_at?: string; // signup time (from users.created_at, backfilled from the auth account)
   installed_at?: string; // first time this member opened the app installed to the home screen (PWA standalone) — for install-rate analytics
 }

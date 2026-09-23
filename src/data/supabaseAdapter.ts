@@ -318,7 +318,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
 
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
-    await step('ticket_transfers', () => syncTable(sb, 'ticket_transfers', next.transfers as unknown as Row[], base.transfers as unknown as Row[]));
+    // ticket_transfers (ตลาดใบพรี v71): **ไม่ sync โดยตั้งใจ** — ทุกการเปลี่ยนสถานะผ่าน RPC ryuma_market_* เท่านั้น
+    //   (แอปเขียนเอง = คนขายตั้งสถานะดีลตัวเองได้ / สองคนจองชนกันเงียบๆ) หลัง RPC สำเร็จให้ store.reload() ดึงของจริง
     await step('rank_tiers', () => syncTable(sb, 'rank_tiers', next.rankTiers as unknown as Row[], base.rankTiers as unknown as Row[], 'name'));
     // คะแนนสะสม (v66): เขียนเพิ่มอย่างเดียว (append-only) — แถวไม่ถูกแก้/ลบ, id ผูกตั๋ว → ส่งซ้ำ = ON CONFLICT DO NOTHING
     // วางท้ายสุด: ถ้าตั๋ว/สลิปยังไม่ขึ้น คะแนนต้องไม่ขึ้นก่อน (ด่านก่อนเงิน, เงินก่อนของแถม)

@@ -10,6 +10,7 @@ import { cx } from '@/components/ui';
 import { uploadImage } from '@/lib/upload';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, resolveShipTo, DELIVERY_METHOD_LABEL } from '@/domain/services/delivery';
+import { marketLocked } from '@/domain/services/market';
 import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel, logActivity } from '@/data/mutations';
 import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
@@ -91,6 +92,7 @@ export default function ShippingPage() {
     flash(`ส่งแจ้งเตือนให้ ${userName(t.owner_id)} แล้ว 🔔`);
   };
   const shipToRegistered = async (t: PreorderTicket) => {
+    if (marketLocked(db, t.id)) return flash(`${t.ticket_no} ลงขายอยู่ในตลาดใบพรี — รอขายเสร็จ/ยกเลิกประกาศก่อนถึงจัดส่งได้`);
     const u = db.users.find((x) => x.id === t.owner_id);
     if (!confirm(`จัดส่ง ${t.ticket_no} ตามที่อยู่ที่ลงทะเบียนของ ${u?.display_name}?\n📍 ${u?.shipping_address}`)) return;
     dispatch(chooseDelivery(t.id, t.owner_id, 'registered'));
@@ -102,6 +104,7 @@ export default function ShippingPage() {
     flash(`เข้าคิวจัดส่งแล้ว · ${t.ticket_no} ✓`);
   };
   const closeOffline = async (t: PreorderTicket) => {
+    if (marketLocked(db, t.id)) return flash(`${t.ticket_no} ลงขายอยู่ในตลาดใบพรี — ยกเลิกประกาศก่อนถึงปิดงานได้`);
     if (!confirm(`ปิดงาน ${t.ticket_no} — ตั๋วนี้ส่ง/รับของกันนอกระบบไปแล้วใช่ไหม? (ไม่ push หาลูกค้า)`)) return;
     dispatch(markShippedOffline(t.id));
     if (!verify(t.id, (x) => x.status === 'shipped')) return staleFlash();

@@ -58,7 +58,8 @@ export function qualifyingCount(db: Database, c: Campaign, userId: string, now: 
   const from = startOfDay(c.starts_at);
   const to = Math.min(endOfDay(c.ends_at), now.getTime()); // never count into the future
   return db.tickets.filter((t) => {
-    if (t.owner_id !== userId) return false;
+    // ตลาดใบพรีข้อ 26A: ใบที่เปลี่ยนมือไม่นับให้ใคร — ต้องเป็นทั้ง "คนถือ" และ "คนสั่ง" (ไม่เคยขาย/ไม่ได้ซื้อต่อ)
+    if (t.owner_id !== userId || (t.original_buyer_id || t.owner_id) !== userId) return false;
     if (t.batch_id) return false; // stock round → not a fresh pre-order
     if (t.remaining_amount === 0) return false; // full-pay = in-stock line → doesn't count
     const at = new Date(t.created_at).getTime();

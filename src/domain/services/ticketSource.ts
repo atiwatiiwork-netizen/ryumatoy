@@ -1,6 +1,7 @@
 import type { Database, PreorderTicket } from '../entities';
 import { grantedTicketIds, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
+import { ticketRoot } from './tickets';
 
 /**
  * "ตั๋วใบนี้มาจากทางไหน" (เจ้าของ 2026-07-26) — ใช้ตรวจย้อนหลังเวลามีอะไรผิดพลาด
@@ -41,6 +42,8 @@ const META: Record<TicketSource, { label: string; emoji: string; cls: string }> 
 export { isSourcingTicket } from './money'; // ตัวชี้ขาด "ตั๋วหาของ" — นิยามที่ money.ts (กัน import วนกัน)
 
 export function ticketSourceOf(db: Database, t: PreorderTicket): TicketSource {
+  // ตั๋วลูกที่แตกขายในตลาด (v71) = แหล่งเดียวกับตั๋วแม่เสมอ (เงินมาจากเส้นเดียวกัน)
+  if (t.split_from) { const root = ticketRoot(db, t); if (root) return ticketSourceOf(db, root); }
   // หาของมาก่อนเสมอ — ตั๋วพวกนี้ก็ไม่มีออเดอร์เหมือน granted แต่คนละเส้นเงิน
   if (isSourcingTicket(db, t)) return 'sourcing';
   if (grantedTicketIds(db).has(t.id)) return 'granted';

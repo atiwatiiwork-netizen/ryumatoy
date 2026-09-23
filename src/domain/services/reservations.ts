@@ -1,4 +1,5 @@
 import type { Database, Product, ProductBatch, StockReservation } from '../entities';
+import { ticketPayer, TRANSFER_DONE } from './tickets';
 
 /**
  * บัญชีสต๊อกเดียว (audit 2026-07-23 — เดิมมี "2 เล่ม" ตั๋ว vs ใบจอง แล้วมองไม่เห็นกัน):
@@ -80,7 +81,14 @@ export const BATCH_MAX_PER_USER = 2;
  *  (กำลังอยู่หน้าจ่าย/สลิปรอตรวจ). excludeResIds = hold ที่หนุนออเดอร์ที่กำลังส่งอยู่ตอนนี้ —
  *  ต้องยกเว้น ไม่งั้นการซื้อครั้งแรกถูกนับซ้ำ (hold 3 + รายการ 3 = 6 ทั้งที่คือของก้อนเดียวกัน). */
 export function userTakenInBatch(db: Database, userId: string, batchId: string, excludeResIds?: string[]): number {
-  const fromTickets = db.tickets.filter((t) => t.batch_id === batchId && t.owner_id === userId).reduce((s, t) => s + t.qty, 0);
+  // นับใบที่ "คนนี้สั่งเอง" (ticketPayer) — ตลาดใบพรีข้อ 27B: ของที่ซื้อต่อจากตลาดไม่กินเพดาน
+  // และใบที่ขายออกไปแล้ว (รวมตั๋วลูกที่แตกขาย) ยังนับให้คนสั่ง — กันซื้อครบเพดาน → ขาย → ซื้อใหม่วนไป
+  const fromTickets = db.tickets.filter((t) => t.batch_id === batchId && ticketPayer(t) === userId).reduce((s, t) => s + t.qty, 0)
+    // เซสชันคนขาย: RLS ซ่อนใบที่ขายออกไปแล้ว → นับจากประกาศที่ปิดการขายแทน (เฉพาะใบที่มองไม่เห็น กันนับซ้ำฝั่งแอดมิน)
+    + db.transfers
+      .filter((tr) => TRANSFER_DONE.has(tr.status) && tr.from_user_id === userId && tr.batch_id === batchId)
+      .filter((tr) => !db.tickets.some((t) => t.id === (tr.child_ticket_id || tr.ticket_id)))
+      .reduce((s, tr) => s + (tr.qty ?? 1), 0);
   const fromHolds = db.stockReservations
     .filter((r) => r.batch_id === batchId && r.user_id === userId && !excludeResIds?.includes(r.id))
     .filter(isPendingHold)

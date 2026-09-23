@@ -73,7 +73,8 @@ export interface MissionState {
  *  which is exactly the member's own tickets/subscriptions/user row, so the checks are correct). */
 export function missionStateFor(db: Database, userId: string): MissionState {
   const me = db.users.find((u) => u.id === userId);
-  const hasTicket = db.tickets.some((t) => t.owner_id === userId);
+  // ตลาดใบพรีข้อ 26A: ใบที่ซื้อต่อจากตลาดไม่นับ (กันซื้อใบถูกๆ จากเพื่อนมาเคลมรางวัลภารกิจ)
+  const hasTicket = db.tickets.some((t) => t.owner_id === userId && (t.original_buyer_id || t.owner_id) === userId);
   const installed = !!me?.installed_at;
   const bellOn = db.pushSubscriptions.some((s) => s.user_id === userId);
   const submission = missionSubmissionFor(db, userId);

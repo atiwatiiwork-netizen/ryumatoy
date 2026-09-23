@@ -1,4 +1,5 @@
 import type { Coupon, CouponGrant, CouponScope, Database, Product } from '../entities';
+import { ticketPayer } from './tickets';
 
 /**
  * Coupon helpers — the single place that decides eligibility + discount amount.
@@ -114,7 +115,7 @@ export function orphanUsedGrants(db: Database, userId?: string): { grant: Coupon
       // detect whether the ticket-side discount landed: compare with the order-item snapshot
       const key = (a?: string) => a ?? null;
       const item = db.orders
-        .filter((o) => o.user_id === t.owner_id && o.status === 'approved')
+        .filter((o) => o.user_id === ticketPayer(t) && o.status === 'approved') // ออเดอร์ของคนสั่ง (ใบอาจเปลี่ยนมือในตลาด)
         .flatMap((o) => o.items)
         .find((i) => i.product_id === t.product_id && key(i.variant_id) === key(t.variant_id) && key(i.batch_id) === key(t.batch_id) && i.qty === t.qty);
       const expected = item && item.unit_price != null && item.unit_deposit != null
