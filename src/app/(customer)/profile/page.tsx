@@ -17,6 +17,7 @@ import { rankPiecesOf, nextRankInfo } from '@/domain/services/ranks';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { missionLive, missionSubmissionFor } from '@/domain/services/missions';
 import { balanceOf, pointsVisibleTo } from '@/domain/services/points';
+import { marketVisibleTo, myDeals } from '@/domain/services/market';
 import { RankPerksButton } from '@/components/RankModals';
 import { AuthScreen } from '@/components/AuthScreen';
 import { EventProgress } from '@/components/EventBits';
@@ -60,7 +61,10 @@ export default function ProfilePage() {
     // ประวัติการซื้อ + สลิป (เจ้าของ 2026-07-25)
     { icon: 'copy', label: 'ประวัติการซื้อ', href: '/history' },
     { icon: 'bell', label: 'การแจ้งเตือน', push: true },
-    { icon: 'swap', label: 'รายการขาย P2P' },
+    // ตลาดใบพรี — ยังไม่เปิด = ลูกค้าเห็น "เร็วๆ นี้" เหมือนเดิม (แอดมินเข้าได้เพื่อลองเล่น)
+    ...(marketVisibleTo(db, CURRENT_USER_ID)
+      ? [{ icon: 'swap' as IconName, label: 'ซื้อขายใบพรี (ตลาด)', href: '/market/mine', right: (() => { const n = myDeals(db, CURRENT_USER_ID).todo.length; return n ? <span className="animate-pulse rounded-full bg-[#b91c1c]/25 px-2 py-0.5 text-[10.5px] font-bold text-[#f87171]">ต้องทำ {n}</span> : undefined; })() }]
+      : [{ icon: 'swap' as IconName, label: 'รายการขาย P2P' }]),
     { icon: 'settings', label: 'ธีม' },
   ];
 

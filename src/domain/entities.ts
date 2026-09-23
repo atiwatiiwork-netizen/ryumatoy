@@ -317,6 +317,9 @@ export interface TicketTransfer {
   cancelled_at?: string;
   cancel_reason?: string;
   updated_at?: string;
+  /** ยอดเงินของชิ้นที่ขาย ณ ตอนลงประกาศ (v72) — ผู้ซื้อมองไม่เห็นตั๋วคนขายตาม RLS จึงอ่านจากตรงนี้ */
+  snap?: { paid: number; due: number; total: number; product_status?: string; ticket_hint?: string } | null;
+  pushed?: Record<string, string>; // ชนิด push ที่ยิงแล้ว (v72 · กันยิงซ้ำ)
 }
 
 /** บัญชีรับเงินของคนขายในตลาด (users.payout_info jsonb · v71) — ผู้ซื้อเห็นผ่าน RPC เฉพาะตอนจองอยู่ */

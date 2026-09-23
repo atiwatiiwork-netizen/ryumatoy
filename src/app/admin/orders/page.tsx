@@ -310,6 +310,8 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
             {/* แต้มที่ลูกค้าใช้ลดในสลิปนี้ — แอดมินต้องเห็นก่อนอนุมัติ (audit 2026-09-23: เดิมไม่โชว์เลย) */}
             {g.rps.some((r) => (r.points_redeemed ?? 0) > 0) && <span className="font-bold text-[#f1d27a]">· ⭐ ใช้แต้ม −{baht(g.rps.reduce((s, r) => s + (r.points_redeemed ?? 0), 0))}</span>}
             {multi && <span className="rounded-md bg-[#d4af37]/[0.16] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#f1d27a]">สลิปรวม {g.rps.length} ใบ</span>}
+            {/* ตลาดใบพรี ข้อ 9: เติมมัดจำให้ครบก่อนลงขาย — อนุมัติตามปกติ (เข้า remaining_paid หักจากส่วนต่าง) */}
+            {g.rps.some((r) => r.purpose === 'topup') && <span className="rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#c4b5fd]">เติมมัดจำ · เพื่อลงขายตลาด</span>}
           </div>
           {!multi && <div className="font-mono text-[11px] text-ink-faint">{ticketOf(g.rps[0].ticket_id)?.ticket_no ?? g.rps[0].ticket_id}</div>}
         </div>

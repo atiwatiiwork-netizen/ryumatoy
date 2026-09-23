@@ -2,6 +2,7 @@ import type { Database, PreorderTicket, RemainingPayment } from '../entities';
 import { ticketDue } from './money';
 import { ticketPaidFull } from './delivery';
 import { ticketIsFullPay } from './points';
+import { marketLocked } from './market';
 
 /**
  * ส่วนต่าง / "รอชำระ" — แหล่งความจริงเดียวว่าใบไหน "เปิดให้จ่ายแล้ว" และสลิปไหนอยู่กลุ่มเดียวกัน
@@ -24,8 +25,8 @@ export const ticketPayable = (t: PreorderTicket): boolean =>
 export const pendingRpFor = (db: Database, ticketId: string): RemainingPayment | undefined =>
   db.remainingPayments.find((r) => r.ticket_id === ticketId && r.status === 'pending');
 
-/** เลือกจ่ายได้ = เปิดให้จ่าย และไม่มีสลิปค้างตรวจ */
-export const ticketSelectable = (db: Database, t: PreorderTicket): boolean => ticketPayable(t) && !pendingRpFor(db, t.id);
+/** เลือกจ่ายได้ = เปิดให้จ่าย และไม่มีสลิปค้างตรวจ และไม่ได้ลงขายอยู่ในตลาดใบพรี (ใบล็อก — mutation กันอีกชั้น) */
+export const ticketSelectable = (db: Database, t: PreorderTicket): boolean => ticketPayable(t) && !pendingRpFor(db, t.id) && !marketLocked(db, t.id);
 
 /** ใบที่ "รอชำระ" ของลูกค้าคนนี้ (รวมใบที่ส่งสลิปแล้วรอตรวจ — โชว์ในแท็บเดียวกันแต่ติ๊กไม่ได้) */
 export const payableTickets = (db: Database, userId: string): PreorderTicket[] =>

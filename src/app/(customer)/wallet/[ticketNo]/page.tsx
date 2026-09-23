@@ -27,6 +27,9 @@ import { copyText, digitsOnly } from '@/lib/clipboard';
 import { AddressForm } from '@/components/AddressForm';
 import { shippingInfoOf, composeAddress, addressProblem, splitComposed } from '@/domain/services/address';
 import type { ProductStatus, PreorderTicket, DeliveryMethod, ShippingInfo } from '@/domain/entities';
+import Link from 'next/link';
+import { SellSheet } from '@/components/market/SellSheet';
+import { marketVisibleTo, activeListingOf, boughtFromMarket, TRANSFER_STATUS_LABEL, effectiveStatus } from '@/domain/services/market';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
   { key: 'open', label: 'เปิดจอง' },
@@ -53,9 +56,21 @@ export default function TicketDetailPage() {
   const [busy, setBusy] = useState(false);
   const [couponGrantId, setCouponGrantId] = useState<string>('');
   const [usePts, setUsePts] = useState(0); // แต้มที่เลือกใช้ (v67) — 0 = ไม่ใช้
+  const [selling, setSelling] = useState(false); // แผงลงขายตลาดใบพรี
 
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
-  if (!ticket) return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
+  if (!ticket) {
+    // ใบที่ขายในตลาดไปแล้ว: RLS ซ่อนตั๋วจากคนขาย (เลขเปลี่ยนเป็น -T1 ด้วย) → บอกตรงๆ แทน "ไม่พบ"
+    const sold = db.transfers.find((tr) => tr.from_user_id === CURRENT_USER_ID && tr.prev_ticket_no === decodeURIComponent(ticketNo));
+    if (sold) return (
+      <div className="mx-auto max-w-[560px] p-6 text-center">
+        <div className="text-3xl">🤝</div>
+        <div className="mt-2 text-[16px] font-extrabold">ใบนี้ขายในตลาดใบพรีแล้ว</div>
+        <Link href={`/market/${sold.id}`} className="mt-3 inline-block text-[13px] text-primary-soft underline">ดูรายละเอียดดีล</Link>
+      </div>
+    );
+    return <div className="p-10 text-ink-faint">ไม่พบใบพรี</div>;
+  }
   // สินค้าถูกลบ/ซ่อน → แสดงข้อความแทนการ crash ทั้งหน้า (audit 2026-07-25)
   if (!db.products.find((p) => p.id === ticket.product_id))
     return <div className="p-10 text-ink-faint">ตั๋วนี้อ้างอิงสินค้าที่ไม่มีในระบบแล้ว — ทักแอดมินเพื่อตรวจสอบครับ</div>;
@@ -85,8 +100,11 @@ export default function TicketDetailPage() {
   // that ETA wins over the lot-level one.
   const whEta = ticket.product_status === 'shipping' && ticket.warehouse_at ? warehouseEtaLabel(db, ticket) : '';
 
+  // ตลาดใบพรี: ลงขายอยู่ = ใบถูกล็อก (จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้ — mutation กันอีกชั้น)
+  const listing = activeListingOf(db, ticket.id);
+  const fromMarket = boughtFromMarket(db, ticket, CURRENT_USER_ID);
   // remaining-balance payment: available once the lot is shipping onward
-  const canPay = ticketPayable(ticket); // กติกาเดียวกับแท็บ "รอชำระ" (payments.ts)
+  const canPay = ticketPayable(ticket) && !listing; // กติกาเดียวกับแท็บ "รอชำระ" (payments.ts) + ไม่ติดประกาศขาย
   const pendingRP = db.remainingPayments.find((r) => r.ticket_id === ticket.id && r.status === 'pending');
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
 
@@ -130,9 +148,10 @@ export default function TicketDetailPage() {
   };
 
   const resell = () => {
-    // P2P Market ยังไม่เปิด (parked) — listForResale จะล็อกตั๋วแบบกู้คืนไม่ได้ + ยังไม่มีตลาด/ปุ่มยกเลิก
-    // จึงกันไว้ก่อน ให้ตรงกับสถานะ "เร็วๆ นี้" ที่อื่น (audit: P2P dead-end). ปลดล็อกเมื่อระบบ P2P พร้อม.
-    flash('ตลาดซื้อขายใบพรี (P2P) กำลังพัฒนา — เร็วๆ นี้');
+    // ตลาดยังไม่เปิดให้ลูกค้า (เจ้าของ 2026-09-23) → ลูกค้าเห็น "เร็วๆ นี้" เหมือนเดิม · แอดมินลองลงขายได้จริง
+    if (!marketVisibleTo(db, CURRENT_USER_ID)) { flash('ตลาดซื้อขายใบพรี — เร็วๆ นี้'); return; }
+    if (listing) { router.push(`/market/${listing.id}`); return; }
+    setSelling(true);
   };
 
   return (
@@ -143,6 +162,7 @@ export default function TicketDetailPage() {
         <div className="absolute -left-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="absolute -right-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="mb-3.5 font-mono text-[15px] tracking-wider text-primary-soft">{ticket.ticket_no}</div>
+        {fromMarket && <div className="-mt-2 mb-3 inline-block rounded-full border border-[#c4b5fd]/40 bg-[#c4b5fd]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#c4b5fd]">🔁 ได้มาจากตลาด</div>}
         <div className="flex justify-center"><TicketQr value={typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(ticket.ticket_no)}` : ticket.ticket_no} size={150} /></div>
         <div className="mt-3 text-[11.5px] text-ink-faint">แสดง QR นี้เพื่อยืนยันตัวตนตอนรับของ</div>
       </div>
@@ -213,6 +233,18 @@ export default function TicketDetailPage() {
         </div>
       </div>
 
+      {/* ตลาดใบพรี: ลงขายอยู่ → ใบล็อก บอกชัดว่าทำอะไรไม่ได้ + ทางไปจัดการประกาศ */}
+      {listing && (
+        <Link href={`/market/${listing.id}`} className="mb-4 flex items-center gap-2.5 rounded-card border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-4 py-3">
+          <Icon name="swap" size={18} className="text-[#f1d27a]" />
+          <div className="flex-1 text-[12.5px] leading-relaxed text-ink-muted2">
+            <b className="text-[#f1d27a]">🔒 ลงขายอยู่ในตลาด · {baht(listing.asking_price)}</b> · {TRANSFER_STATUS_LABEL[effectiveStatus(listing)]}<br />
+            จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะขายหรือถอนประกาศ
+          </div>
+          <Icon name="chevronRight" size={16} className="text-ink-faint" />
+        </Link>
+      )}
+
       {/* arrived → notify again to pay the remaining */}
       {ticket.product_status === 'arrived' && due > 0 && !pendingRP && (
         <div className="mb-4 flex animate-pulseRed items-center gap-2.5 rounded-card border border-accent bg-[#b91c1c]/[0.12] px-4 py-3">
@@ -282,10 +314,11 @@ export default function TicketDetailPage() {
       ) : null}
 
       {/* จ่ายครบ + ของถึงไทย/พร้อมส่ง → เลือกวิธีรับของ (ryuma delivery spec) */}
-      {deliveryReady(db, ticket) && <DeliverySection ticket={ticket} />}
+      {deliveryReady(db, ticket) && !listing && <DeliverySection ticket={ticket} />}
 
+      {selling && <SellSheet ticket={ticket} onClose={() => setSelling(false)} />}
       <div className="flex gap-2.5">
-        <Button variant="outline" icon="swap" onClick={resell}>ลงขาย P2P</Button>
+        <Button variant="outline" icon="swap" onClick={resell}>{listing ? 'ดูประกาศขาย' : 'ลงขาย P2P'}</Button>
         {canPay && !pendingRP && !paying && (
           <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
         )}

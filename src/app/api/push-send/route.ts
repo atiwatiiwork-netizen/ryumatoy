@@ -59,6 +59,7 @@ export async function POST(req: Request) {
     subs?: { endpoint: string; p256dh: string; auth: string }[];
     payload?: { title?: string; body?: string; url?: string };
     auction?: { id?: string; kind?: string };
+    market?: { id?: string; kind?: string };
   };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'bad json' }, { status: 400 }); }
 
@@ -66,18 +67,25 @@ export async function POST(req: Request) {
   // ทำไม: RLS ให้ลูกค้าเห็น push_subscriptions แค่ของตัวเอง → เบราว์เซอร์คนที่บิดส่งหาคนที่โดนแซงไม่ได้
   // และถ้าเปิดให้อ่าน endpoint คนอื่นก็จะกลายเป็นช่องยิง spam ทันที. RPC (security definer) จึงคืน
   // ปลายทาง+ข้อความมาที่นี่เท่านั้น โดยตรวจเองว่าผู้เรียกเป็น "ผู้นำราคาปัจจุบัน" จริง
+  // โหมด "ตลาดใบพรี" (v72) ใช้กติกาเดียวกัน: RPC ryuma_market_push_targets ตรวจว่าผู้เรียกเป็นคู่ดีล/แอดมิน,
+  // เลือกปลายทาง (ตลาดยังปิด = เฉพาะแอดมิน) และกันยิงชนิดเดิมซ้ำ — แอปส่งมาแค่ id ดีล + ชนิด
   type Sub = { endpoint: string; p256dh: string; auth: string };
   let auctionMode: { subs: Sub[]; payload: { title: string; body: string; url: string } } | null = null;
-  if (body.auction?.id && body.auction?.kind) {
+  const serverSide = body.auction?.id && body.auction?.kind
+    ? { fn: 'ryuma_auction_push_targets', args: { p_auction_id: body.auction.id, p_kind: body.auction.kind } }
+    : body.market?.id && body.market?.kind
+      ? { fn: 'ryuma_market_push_targets', args: { p_id: body.market.id, p_kind: body.market.kind } }
+      : null;
+  if (serverSide) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     const token = (req.headers.get('authorization') ?? '').slice(7).trim();
     if (!url || !anon) return NextResponse.json({ error: 'supabase env missing' }, { status: 503 });
     try {
-      const r = await fetch(`${url}/rest/v1/rpc/ryuma_auction_push_targets`, {
+      const r = await fetch(`${url}/rest/v1/rpc/${serverSide.fn}`, {
         method: 'POST',
         headers: { apikey: anon, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ p_auction_id: body.auction.id, p_kind: body.auction.kind }),
+        body: JSON.stringify(serverSide.args),
         cache: 'no-store',
       });
       if (!r.ok) return NextResponse.json({ sent: 0, gone: [] });

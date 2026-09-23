@@ -1031,7 +1031,8 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
   // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติตอนปิดใบ — คำนวณจาก snapshot เดือนที่ปิดแล้วในเซสชันแอดมิน (เชื่อถือได้)
   // ไม่เชื่อตัวเลขจากลูกค้า: ถ้าลูกค้าโอนน้อยกว่าที่ควร (อ้างโบนัสเกิน) หนี้จะยังค้างให้เห็น ไม่หายเงียบ
   const t0 = db.tickets.find((t) => t.id === pay.ticket_id);
-  const bonus = t0 ? pendingBonusDiscount(db, t0) : 0;
+  // สลิป "เติมมัดจำเพื่อลงขายตลาด" ไม่ใช่งวดปิดใบ — ห้ามหักโบนัสยศล่วงหน้า (ไม่งั้นส่วนลดของคนขายติดไปกับใบที่ขาย)
+  const bonus = t0 && pay.purpose !== 'topup' ? pendingBonusDiscount(db, t0) : 0;
   const next: Database = {
     ...db,
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
@@ -2420,6 +2421,25 @@ export const setAuctionPublic = (enabled: boolean) => (db: Database): Database =
   ...db,
   appConfig: [{ key: 'auction_public', value: { enabled } }, ...db.appConfig.filter((c) => c.key !== 'auction_public')],
 });
+
+/** สวิตช์เปิดตลาดใบพรีให้ลูกค้าเห็น (แอดมิน) — ฝั่ง server อ่านแถวเดียวกันผ่าน ryuma_market_open (v72) */
+export const setMarketPublic = (enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: 'market_public', value: { enabled, changed_at: new Date().toISOString() } }, ...db.appConfig.filter((c) => c.key !== 'market_public')],
+});
+
+/** บัญชีรับเงินของคนขาย (ตลาดใบพรี · ข้อ 11A) — เจ้าของแถวเขียนเองได้ (guard ไม่ล็อกคอลัมน์นี้)
+ *  ผู้ซื้อเห็นผ่าน RPC ryuma_market_payout เฉพาะตอนจองดีลของคนนี้อยู่ */
+export const setPayoutInfo = (userId: string, info: { promptpay?: string; bank?: string; account_no?: string; account_name: string }) => (db: Database): Database => {
+  const clean = {
+    account_name: info.account_name.trim(),
+    ...(info.promptpay?.replace(/\D/g, '') ? { promptpay: info.promptpay.replace(/\D/g, '') } : {}),
+    ...(info.bank?.trim() ? { bank: info.bank.trim() } : {}),
+    ...(info.account_no?.replace(/\D/g, '') ? { account_no: info.account_no.replace(/\D/g, '') } : {}),
+  };
+  if (!clean.account_name || (!clean.promptpay && !clean.account_no)) return db;
+  return { ...db, users: db.users.map((u) => (u.id === userId ? { ...u, payout_info: clean } : u)) };
+};
 
 // ── โหมดทดลอง (ยังไม่รัน v60) ───────────────────────────────────────────────
 /** บิดแบบ local — ใช้ตอนยังไม่มี RPC เท่านั้น (สูตรต้องตรงกับ migration v60). */

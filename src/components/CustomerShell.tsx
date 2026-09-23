@@ -23,12 +23,14 @@ import { ProfileGate } from './ProfileGate';
 import { OnboardGate } from './OnboardGate';
 import { InstallBellNudge } from './InstallBellNudge';
 import { auctionPublicEnabled } from '@/domain/services/auctions';
+import { marketVisibleTo } from '@/domain/services/market';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
   { href: '/shop', icon: 'store', label: 'ช็อป', topLabel: 'ช็อป' },
   { href: '/profile', icon: 'user', label: 'โปรไฟล์', topLabel: 'โปรไฟล์' },
 ];
+const MARKET_TAB = { href: '/market', icon: 'swap' as IconName, label: 'ตลาด', topLabel: 'ตลาดใบพรี' };
 
 /**
  * Responsive customer frame (HANDOFF.md §Customer Desktop). Below lg it's a
@@ -92,6 +94,8 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   // ห้องประมูล (v60): เจ้าของสั่ง "ทำไว้ก่อน แต่ยังไม่เปิดให้ใช้ในฝั่งผู้ใช้"
   // → ปุ่มอยู่บนเมนูแล้ว แต่ลูกค้ากดแล้วได้ข้อความ "เร็วๆ นี้"; แอดมินเข้าได้จริงเพื่อทดลอง
   const auctionOpen = auctionPublicEnabled(db) || isAdmin;
+  // ตลาดใบพรี (ข้อ 28A: แท็บล่างที่ 4) — ยังไม่เปิด = เห็นเฉพาะแอดมิน ลูกค้าไม่รู้ว่ามี (เจ้าของ 2026-09-23)
+  const tabs = marketVisibleTo(db, CURRENT_USER_ID) || isAdmin ? [TABS[0], TABS[1], MARKET_TAB, TABS[2]] : TABS;
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   // install-rate: stamp installed_at the first time a logged-in member opens the app in standalone
   // (home-screen). Idempotent mutation → once-only; own-row write is RLS-safe (ryuma-push-adoption).
@@ -135,7 +139,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
             <span className="text-[19px] font-extrabold">Ryuma</span>
           </Link>
           <nav className="ml-2 flex gap-1">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <Link
                 key={t.href}
                 href={t.href}
@@ -196,7 +200,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
 
       {/* mobile bottom tab bar */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-subtle bg-surface px-1.5 pb-[calc(8px+env(safe-area-inset-bottom))] pt-2 lg:hidden">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const on = isActive(t.href);
           return (
             <Link key={t.href} href={t.href} className={cx('relative flex flex-1 flex-col items-center gap-[3px]', on ? 'text-primary-bright' : 'text-ink-faint')}>

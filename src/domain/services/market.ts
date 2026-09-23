@@ -2,6 +2,17 @@ import type { Database, PreorderTicket, TicketTransfer, User } from '../entities
 import { depositFor } from './pricing';
 import { isSourcingTicket } from './money';
 import { TRANSFER_DONE } from './tickets';
+import { isAdminUser } from './admins';
+
+/** สวิตช์เปิดตลาดฝั่งลูกค้า (app_config 'market_public') — ไม่มีแถว = ปิด (เจ้าของ 2026-09-23: "รอทุกอย่างพร้อมก่อน")
+ *  ⚠ ด่านจริงอยู่ฝั่ง server (ryuma_market_open ใน v72) ตัวนี้แค่ซ่อน/โชว์หน้าจอ */
+export const MARKET_PUBLIC_KEY = 'market_public';
+export function marketPublicEnabled(db: Database): boolean {
+  const row = db.appConfig.find((c) => c.key === MARKET_PUBLIC_KEY);
+  return (row?.value as { enabled?: boolean } | undefined)?.enabled === true;
+}
+/** ใครเห็นตลาด: เปิดแล้ว = ทุกคน · ยังปิด = แอดมินเท่านั้น (ลองเล่นก่อน) */
+export const marketVisibleTo = (db: Database, userId: string) => marketPublicEnabled(db) || isAdminUser(db, userId);
 
 /**
  * ตลาดใบพรี (P2P) — กติกาที่เจ้าของเคาะแล้วทั้ง 30 ข้อ (2026-09-23 · memory ryuma-p2p-spec) อยู่ที่นี่ที่เดียว.
@@ -165,4 +176,68 @@ export function sellBlockReason(db: Database, t: PreorderTicket, userId: string,
   const gap = depositGap(db, t);
   if (gap > 0) return `ต้องเติมมัดจำอีก ฿${gap.toLocaleString('en-US')} ก่อนลงขาย`;
   return null;
+}
+
+// ── ดีลของฉัน / หน้าจอ ───────────────────────────────────────────────────────
+export type DealRole = 'seller' | 'buyer' | 'none';
+export const dealRole = (tr: TicketTransfer, uid: string): DealRole =>
+  tr.from_user_id === uid ? 'seller' : tr.to_user_id === uid ? 'buyer' : 'none';
+
+/** เวลาที่เหลือให้คนขายยืนยันรับเงิน (ms) — ติดลบ = เกิน 12 ชม. แล้ว (ข้อ 12/15) · ยังไม่จ่าย = NaN */
+export const sellerSlaLeft = (tr: TicketTransfer, now: Date = new Date()) =>
+  tr.paid_at ? ms(tr.paid_at) + MARKET.sellerSlaH * 3_600_000 - now.getTime() : NaN;
+
+const DEAL_ACTIVE = ['paid', 'reviewing', 'seller_ok', 'pending_admin'];
+const DEAL_DONE = ['done', 'approved', 'cancelled', 'expired'];
+
+/** ดีลของฉันแยกกลุ่ม (/market/mine): ต้องทำ · กำลังดำเนินการ · ลงขายอยู่ · ประวัติ */
+export function myDeals(db: Database, uid: string, now: Date = new Date()) {
+  const mine = db.transfers
+    .filter((tr) => tr.from_user_id === uid || tr.to_user_id === uid)
+    .sort((a, b) => ms(b.updated_at ?? b.listed_at) - ms(a.updated_at ?? a.listed_at));
+  const st = (tr: TicketTransfer) => effectiveStatus(tr, now);
+  const isTodo = (tr: TicketTransfer) => {
+    const role = dealRole(tr, uid);
+    return (role === 'seller' && (st(tr) === 'paid' || (st(tr) === 'reviewing' && tr.review_reason === 'seller_silent')))
+      || (role === 'buyer' && st(tr) === 'reserved');
+  };
+  const todo = mine.filter(isTodo);
+  return {
+    todo,
+    active: mine.filter((tr) => !isTodo(tr) && DEAL_ACTIVE.includes(st(tr))),
+    selling: mine.filter((tr) => !isTodo(tr) && dealRole(tr, uid) === 'seller' && ['listed', 'reserved'].includes(st(tr))),
+    history: mine.filter((tr) => DEAL_DONE.includes(st(tr)) && !(dealRole(tr, uid) === 'buyer' && st(tr) === 'expired')),
+  };
+}
+
+/** ตัวเลขที่คนขายเห็นก่อนกดลงประกาศ (หน้าลงขาย) — ชิ้นที่ขายคิดแบบเดียวกับตอนไฟนอล (splitShare) */
+export function listingPreview(t: PreorderTicket, qty: number, price: number) {
+  const s = qty >= t.qty ? { deposit_paid: t.deposit_paid, remaining_amount: t.remaining_amount, remaining_paid: t.remaining_paid } : splitShare(t, qty).child;
+  const paid = s.deposit_paid + s.remaining_paid;
+  const due = Math.max(0, s.remaining_amount - s.remaining_paid);
+  return { paid, due, total: s.deposit_paid + s.remaining_amount, buyerTotal: price + due, profit: price - paid };
+}
+
+/** ใบนี้ได้มาจากตลาด (ดีลที่ปิดแล้ว ผู้ซื้อ = คนนี้) — ป้าย "🔁 ได้มาจากตลาด" ในกระเป๋า */
+export const boughtFromMarket = (db: Database, t: PreorderTicket, uid: string) =>
+  db.transfers.find((tr) => TRANSFER_DONE.has(tr.status) && tr.to_user_id === uid && (tr.child_ticket_id || tr.ticket_id) === t.id);
+
+/** ร้านยังขายตัวนี้อยู่ไหม — ไม่ = ป้าย "หมดในร้าน" + การ์ดโฮโลบนกระดาน (ของที่คนตามหา) */
+export function soldOutInShop(db: Database, productId: string): boolean {
+  const p = db.products.find((x) => x.id === productId);
+  if (!p) return true;
+  if (p.status === 'open' && !p.is_stock) return false;
+  if (p.is_stock && (p.stock_qty ?? 0) > 0) return false;
+  return !db.batches.some((b) => b.product_id === productId && b.status === 'open' && b.published !== false && b.stock_qty > 0);
+}
+
+/** คิวงานแอดมิน (หน้า /admin/market + badge เมนู + การ์ด /admin/today)
+ *  ready = คนขายยืนยันแล้ว รอไฟนอล · reviewing = รอแอดมินตัดสิน · overdue = โอนแล้วแต่คนขายเงียบเกิน 12 ชม. */
+export function marketQueue(db: Database, now: Date = new Date()) {
+  const live = db.transfers.map((tr) => ({ tr, st: effectiveStatus(tr, now) }));
+  const ready = live.filter((x) => x.st === 'seller_ok' || x.st === 'pending_admin').map((x) => x.tr);
+  const reviewing = live.filter((x) => x.st === 'reviewing').map((x) => x.tr);
+  const overdue = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) <= 0).map((x) => x.tr);
+  const waiting = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) > 0).map((x) => x.tr);
+  return { ready, reviewing, overdue, waiting, jobs: ready.length + reviewing.length + overdue.length };
 }

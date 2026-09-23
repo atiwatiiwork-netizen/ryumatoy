@@ -6,6 +6,7 @@ import { canConvertToInStock, stockRemaining } from './catalog';
 import { orphanUsedGrants } from './coupons';
 import { unmatchedApprovedItems } from './tickets';
 import { needsClose, payOverdue } from './auctions';
+import { marketQueue } from './market';
 
 /**
  * "งานค้างของฉันวันนี้" — รวมงานที่ต้องลงมือ จากทุกโมดูล มาไว้ที่เดียว (2026-07-25).
@@ -62,6 +63,10 @@ export function worklist(db: Database): WorkItem[] {
 
   const rps = db.remainingPayments.filter((r) => r.status === 'pending');
   add({ key: 'rp', urgency: 'now', icon: '💸', title: 'สลิปส่วนต่างรอตรวจ', detail: 'ตรวจแล้วตั๋วจะพร้อมจัดส่ง', count: rps.length, href: '/admin/orders', money: rps.reduce((s, r) => s + (r.amount ?? 0), 0) });
+
+  // ตลาดใบพรี: ผู้ซื้อโอนแล้วรอร้านโอนสิทธิ์ / รอตัดสิน / คนขายเงียบ — ช้า = ผู้ซื้อที่จ่ายเงินแล้วรอเก้อ
+  const mq = marketQueue(db);
+  add({ key: 'market', urgency: 'now', icon: '🎟️', title: 'ตลาดใบพรี รอร้านจัดการ', detail: `รอโอนสิทธิ์ ${mq.ready.length} · ตรวจสอบ ${mq.reviewing.length} · คนขายเงียบ ${mq.overdue.length}`, count: mq.jobs, href: '/admin/market' });
 
   const due = plansDue(db);
   add({ key: 'plans', urgency: 'today', icon: '📅', title: 'นัดชำระถึงกำหนด', detail: 'ลูกค้านัดจ่ายวันนี้/เลยกำหนด — กดเตือนได้', count: due.length, href: '/admin/today', money: due.reduce((s, p) => s + p.amount, 0) });

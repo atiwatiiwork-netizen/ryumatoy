@@ -114,6 +114,32 @@ const config: Config = {
           "0%,100%": { opacity: ".55" },
           "50%": { opacity: "1" },
         },
+        // ── ตลาดใบพรี (2026-09-23) — การ์ดโฮโล/แสงวิ่ง/ตั๋วหล่นเข้ากระเป๋า/ตราประทับเลขใหม่ ──
+        holoMove: {
+          '0%': { backgroundPosition: '0% 50%' },
+          '100%': { backgroundPosition: '200% 50%' },
+        },
+        shineX: {
+          '0%': { transform: 'translateX(-140%) skewX(-18deg)' },
+          '55%,100%': { transform: 'translateX(330%) skewX(-18deg)' },
+        },
+        dropIn: {
+          '0%': { transform: 'translateY(-60px) rotate(-6deg) scale(.92)', opacity: '0' },
+          '70%': { transform: 'translateY(6px) rotate(1deg)', opacity: '1' },
+          '100%': { transform: 'none', opacity: '1' },
+        },
+        stampIn: {
+          '0%': { transform: 'scale(1.8)', opacity: '0' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        riseIn: {
+          '0%': { transform: 'translateY(10px)', opacity: '0' },
+          '100%': { transform: 'none', opacity: '1' },
+        },
+        breath: {
+          '0%,100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '.35', transform: 'scale(.7)' },
+        },
       },
       animation: {
         blink: 'blink 1.1s ease-in-out infinite',
@@ -129,6 +155,12 @@ const config: Config = {
         twinkle: 'twinkle 1.9s ease-in-out infinite',
         couponPop: 'couponPop .55s cubic-bezier(.2,.9,.3,1.25)',
         floatY: 'floatY 3.2s ease-in-out infinite',
+        holoMove: 'holoMove 5.5s linear infinite',
+        shineX: 'shineX 3.4s ease-in-out infinite',
+        dropIn: 'dropIn .8s cubic-bezier(.2,.9,.3,1.25) both',
+        stampIn: 'stampIn .5s cubic-bezier(.2,.9,.3,1.3) both',
+        riseIn: 'riseIn .45s cubic-bezier(.2,.8,.2,1) both',
+        breath: 'breath 1.8s ease-in-out infinite',
       },
     },
   },

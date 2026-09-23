@@ -10,6 +10,7 @@ import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
 import { needsClose } from '@/domain/services/auctions';
+import { marketQueue } from '@/domain/services/market';
 import { pendingRpGroups } from '@/domain/services/payments';
 import { isAdminUser } from '@/domain/services/admins';
 import { monthsToClose, closedMonths, ymLabel, type MonthlySnapshot } from '@/domain/services/monthly';
@@ -134,6 +135,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // ประมูล (v60): หมดเวลาแล้วรอกดสรุปผล + สลิปค่าเข้าสนามรอตรวจ (ไม่มี scheduler — ต้องมีคนกด)
   const auctionJobs = db.auctions.filter((a) => needsClose(a)).length
     + db.auctionEntries.filter((e) => e.status === 'pending').length;
+  // ตลาดใบพรี: รอไฟนอล + รอตรวจสอบ + คนขายเงียบเกิน 12 ชม.
+  const marketJobs = marketQueue(db).jobs;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string };
   const it = (href: string, icon: IconName, label: string, badge?: number, sub?: string): NavItem =>
@@ -163,6 +166,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     { title: 'ลูกค้า', items: [
       it('/admin/members', 'user', 'สมาชิก & Ranks', newMembers + rankReq, 'อนุมัติ + เลื่อนขั้น'),
       it('/admin/tickets', 'qr', 'ตั๋วทั้งหมด', undefined, 'ค้นตั๋ว/ตรวจย้อนหลัง'),
+      it('/admin/market', 'swap', 'ตลาดใบพรี', marketJobs, 'ซื้อขายใบพรี + ลองก่อนเปิด'),
       it('/admin/coupons', 'tag', 'คูปอง & กิจกรรม', undefined, 'ส่วนลด + Event'),
       it('/admin/points', 'verified', 'คะแนนสะสม', undefined, 'พรีวิว + ให้คะแนน'),
     ] },

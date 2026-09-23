@@ -86,7 +86,7 @@ async function call<T = MarketRes>(fn: string, args: Record<string, unknown> = {
   }
 }
 
-export const marketFeed = () => call<{ rows?: MarketRow[] }>('ryuma_market_feed');
+export const marketFeed = () => call<{ rows?: MarketRow[]; closed?: boolean }>('ryuma_market_feed');
 export const marketList = (ticketId: string, qty: number, price: number) => call('ryuma_market_list', { p_ticket_id: ticketId, p_qty: qty, p_price: price });
 export const marketCancel = (id: string) => call('ryuma_market_cancel', { p_id: id });
 export const marketReserve = (id: string) => call('ryuma_market_reserve', { p_id: id });
@@ -101,8 +101,30 @@ export const marketEscalate = (id: string, note?: string) => call('ryuma_market_
 export const marketFinalize = (id: string, orderItemId?: string) => call('ryuma_market_finalize', { p_id: id, p_order_item_id: orderItemId ?? null });
 export const marketAdminCancel = (id: string, reason: string) => call('ryuma_market_admin_cancel', { p_id: id, p_reason: reason });
 
+/**
+ * push ของตลาด — ฝั่งนี้ส่งแค่ (id ดีล, ชนิด) · ปลายทาง+ข้อความตัดสินที่ server (ryuma_market_push_targets v72)
+ * เพราะลูกค้าไม่เห็นเครื่องของคนอื่น (RLS) และตลาดยังปิด = ส่งถึงแอดมินเท่านั้น · best-effort ห้ามทำให้ดีลพัง
+ */
+export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'reviewing' | 'remind' | 'done' | 'sold' | 'cancelled';
+export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
+  if (!supabase) return;
+  try {
+    const token = await Promise.race([
+      supabase.auth.getSession().then((r) => r.data.session?.access_token),
+      new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+    ]);
+    if (!token) return;
+    await fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ market: { id, kind } }),
+    });
+  } catch { /* push ห้ามทำให้ดีลพัง */ }
+}
+
 /** ข้อความไทยของรหัส error — ใช้ร่วมทุกหน้า (ลูกค้า + แอดมิน) */
 export const MARKET_ERR_TH: Record<string, string> = {
+  closed: 'ตลาดใบพรียังไม่เปิด — เร็วๆ นี้',
   no_server: 'ยังไม่ได้ต่อฐานข้อมูล (โหมดพรีวิว)',
   no_rpc: 'ระบบตลาดยังไม่เปิดในฐานข้อมูล — แอดมินต้องรัน migration v71 ก่อน',
   no_session: 'กรุณาเข้าสู่ระบบก่อน',

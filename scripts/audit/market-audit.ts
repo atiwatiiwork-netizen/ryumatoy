@@ -13,7 +13,10 @@ import { unmatchedApprovedItems, hasPreorderTicket, ticketPayer } from '../../sr
 import { userTakenInBatch } from '../../src/domain/services/reservations';
 import { qualifyingCount } from '../../src/domain/services/campaigns';
 import { missionStateFor } from '../../src/domain/services/missions';
-import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason } from '../../src/domain/services/market';
+import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket } from '../../src/domain/services/market';
+import { crc16ccitt, promptPayPayload, promptPayTarget } from '../../src/lib/promptpay';
+import { ticketSelectable } from '../../src/domain/services/payments';
+import { setMarketPublic, setPayoutInfo } from '../../src/data/mutations';
 import type { Database, PreorderTicket, Order, TicketTransfer, Campaign } from '../../src/domain/entities';
 
 let pass = 0, fail = 0;
@@ -285,6 +288,38 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const db = structuredClone(SEED_DATABASE);
   ok('L1 seed: ไม่มีตั๋วใบไหน owner ≠ คนสั่ง', db.tickets.every((t) => ticketPayer(t) === t.owner_id));
   ok('L2 seed: ประกาศที่ยังไม่ปิดการขายไม่กระทบตัวกู้ตั๋ว', unmatchedApprovedItems(db, undefined, 0).length === unmatchedApprovedItems({ ...db, transfers: [] }, undefined, 0).length);
+}
+
+// ── M) เฟส 1: QR พร้อมเพย์ · คิวแอดมิน · ดีลของฉัน · ตัวเลขหน้าลงขาย · สวิตช์ ─────────────────
+{
+  ok('M1 CRC16-CCITT มาตรฐาน ("123456789" → 29B1)', crc16ccitt('123456789') === '29B1');
+  const p = promptPayPayload('081-234-5678', 650)!;
+  ok('M2 payload มือถือ: 0066 + 9 หลัก · QR ครั้งเดียว (12) · ยอด 650.00 · CRC ท้าย', !!p && p.startsWith('000201010212') && p.includes('0113' + '0066812345678') && p.includes('5406650.00') && p.slice(-8, -4) === '6304' && crc16ccitt(p.slice(0, -4)) === p.slice(-4), p);
+  ok('M3 เลขบัตร 13 หลัก = tag 02 · ไม่ใส่ยอด = QR ใช้ซ้ำ (11)', (promptPayPayload('1234567890123') ?? '').includes('02131234567890123') && (promptPayPayload('1234567890123') ?? '').startsWith('000201010211'));
+  ok('M4 เบอร์ผิดรูป = null (โชว์เลขบัญชีแทน)', promptPayPayload('12345') === null && promptPayTarget('02-123-4567') === null);
+
+  let db = structuredClone(base);
+  const a = orderTicket(db, S, { status: 'arrived' }), b = orderTicket(db, S, { status: 'arrived' }), c = orderTicket(db, S), d = orderTicket(db, S);
+  db.transfers.push(
+    listing(a, { status: 'seller_ok', to_user_id: B, paid_at: iso(-2 * H), seller_confirmed_at: iso(-H) }),
+    listing(b, { status: 'paid', to_user_id: B, paid_at: iso(-13 * H), slip_url: 'https://x/s.jpg' }),
+    listing(c, { status: 'paid', to_user_id: C, paid_at: iso(-1 * H), slip_url: 'https://x/s2.jpg' }),
+    listing(d, { status: 'reviewing', to_user_id: B, review_reason: 'not_received' }),
+  );
+  const q = marketQueue(db);
+  ok('M5 คิวแอดมิน: พร้อมโอน 1 · ตรวจสอบ 1 · เงียบเกิน 12 ชม. 1 · รอในเวลา 1 · งาน 3', q.ready.length === 1 && q.reviewing.length === 1 && q.overdue.length === 1 && q.waiting.length === 1 && q.jobs === 3, q);
+  const dealsS = myDeals(db, S), dealsB = myDeals(db, B);
+  ok('M6 ดีลของคนขาย: ต้องทำ = เงินเข้ารอยืนยัน 2 ใบ', dealsS.todo.length === 2 && dealsS.todo.every((x) => x.status === 'paid'), dealsS.todo.map((x) => x.status));
+  ok('M7 ดีลของผู้ซื้อ: กำลังดำเนินการ 3 · ไม่มีงานต้องทำ', dealsB.todo.length === 0 && dealsB.active.length === 3, [dealsB.todo.length, dealsB.active.length]);
+  const pv = listingPreview({ ...a, qty: 3, deposit_paid: 900, remaining_amount: 4170, remaining_paid: 1000 } as PreorderTicket, 1, 650);
+  ok('M8 หน้าลงขาย: ขาย 1 จาก 3 → จ่ายแล้ว 633 · ค้างร้าน 1057 · ผู้ซื้อจ่ายรวม 1707 · กำไร 17', pv.paid === 633 && pv.due === 1057 && pv.buyerTotal === 1707 && pv.profit === 17, pv);
+  ok('M9 ใบที่ลงขายอยู่ เลือกจ่ายรวมหลายใบไม่ได้ (ticketSelectable)', !ticketSelectable(db, { ...a, product_status: 'arrived' }) && ticketSelectable({ ...db, transfers: [] }, { ...a, product_status: 'arrived' }));
+  ok('M10 สวิตช์ตลาด: ไม่มีแถว = ปิด · เปิดแล้ว = เปิด', !marketPublicEnabled(db) && marketPublicEnabled(setMarketPublic(true)(db)) && !marketPublicEnabled(setMarketPublic(false)(setMarketPublic(true)(db))));
+  db = simulateFinalize(db, db.transfers[0].id);
+  ok('M11 ป้าย "ได้มาจากตลาด" เฉพาะผู้ซื้อของใบนั้น', !!boughtFromMarket(db, db.tickets.find((x) => x.id === a.id)!, B) && !boughtFromMarket(db, db.tickets.find((x) => x.id === b.id)!, B));
+  const pay = setPayoutInfo(S, { promptpay: '081-234-5678', account_name: '  สมชาย ใจดี ' })(base);
+  ok('M12 บัญชีรับเงิน: เก็บเฉพาะตัวเลข + ตัดช่องว่าง · ไม่มีชื่อ = ไม่บันทึก', pay.users.find((u) => u.id === S)?.payout_info?.promptpay === '0812345678' && pay.users.find((u) => u.id === S)?.payout_info?.account_name === 'สมชาย ใจดี'
+    && setPayoutInfo(S, { promptpay: '0812345678', account_name: ' ' })(base) === base);
 }
 
 console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);
