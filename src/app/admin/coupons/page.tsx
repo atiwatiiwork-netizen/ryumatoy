@@ -79,8 +79,9 @@ function CreateForm() {
   const pts = kind === 'points';
 
   const submit = () => {
-    const v = Number(value) || 0;
-    if (!label.trim() || v <= 0) { flash(pts ? 'กรอกชื่อ + จำนวนแต้ม' : 'กรอกชื่อคูปอง + จำนวนเงิน'); return; }
+    // จำนวนเต็มเท่านั้น (audit 2026-09-23: 0.5 → แถวแต้ม 0 → DB ปฏิเสธ → เซฟสมุดคะแนนล้มทั้งก้อน)
+    const v = Math.floor(Number(value) || 0);
+    if (!label.trim() || v < 1) { flash(pts ? 'กรอกชื่อ + จำนวนแต้ม (จำนวนเต็ม ≥ 1)' : 'กรอกชื่อคูปอง + จำนวนเงิน (จำนวนเต็ม ≥ 1)'); return; }
     if (!pts && targetKind === 'product' && !targetProduct) { flash('เลือกสินค้าที่จะเจาะจง หรือเปลี่ยนเป็น "ทุกสินค้า"'); return; }
     if (!pts && targetKind === 'maker' && !targetMaker) { flash('เลือกค่ายที่จะเจาะจง หรือเปลี่ยนเป็น "ทุกสินค้า"'); return; }
     dispatch(createCoupon(pts

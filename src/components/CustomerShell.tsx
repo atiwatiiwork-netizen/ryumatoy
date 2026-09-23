@@ -18,6 +18,7 @@ import { cx } from './ui';
 import { PreviewSwitcher } from './PreviewSwitcher';
 import { RankCongrats } from './RankModals';
 import { CouponReceived } from './CouponTicket';
+import { PointsLaunchNotice } from './PointsLaunchNotice';
 import { ProfileGate } from './ProfileGate';
 import { OnboardGate } from './OnboardGate';
 import { InstallBellNudge } from './InstallBellNudge';
@@ -209,6 +210,8 @@ export function CustomerShell({ children }: { children: ReactNode }) {
       <PreviewSwitcher />
       <RankCongrats />
       <CouponReceived />
+      {/* ประกาศเปิดระบบคะแนน (ครั้งเดียว) — z สูงกว่าป๊อปอัปคูปอง/ยศ ปิดแล้วค่อยเห็นอันที่อยู่ข้างล่าง */}
+      <PointsLaunchNotice />
       <ProfileGate />
       {CURRENT_USER_ID && <InstallBellNudge userId={CURRENT_USER_ID} />}
     </div>

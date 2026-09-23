@@ -1,7 +1,7 @@
 import type { Database, OrderItem, PointLedgerEntry, PreorderTicket, ShopSettings } from '../entities';
 import { ticketPaid, ticketDue, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
-import { isAdminUser } from './admins';
+import { isAdminUser, isStaffAccount } from './admins';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -87,17 +87,28 @@ export const ticketClosed = (t: PreorderTicket) => ticketDue(t) === 0 && ticketP
 /** ตั๋วใบนี้เข้าเกณฑ์ได้คะแนนไหม (ไม่ดูว่าเคยได้แล้วหรือยัง) — ตัวชี้ขาดตัวเดียว */
 export function ticketEarnEligible(db: Database, t: PreorderTicket): { ok: boolean; why?: string } {
   if (!ticketClosed(t)) return { ok: false, why: 'ยังไม่ปิดยอด' };
-  if (isSourcingTicket(db, t)) return { ok: false, why: 'ตั๋วหาของ (ไม่ให้เฟสนี้)' };
+  const block = ticketEarnBlock(db, t);
+  return block ? { ok: false, why: block } : { ok: true };
+}
+
+/** เหตุที่ตั๋ว "ไม่มีสิทธิ์ได้คะแนนเลย" (ไม่ดูว่าปิดยอดหรือยัง) — null = มีสิทธิ์
+ *  ใช้ทั้งตอนให้ (ticketEarnEligible) และตอนเปิดตัวดึงแต้มที่เคยให้ผิดกติกาคืน (launchCorrectionRows) */
+export function ticketEarnBlock(db: Database, t: PreorderTicket): string | null {
+  // สถานะที่ยังไม่ใช่ตั๋วจริง / ย้ายมือไปแล้ว (audit 2026-09-23)
+  if (t.status === 'pending_approval' || t.status === 'transferred') return 'สถานะตั๋วไม่เข้าเกณฑ์';
+  // บัญชีทีมงาน/แอดมิน — ตั๋วทดสอบไม่ควรพองหนี้คะแนนร้าน
+  if (isStaffAccount(db, t.owner_id)) return 'บัญชีแอดมิน/ทีมงาน';
+  if (isSourcingTicket(db, t)) return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
   // ออเดอร์ที่เป็นตัวจ่ายค่าประมูล (v61) — คะแนนประมูลค่อยว่ากันเฟสหน้า
   if (t.id.startsWith('t-')) {
     const itemId = t.id.slice(2);
     const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
-    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return { ok: false, why: 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)' };
+    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
   } else {
     const order = orderOfTicket(db, t);
-    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return { ok: false, why: 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)' };
+    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
   }
-  return { ok: true };
+  return null;
 }
 
 /** คะแนนที่ตั๋วใบนี้ "ควรได้" ตอนนี้ — 0 ถ้าไม่เข้าเกณฑ์/ยังไม่ปิดยอด */
@@ -325,4 +336,57 @@ export function couponRewardRow(grant: { id: string; user_id: string; granted_at
     created_by: actorId,
     created_at: grant.granted_at,
   };
+}
+
+// ── ประกาศเปิดระบบ (เจ้าของ 2026-09-23: "ตอนเปิดครั้งแรก มีแจ้งเตือน → ระบบคะแนนเปิดแล้ว คะแนนของคุณคือ xx") ──
+/** app_config 'points_launch' → { at, by } — ตั้งครั้งแรกที่กดเปิดตัว (ไม่ทับ) · ป๊อปอัปลูกค้าโชว์ครั้งเดียวต่อ at */
+export const POINTS_LAUNCH_KEY = 'points_launch';
+export function pointsLaunchInfo(db: Database): { at: string; by?: string } | null {
+  const v = db.appConfig.find((c) => c.key === POINTS_LAUNCH_KEY)?.value as { at?: unknown; by?: unknown } | undefined;
+  return typeof v?.at === 'string' ? { at: v.at, by: typeof v.by === 'string' ? v.by : undefined } : null;
+}
+/** ใบที่ได้คะแนนแล้ว (หักใบที่ถูกลบ) — ใช้ในข้อความ "จากใบพรีที่ปิดแล้ว n ใบ" */
+export function earnedTicketCount(db: Database, userId: string): number {
+  const mine = db.pointLedger.filter((e) => e.user_id === userId);
+  return Math.max(0, mine.filter((e) => e.kind === 'earn_ticket').length - mine.filter((e) => e.kind === 'reverse_ticket').length);
+}
+/** ข้อความประกาศเปิดระบบ — ตัวเดียวที่ป๊อปอัปลูกค้า / push / พรีวิวแอดมินใช้ (ห้ามเขียนข้อความซ้ำที่อื่น) */
+export function launchNotice(db: Database, userId: string): { balance: number; tickets: number; rate: number; canRedeem: boolean; title: string; body: string; url: string } {
+  const balance = balanceOf(db, userId);
+  const tickets = earnedTicketCount(db, userId);
+  const rate = pointsRates(db.settings).pre;
+  const canRedeem = redeemEnabled(db);
+  const title = '⭐ ระบบคะแนนสะสมเปิดแล้ว!';
+  const body = balance > 0
+    ? `คะแนนของคุณคือ ${balance.toLocaleString('en-US')} แต้ม${tickets > 0 ? ` (จากใบพรีที่ปิดแล้ว ${tickets} ใบ)` : ''} — แตะดูประวัติและวิธีสะสม`
+    : `เริ่มสะสมได้แล้ว — ปิดใบพรีรับ +${rate} แต้ม/ใบ`;
+  return { balance, tickets, rate, canRedeem, title, body, url: '/points' };
+}
+
+/** แถว "ดึงคืน" ตอนเปิดตัว (audit 2026-09-23): แต้มที่เคยให้ไปก่อนเปิดตัวแต่ผิดกติกาเปิดตัว —
+ *  ของพร้อมส่งที่ได้ 30 ช่วงพรีวิว (อัตราตอนนี้ = 0) / บัญชีแอดมิน / ตั๋วหาของ / ตั๋วที่ถูกลบไปแล้วแต่แต้มยังอยู่
+ *  id = pl-rev-<ticketId> (ตัวเดียวกับตอนลบตั๋ว) → เรียกซ้ำไม่ดึงซ้ำ */
+export function launchCorrectionRows(db: Database, actorId?: string): PointLedgerEntry[] {
+  const out: PointLedgerEntry[] = [];
+  for (const e of db.pointLedger) {
+    if (e.kind !== 'earn_ticket' || !e.ref_id) continue;
+    const t = db.tickets.find((x) => x.id === e.ref_id);
+    const why = !t ? 'ตั๋วถูกลบไปแล้ว' : rawPointsForTicket(db, t) === 0 ? 'ยังไม่ให้คะแนนของพร้อมส่ง' : ticketEarnBlock(db, t);
+    if (!why) continue;
+    const r = reverseRowForTicket(db, e.ref_id, { actorId, note: `ปรับตอนเปิดตัว — ${why} (${e.note ?? e.ref_id})` });
+    if (r && !out.some((x) => x.id === r.id)) out.push(r);
+  }
+  return out;
+}
+
+/** แต้มที่ "ใช้ได้จริง" ของสลิป/ออเดอร์นี้ตอนอนุมัติ (audit 2026-09-23): เชื่อ points_redeemed เฉพาะเมื่อ DB จองแต้มไว้จริง
+ *  (มีแถว pl-redeem-<id> ยอดตรง) และยังไม่ถูกคืน (ไม่มี pl-refund-<id>) — กันสลิปที่ถูกปฏิเสธแล้วส่งซ้ำด้วย id เดิม
+ *  (แถวจองเดิมถูก "do nothing" = ไม่หักแต้ม แต่หนี้ลด) / แถวที่ยิงเข้ามาเองโดยไม่ผ่าน trigger */
+export function heldPointsFor(db: Database, rowId: string, requested: number | undefined): number {
+  const want = Math.max(0, Math.trunc(requested ?? 0));
+  if (want <= 0) return 0;
+  const hold = db.pointLedger.find((e) => e.id === redeemHoldId(rowId));
+  if (!hold || hold.delta !== -want) return 0;
+  if (db.pointLedger.some((e) => e.id === refundId(rowId))) return 0;
+  return want;
 }

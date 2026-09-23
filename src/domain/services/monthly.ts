@@ -1,6 +1,7 @@
 import type { Database, PointLedgerEntry, PreorderTicket } from '../entities';
 import { isSourcingTicket, ticketDue } from './money';
 import { ticketIsPre } from './points';
+import { isStaffAccount } from './admins';
 import { ymOf } from './analytics';
 
 /**
@@ -76,6 +77,7 @@ export const ymShort = (ym: string) => {
 /** ตั๋วใบนี้นับเข้า "ใบพรี" ของเดือนไหม */
 export function countsForMonthly(db: Database, cfg: MonthlyConfig, t: PreorderTicket): boolean {
   if (isSourcingTicket(db, t)) return false;
+  if (isStaffAccount(db, ticketBuyer(t))) return false; // บัญชีแอดมิน/ทีมงานไม่ติดยศ (กติกาเดียวกับคะแนน)
   if (cfg.count === 'pre' && !ticketIsPre(db, t)) return false; // ใบพรี = พรีปกติ + รอบพิเศษ (points.ts ตัวเดียว)
   return true;
 }

@@ -148,16 +148,21 @@ export const supabaseAdapter: PersistenceAdapter = {
         fetchAll(sb, 'auction_bids'),
         fetchAll(sb, 'auction_watch'),
         fetchAll(sb, 'auction_entries'),
-        // คะแนนสะสม (v66) — ยังไม่รัน migration = ตารางไม่มี → degrade เป็น [] (ไม่อยู่ใน fatal list)
+        // คะแนนสะสม (v66 รันแล้ว) — อยู่ใน fatal list: ว่างเพราะโหลดพัง = ให้/ดึงแต้มผิด
         fetchAll(sb, 'point_ledger'),
         fetchAll(sb, 'shop_settings'),
       ]);
 
-    // coupon_grants / campaigns / campaign_awards are intentionally NOT in this fatal list: before
-    // their migration runs the tables don't exist, and a missing/errored coupon/event table must
-    // degrade to "no coupons / no events" — never break the whole app load (the UI just no-ops until
-    // the migration is applied).
-    const results = [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings];
+    // Fatal = a failed load aborts (the store keeps its last good data and retries) instead of silently
+    // loading []. coupon_grants / campaigns / campaign_awards / sourcing / app_config / point_ledger joined
+    // this list 2026-09-23 — their migrations (v38/v41/v44/v66) are live, and an EMPTY copy of any of them
+    // makes the admin session re-grant rewards or mis-award points. Tables whose migration may not have
+    // run yet (auctions, mission_submissions, payment_plans, …) stay non-fatal.
+    const results = [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, rankTiers, paymentAccounts, settings,
+      // ⚠ ตารางที่ migration รันบน production แล้ว และ "ว่างเพราะโหลดพัง" อันตรายกว่า "โหลดไม่ขึ้น" (audit 2026-09-23):
+      //   point_ledger ว่าง → ลบตั๋วไม่ดึงแต้มคืน / เปิดตัวให้แต้มซ้ำ · sourcing_requests ว่าง → ตั๋วหาของได้แต้ม
+      //   campaign_awards / coupon_grants ว่าง → แจกรางวัล Event ซ้ำ · app_config ว่าง → ปิดเดือนเขียนทับ snapshot เดือนเก่า
+      couponGrants, campaigns, campaignAwards, sourcingRequests, appConfig, pointLedger];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 

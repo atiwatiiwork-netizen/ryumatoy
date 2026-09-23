@@ -69,7 +69,7 @@ export default function AdminEventsPage() {
     if (!draft.name.trim()) return flash('กรอกชื่อกิจกรรม');
     if (draft.ends_at < draft.starts_at) return flash('วันสิ้นสุดต้องไม่ก่อนวันเริ่ม');
     const tiers: CampaignTier[] = draft.tiers
-      .map((t) => ({ threshold: Number(t.threshold) || 0, coupon_value: Number(t.coupon_value) || 0, coupon_count: Number(t.coupon_count) || 0 }))
+      .map((t) => ({ threshold: Math.floor(Number(t.threshold) || 0), coupon_value: Math.floor(Number(t.coupon_value) || 0), coupon_count: Math.floor(Number(t.coupon_count) || 0) }))
       .filter((t) => t.threshold > 0 && t.coupon_value > 0 && t.coupon_count > 0)
       .sort((a, b) => a.threshold - b.threshold);
     if (tiers.length === 0) return flash('ใส่ชั้นรางวัลอย่างน้อย 1 ชั้น (ครบกี่ใบ / คูปองกี่บาท / กี่ใบ)');

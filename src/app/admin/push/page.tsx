@@ -23,6 +23,7 @@ const TRIGGERS: { key: string; emoji: string; name: string; target: string; note
   { key: 'rp_approved', emoji: '💚', name: 'รับยอดส่วนต่าง (จ่ายครบ)', target: 'เจ้าของตั๋ว' },
   { key: 'parcel', emoji: '📮', name: 'พัสดุจัดส่ง + Tracking', target: 'เจ้าของตั๋ว' },
   { key: 'coupon_grant', emoji: '🎟️', name: 'แอดมินมอบคูปอง', target: 'ผู้รับ (เฉพาะคนได้ใบใหม่จริง)' },
+  { key: 'points_launch', emoji: '⭐', name: 'ประกาศเปิดระบบคะแนน (บอกแต้มของแต่ละคน)', target: 'ลูกค้าที่เปิดกระดิ่ง', note: 'ยิงครั้งเดียวตอนแอดมินกด 🚀 เปิดตัวที่ /admin/points (ติ๊กเลือกได้)' },
   { key: 'sourcing_new', emoji: '🔎', name: 'มีเรื่องหาของใหม่ / ส่งเช็คซ้ำ', target: 'เครื่องแอดมิน' },
   { key: 'sourcing_paid', emoji: '💸', name: 'มัดจำหาของเข้า', target: 'เครื่องแอดมิน' },
   { key: 'sourcing_quoted', emoji: '💡', name: 'ตอบราคาหาของ', target: 'เจ้าของเรื่อง' },

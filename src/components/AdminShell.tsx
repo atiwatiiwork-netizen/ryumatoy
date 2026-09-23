@@ -3,7 +3,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useReady } from '@/state/DataProvider';
 import { useAuth, canLogin, useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
@@ -13,7 +13,8 @@ import { needsClose } from '@/domain/services/auctions';
 import { pendingRpGroups } from '@/domain/services/payments';
 import { isAdminUser } from '@/domain/services/admins';
 import { monthsToClose, closedMonths, ymLabel, type MonthlySnapshot } from '@/domain/services/monthly';
-import { markPlanReminded, closeMonth } from '@/data/mutations';
+import { markPlanReminded, closeMonth, mintPointsForTickets } from '@/data/mutations';
+import { pointsLaunchInfo, ticketsMissingEarn } from '@/domain/services/points';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
@@ -95,6 +96,24 @@ export function AdminShell({ children }: { children: ReactNode }) {
       flash("ปิดเดือน " + months.map(ymLabel).join(", ") + " แล้ว 🏆");
     })();
   }, [db, isAdmin, adminId, flash]);
+
+  // คะแนนตกหล่น (audit 2026-09-23): ตั๋วที่ปิดยอดทางที่ไม่ได้มินต์ (แก้มัดจำจนครบ / มอบตั๋วรอบพิเศษที่จ่ายครบ /
+  // ซ่อมตั๋ว / เครื่องแอดมินอีกเครื่องที่ยังไม่รู้ว่าเปิดระบบ) → ให้อัตโนมัติในเซสชันแอดมิน (RLS เขียนสมุดได้)
+  // เฉพาะหลังเปิดตัว + ข้อมูลจริงโหลดแล้ว · id ผูกตั๋ว = ไม่ให้ซ้ำ · หน่วง 5 วิ ให้ข้อมูลนิ่งก่อน
+  const ready = useReady();
+  const sweepRef = useRef(false);
+  useEffect(() => {
+    if (!ready || sweepRef.current || !isAdminUser(db, adminId)) return;
+    if (!db.settings.points_enabled || !pointsLaunchInfo(db)) return;
+    const ids = ticketsMissingEarn(db).map((t) => t.id);
+    if (!ids.length) return;
+    sweepRef.current = true;
+    const timer = setTimeout(() => {
+      store.update(mintPointsForTickets(ids, adminId || 'system'));
+      void store.flush().finally(() => { sweepRef.current = false; });
+    }, 5000);
+    return () => { clearTimeout(timer); sweepRef.current = false; };
+  }, [db, ready, adminId]);
 
   // Wait for the session restore before deciding lock-vs-admin — otherwise every resume/reload flashes
   // the Facebook login screen (isLoggedIn is momentarily false), and a stalled getSession would strand

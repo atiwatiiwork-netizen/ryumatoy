@@ -4,9 +4,12 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag } from '@/domain/services/points';
+import type { Database } from '@/domain/entities';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
 import { isAdminUser } from '@/domain/services/admins';
+import { activeCampaign } from '@/domain/services/campaigns';
+import { missionLive } from '@/domain/services/missions';
 import { ticketDue } from '@/domain/services/money';
 import { productLabel } from '@/domain/services/catalog';
 
@@ -25,12 +28,15 @@ const num = (n: number) => n.toLocaleString('en-US');
  * เปิดตัว (เจ้าของ 2026-09-12 ค่ำ): โชว์แต้มจากใบพรีที่ปิดแล้ว (อัตราพร้อมส่ง = 0 → ซ่อนบรรทัดพร้อมส่ง) · สวิตช์ใช้แต้มยังปิด → "แลกใช้ได้: เร็วๆ นี้"
  * ธีม: Elden Ring แดง-ทอง-ดำ (eldenReveal / lineGrow / goldShine / ember / tierGlow) · ปิดเมื่อ reduced-motion
  */
-export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
+export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride }: {
   userId: string;
   mode?: 'live' | 'preview';
   simulateEnabled?: boolean;
+  /** พรีวิวแอดมิน "หลังกดเปิดตัว": ส่ง db จำลอง (launchPointsPreOnly บนสำเนา) → เห็นแต้มย้อนหลังจริงของลูกค้าคนนั้น */
+  dbOverride?: Database;
 }) {
-  const db = useDatabase();
+  const liveDb = useDatabase();
+  const db = dbOverride ?? liveDb;
   const uid = userId;
   const s = db.settings;
   const rate = pointsRates(s);
@@ -39,7 +45,8 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const enabled = simulating ? true : s.points_enabled;
   const visible = mode === 'preview' ? enabled : pointsVisibleTo(db, uid);
   // สวิตช์ 2 "ใช้แต้มตัดยอด" (เจ้าของ 2026-09-12 ค่ำ): เปิดตัวแบบโชว์แต้มก่อน → ส่วน "แลกใช้ได้" บอกว่าเร็วๆ นี้
-  const canRedeem = simulating ? true : redeemEnabled(db);
+  // พรีวิวต้องตรงความจริง (เจ้าของ 2026-09-23 "ลูกค้าจะเห็นยังไง"): จำลองว่าเปิดระบบ ≠ เปิดใช้แต้ม → ดูสวิตช์ใช้แต้มจริง
+  const canRedeem = simulating ? redeemFlag(db) : redeemEnabled(db);
   const adminPreview = mode === 'live' && isAdminUser(db, uid);
 
   const balance = balanceOf(db, uid);
@@ -53,6 +60,14 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
   const latest = latestRankOf(db, uid);
   const rewardTickets = latest ? latest.snap.tickets.map((id) => db.tickets.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t) : [];
   const showMonthly = mcfg.enabled || adminPreview || simulating;
+  // "รางวัลสะสม" บอกเฉพาะทางที่ให้แต้มจริงตอนนี้ (audit 2026-09-23: Event/ภารกิจที่ยังแจกคูปองบาท ห้ามบอกว่าได้แต้ม)
+  const liveEvent = activeCampaign(db);
+  const liveMission = missionLive(db);
+  const rewardSources = [
+    liveEvent?.reward_scope === 'points' ? `Event ${liveEvent.name}` : null,
+    liveMission && db.coupons.find((c) => c.id === liveMission.reward_coupon_id)?.scope === 'points' ? 'ภารกิจ' : null,
+    'คูปองแต้มจากร้าน',
+  ].filter(Boolean).join(' / ');
 
   const pending = db.tickets
     .filter((t) => t.owner_id === uid && ticketDue(t) > 0 && ticketEarnEligible(db, { ...t, remaining_paid: t.remaining_amount }).ok)
@@ -183,8 +198,8 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2"><span className="w-5 text-center">📝</span><span className="flex-1">ปิดใบพรี (จ่ายส่วนต่างครบ)</span><b className="text-[#f1d27a]">+{rate.pre} คะแนน/ใบ</b></div>
           {rate.instock > 0 && <div className="flex items-center gap-2"><span className="w-5 text-center">🛒</span><span className="flex-1">ซื้อของพร้อมส่ง</span><b className="text-[#f1d27a]">+{rate.instock} คะแนน/ใบ</b></div>}
-          <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — ส่วนลดตอนปิดใบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `${num(sharePerPiece(t))}/ใบ`).join(' · ')}</b></div>
-          <div className="flex items-center gap-2"><span className="w-5 text-center">🎁</span><span className="flex-1">รางวัลสะสม — Event พรีครบ / ภารกิจ / คูปองแต้มจากร้าน</span><b className="text-[#f1d27a]">เข้าแต้มทันที</b></div>
+          {showMonthly && <div className="flex items-center gap-2"><span className="w-5 text-center">🏆</span><span className="flex-1">รางวัลประจำเดือน — ส่วนลดตอนปิดใบตามยศ</span><b className="text-[#f1d27a]">{mcfg.tiers.map((t) => `${num(sharePerPiece(t))}/ใบ`).join(' · ')}</b></div>}
+          <div className="flex items-center gap-2"><span className="w-5 text-center">🎁</span><span className="flex-1">รางวัลสะสม — {rewardSources}</span><b className="text-[#f1d27a]">เข้าแต้มทันที</b></div>
           <div className="mt-1 text-[11px] text-ink-faint">1 คะแนน = 1฿ · {canRedeem ? 'ใช้ลดได้' : 'เร็วๆ นี้ใช้ลดได้'}ตอนปิดใบพรี (สูงสุด {num(rules.pre.cap)}/ใบ) และซื้อของพร้อมส่ง (สูงสุด {num(rules.instock.cap)}/ครั้ง) · ครั้งละอย่างน้อย {rules.pre.min}{!canRedeem && ' — ร้านจะประกาศวันเปิดใช้แต้มอีกครั้ง'}</div>
         </div>
       </div>
@@ -251,7 +266,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled }: {
 }
 
 /** ถ่านไฟลอย (ember) — ตำแหน่ง/ดีเลย์คงที่จาก index (กัน hydration mismatch) */
-function Embers({ count }: { count: number }) {
+export function Embers({ count }: { count: number }) {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden motion-reduce:hidden" aria-hidden>
       {Array.from({ length: count }).map((_, i) => {
@@ -269,6 +284,6 @@ function Embers({ count }: { count: number }) {
   );
 }
 
-function Rune({ className }: { className: string }) {
+export function Rune({ className }: { className: string }) {
   return <span aria-hidden className={cx('pointer-events-none absolute text-[10px] text-[#d4af37]/70 motion-safe:animate-runePulse', className)}>✦</span>;
 }

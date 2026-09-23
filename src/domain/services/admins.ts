@@ -24,3 +24,11 @@ export function isAdminUser(db: Database, userId: string): boolean {
   if (userId && adminIds().includes(userId)) return true;
   return db.users.find((u) => u.id === userId)?.is_admin === true;
 }
+
+/** บัญชีทีมงาน/แอดมิน "จริง" (ไม่สนโหมด seed) — ใช้ตัดสิทธิ์รางวัลลูกค้า เช่น คะแนนสะสม (audit 2026-09-23:
+ *  ตั๋วทดสอบของแอดมินได้แต้มแล้วไปพองหนี้คะแนนร้าน) · ต่างจาก isAdminUser ที่เปิดทุกคนในโหมด seed */
+export function isStaffAccount(db: Database, userId: string): boolean {
+  if (!userId) return false;
+  if (userId === 'u-admin' || adminIds().includes(userId)) return true;
+  return db.users.find((u) => u.id === userId)?.is_admin === true;
+}

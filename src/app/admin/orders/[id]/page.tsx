@@ -15,6 +15,7 @@ import { franchiseOf, productLabel } from '@/domain/services/catalog';
 import { nextTicketNo, ticketPrefixCounts } from '@/domain/services/tickets';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { store } from '@/data/store';
+import { heldPointsFor } from '@/domain/services/points';
 
 export default function SlipApprovalPage() {
   const { id } = useParams<{ id: string }>();
@@ -130,7 +131,7 @@ export default function SlipApprovalPage() {
             <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.06] px-4 text-center text-[#c4b5fd]">
               <Icon name="verified" size={30} />
               <div className="mt-2 text-sm font-bold">💎 ไม่ต้องโอน</div>
-              <div className="mt-1 text-[12px] text-ink-muted2">{order.coupon_grant_id ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · มัดจำ 0 บาท'}<br />ไม่มีสลิปเป็นเรื่องปกติ — กด "อนุมัติ" เพื่อออกตั๋วได้เลย</div>
+              <div className="mt-1 text-[12px] text-ink-muted2">{(order.points_redeemed ?? 0) > 0 ? `คูปอง/แต้ม (−${baht(order.points_redeemed ?? 0)}) ครอบคลุมเต็มจำนวน` : order.coupon_grant_id ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · มัดจำ 0 บาท'}<br />ไม่มีสลิปเป็นเรื่องปกติ — กด "อนุมัติ" เพื่อออกตั๋วได้เลย</div>
             </div>
           ) : (
             <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-subtle text-ink-faint">
@@ -180,6 +181,14 @@ export default function SlipApprovalPage() {
           </div>
 
           <div className="mb-3 rounded-xl bg-surface-3 p-3.5">
+            {(order.coupon_discount ?? 0) > 0 && <div className="mb-1 flex justify-between text-[12.5px] text-[#4ade80]"><span>คูปองส่วนลด</span><span>−{baht(order.coupon_discount ?? 0)}</span></div>}
+            {/* แต้มที่ลูกค้าใช้ (v67) — แอดมินต้องเห็นก่อนอนุมัติ + เตือนถ้า DB ไม่ได้จองแต้มจริง (audit 2026-09-23) */}
+            {(order.points_redeemed ?? 0) > 0 && (
+              <div className="mb-1 flex justify-between text-[12.5px] font-bold text-[#f1d27a]">
+                <span>⭐ ใช้แต้ม{heldPointsFor(db, order.id, order.points_redeemed) === 0 && <span className="text-[#f87171]"> · ⚠ แต้มไม่ได้ถูกจองจริง — อย่าอนุมัติ</span>}</span>
+                <span>−{baht(order.points_redeemed ?? 0)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm"><span className="font-bold">ยอดที่ต้องได้รับ</span><span className="font-extrabold text-primary-soft">{baht(order.total_deposit)}</span></div>
           </div>
 

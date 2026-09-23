@@ -18,6 +18,7 @@ import { cx } from '@/components/ui';
 import { store } from '@/data/store';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { pendingRpGroups, type RpGroup } from '@/domain/services/payments';
+import { heldPointsFor } from '@/domain/services/points';
 import type { PreorderTicket, RemainingPayment } from '@/domain/entities';
 
 /** ศูนย์การเงินออเดอร์: สลิปมัดจำ + ส่วนต่าง + รอถึงไทย. งานจัดส่งทั้งหมดย้ายไปแท็บ "จัดส่ง"
@@ -126,7 +127,7 @@ export default function OrdersHubPage() {
                 <div className="grid h-[52px] w-[42px] place-items-center rounded-lg bg-stripe"><Icon name="copy" size={17} className="text-ink-faint" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{userName(o.user_id)}</div>
-                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}
+                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}{(o.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> · ⭐ ใช้แต้ม −{baht(o.points_redeemed ?? 0)}{heldPointsFor(db, o.id, o.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ แต้มไม่ได้ถูกจองจริง — อย่าอนุมัติ</span>}</span> : null}
                     {/* ออเดอร์ 0 บาท (Diamond/คูปองคลุมเต็ม) ไม่มีสลิปโดยธรรมชาติ — ป้ายกันเข้าใจผิดว่าเป็นขยะแล้วกดปฏิเสธ (เคสจริง 2026-09-03) */}
                     {(o.total_deposit ?? 0) <= 0 && <span className="ml-1 rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-bold text-[#c4b5fd]">💎 ไม่ต้องโอน · กดยืนยันได้เลย</span>}
                   </div>
@@ -293,6 +294,7 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
   userName: (uid: string) => string; ticketOf: (tid: string) => PreorderTicket | undefined; nameOf: (t: PreorderTicket) => string;
   onApprove: () => void; onRejectAll: () => void; onRejectOne: (r: RemainingPayment) => void;
 }) {
+  const db = useDatabase(); // ตรวจว่าแต้มในสลิปถูก DB จองจริง (heldPointsFor)
   const multi = g.rps.length > 1;
   return (
     <div className={cx('rounded-xl border bg-surface-3 p-3', multi ? 'border-[#d4af37]/40' : 'border-subtle')}>
@@ -305,6 +307,8 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
             <span>{userName(g.userId)}</span>
             <span>· ยอดโอน <span className="text-primary-soft">{baht(g.total)}</span></span>
             {g.couponOff > 0 && <span className="text-[#4ade80]">· คูปอง −{baht(g.couponOff)}</span>}
+            {/* แต้มที่ลูกค้าใช้ลดในสลิปนี้ — แอดมินต้องเห็นก่อนอนุมัติ (audit 2026-09-23: เดิมไม่โชว์เลย) */}
+            {g.rps.some((r) => (r.points_redeemed ?? 0) > 0) && <span className="font-bold text-[#f1d27a]">· ⭐ ใช้แต้ม −{baht(g.rps.reduce((s, r) => s + (r.points_redeemed ?? 0), 0))}</span>}
             {multi && <span className="rounded-md bg-[#d4af37]/[0.16] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#f1d27a]">สลิปรวม {g.rps.length} ใบ</span>}
           </div>
           {!multi && <div className="font-mono text-[11px] text-ink-faint">{ticketOf(g.rps[0].ticket_id)?.ticket_no ?? g.rps[0].ticket_id}</div>}
@@ -320,7 +324,7 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
               <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[12.5px]">
                 <span className="w-[130px] shrink-0 font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</span>
                 <span className="min-w-0 flex-1 truncate">{tk ? nameOf(tk) : ''}</span>
-                <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}</span>
+                <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}{(r.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> (⭐ แต้ม −{baht(r.points_redeemed ?? 0)}{heldPointsFor(db, r.id, r.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ ไม่ได้จองจริง — ระบบจะไม่หักให้</span>})</span> : null}</span>
                 <button disabled={busy} onClick={() => onRejectOne(r)} title="ปฏิเสธเฉพาะใบนี้" className="grid h-6 w-6 place-items-center rounded-md border border-[#f87171]/40 text-[#f87171] disabled:opacity-40">×</button>
               </div>
             );

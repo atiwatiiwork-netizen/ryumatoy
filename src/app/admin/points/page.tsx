@@ -8,10 +8,12 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
-import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, launchPointsPreOnly } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag } from '@/domain/services/points';
+import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, launchPointsPreOnly, preparePointsLaunch, enablePointsLaunch } from '@/data/mutations';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows } from '@/domain/services/points';
 import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
+import { PointsLaunchNotice } from '@/components/PointsLaunchNotice';
+import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { currentYm, monthlyConfig, monthlyStatus } from '@/domain/services/monthly';
 import { ymOf } from '@/domain/services/analytics';
 
@@ -90,12 +92,14 @@ function SettingsPanel() {
       {!s.points_enabled && <LaunchCard />}
 
       <button
+        // ก่อนเปิดตัวครั้งแรก ห้ามเปิดด้วยสวิตช์ธรรมดา (audit 2026-09-23): จะเปิดทั้งที่พร้อมส่งยัง 30 + ไม่มีแต้มย้อนหลัง/ป๊อปอัป → ใช้ปุ่ม 🚀
+        disabled={!s.points_enabled && !pointsLaunchInfo(db)}
         onClick={() => { const v = !s.points_enabled; if (confirm(v ? 'เปิดระบบคะแนน? ตั้งแต่นี้ตั๋วที่ปิดยอดจะได้คะแนนจริง (ของเก่าใช้ปุ่ม "ให้คะแนนย้อนหลัง")' : 'ปิดระบบคะแนน? คะแนนที่มีอยู่ยังอยู่ แค่หยุดให้ใหม่')) { set({ points_enabled: v }); flash(v ? 'เปิดระบบคะแนนแล้ว' : 'ปิดระบบคะแนนแล้ว (พรีวิว)'); } }}
-        className={cx('mb-4 w-full rounded-xl border px-4 py-3 text-left', s.points_enabled ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.10]' : 'border-[#d97706]/40 bg-[#d97706]/[0.10]')}
+        className={cx('mb-4 w-full rounded-xl border px-4 py-3 text-left disabled:cursor-not-allowed disabled:opacity-60', s.points_enabled ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.10]' : 'border-[#d97706]/40 bg-[#d97706]/[0.10]')}
       >
         <div className="flex items-center justify-between">
           <span className="font-bold">{s.points_enabled ? '● ระบบเปิดอยู่' : '○ ระบบปิด (โหมดพรีวิว)'}</span>
-          <span className="rounded-md bg-surface-3 px-2 py-0.5 text-[11.5px] font-bold text-ink-muted2">{s.points_enabled ? 'กดเพื่อปิด' : 'กดเพื่อเปิด'}</span>
+          <span className="rounded-md bg-surface-3 px-2 py-0.5 text-[11.5px] font-bold text-ink-muted2">{s.points_enabled ? 'กดเพื่อปิด' : pointsLaunchInfo(db) ? 'กดเพื่อเปิด' : 'เปิดครั้งแรกใช้ปุ่ม 🚀 ด้านบน'}</span>
         </div>
         <div className="mt-1 text-[12px] text-ink-muted2">{s.points_enabled ? 'ตั๋วที่ปิดยอดตั้งแต่นี้ได้คะแนนอัตโนมัติในจังหวะที่แอดมินกดอนุมัติ' : 'ดูตัวเลขจำลองได้ครบ แต่ยังไม่มีใครได้คะแนนจริง — เปิดเมื่อตัวเลขลงตัว'}</div>
       </button>
@@ -351,6 +355,10 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
   const u = db.users.find((x) => x.id === uid);
   const matches = q ? customers.filter((c) => c.display_name.toLowerCase().includes(q.toLowerCase()) || (c.member_code ?? '').includes(q)).slice(0, 8) : [];
   const enabledNow = db.settings.points_enabled;
+  // "หลังกดเปิดตัว" = รัน launchPointsPreOnly จริงบนสำเนา db (ไม่เซฟ) → แต้มย้อนหลัง/ข้อความ/สวิตช์ ตรงกับที่ลูกค้าจะเห็นเป๊ะ
+  // (เดิมแค่บังคับ enabled=true → แต้มยังเป็น 0 เพราะยังไม่ backfill + โชว์ส่วนรายเดือนที่ลูกค้าไม่เห็น = พรีวิวไม่ตรง)
+  const simDb = useMemo(() => (!enabledNow && simOn ? launchPointsPreOnly(adminId || 'preview')(db) : db), [db, simOn, enabledNow, adminId]);
+  const showNotice = !!pointsLaunchInfo(simDb) && simDb.settings.points_enabled;
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -368,21 +376,39 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
         </div>
         <label className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12.5px]">
           <input type="checkbox" checked={simOn} onChange={(e) => setSimOn(e.target.checked)} />
-          จำลองว่า "เปิดระบบแล้ว"
+          จำลองหลังกดเปิดตัว (คิดแต้มย้อนหลังจริง)
         </label>
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-bold', (simOn || enabledNow) ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>
           {enabledNow ? 'ตอนนี้ลูกค้าเห็นแบบนี้จริง' : simOn ? 'ลูกค้าจะเห็นแบบนี้ "หลังกดเปิด"' : 'ตอนนี้ลูกค้าเห็นแบบนี้ (ระบบปิด)'}
         </span>
       </div>
-      {/* กรอบมือถือ 375px = ขนาดจริงที่ลูกค้าส่วนใหญ่ใช้ */}
+      {/* กรอบมือถือ 375px = ขนาดจริงที่ลูกค้าส่วนใหญ่ใช้ · ซ้าย = ป๊อปอัปตอนเปิดแอปครั้งแรก, ขวา = หน้า /points */}
+      <div className="flex flex-wrap items-start justify-center gap-4">
+      {u && showNotice && (
+        <div className="w-[375px] max-w-full">
+          <div className="mb-1.5 text-center text-[11.5px] font-bold text-ink-muted2">① ป๊อปอัปตอนเปิดแอปครั้งแรก (ขึ้นครั้งเดียว)</div>
+          <div className="overflow-hidden rounded-[28px] border-[6px] border-black/60 bg-base shadow-2xl">
+            <PointsLaunchNotice mode="preview" userId={u.id} dbOverride={simDb} />
+          </div>
+          <div className="mt-2 rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[11.5px] text-ink-muted2">
+            <div className="font-bold text-ink">🔔 push (ถ้าลูกค้าเปิดกระดิ่ง)</div>
+            <div>{launchNotice(simDb, u.id).title}</div>
+            <div>{launchNotice(simDb, u.id).body}</div>
+          </div>
+        </div>
+      )}
+      <div className="w-[375px] max-w-full">
+      {u && showNotice && <div className="mb-1.5 text-center text-[11.5px] font-bold text-ink-muted2">② หน้า "คะแนนสะสม" (/points)</div>}
       <div className="mx-auto w-[375px] max-w-full overflow-hidden rounded-[28px] border-[6px] border-black/60 bg-base shadow-2xl">
         <div className="flex items-center gap-3 border-b border-hair px-4 py-3">
           <span className="grid h-8 w-8 place-items-center rounded-full border border-subtle bg-surface-3 text-ink">‹</span>
           <span className="text-[15px] font-bold">คะแนนสะสม</span>
         </div>
         <div className="max-h-[720px] overflow-y-auto p-4 text-ink">
-          {u ? <PointsPanel userId={u.id} mode="preview" simulateEnabled={simOn ? true : undefined} /> : <div className="py-8 text-center text-ink-faint">ยังไม่มีลูกค้า</div>}
+          {u ? <PointsPanel userId={u.id} mode="preview" dbOverride={simDb} /> : <div className="py-8 text-center text-ink-faint">ยังไม่มีลูกค้า</div>}
         </div>
+      </div>
+      </div>
       </div>
     </div>
   );
@@ -394,21 +420,53 @@ function LaunchCard() {
   const store = useStore();
   const adminId = useCurrentUserId();
   const { flash } = useToast();
+  const dispatch = useDispatch();
   const [busy, setBusy] = useState(false);
+  const firstLaunch = !pointsLaunchInfo(db);
+  // push "ระบบคะแนนเปิดแล้ว คะแนนของคุณคือ xx" (เจ้าของ 2026-09-23) — ค่าเริ่มต้นส่งเฉพาะการเปิดครั้งแรก
+  const [withPush, setWithPush] = useState(firstLaunch);
+  const members = db.users.filter((u) => !u.is_admin && u.id !== 'u-admin' && u.approved !== false);
+  const bellUsers = members.filter((u) => db.pushSubscriptions.some((s) => s.user_id === u.id));
+  const bellDevices = db.pushSubscriptions.filter((s) => bellUsers.some((u) => u.id === s.user_id)).length;
   // จำลอง "อัตราพร้อมส่ง = 0" ก่อนกด → ตัวเลขที่โชว์ = สิ่งที่ปุ่มจะทำจริง (สูตรเดียวกับ backfillPoints ใน launchPointsPreOnly)
   const preview = useMemo(() => {
     const d: Database = { ...db, settings: { ...db.settings, points_per_piece_instock: 0 } };
     const tix = ticketsMissingEarn(d);
-    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size };
+    // แต้มที่เคยให้ไปแล้วแต่ผิดกติกาเปิดตัว (พร้อมส่งช่วงพรีวิว / บัญชีแอดมิน / ตั๋วที่ลบแล้ว) → ดึงคืนในเฟส A
+    const fix = launchCorrectionRows(d);
+    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size, fixRows: fix.length, fixPts: fix.reduce((a, r) => a - r.delta, 0) };
   }, [db]);
   const run = async () => {
     if (busy) return;
     if (!confirm(`เปิดระบบคะแนนให้ลูกค้า (นับเฉพาะใบพรี)?\n\n1) อัตราพร้อมส่ง → 0 (ยังไม่ให้คะแนนของพร้อมส่ง)\n2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้ว ${preview.tickets} ใบ รวม ${num(preview.points)} คะแนน ให้ ${preview.customers} คน\n3) เปิดสวิตช์ระบบ → ลูกค้าเห็นแต้มทันที\n\n"ใช้แต้มตัดยอด" ยังปิดอยู่ — ค่อยเปิดทีหลังที่ปุ่มด้านล่าง`)) return;
     setBusy(true);
-    store.update(launchPointsPreOnly(adminId));
-    const err = await store.flush(); // DNA save: รอผลเซฟก่อนบอกว่าสำเร็จ (ย้อนหลังใช้ id ผูกตั๋ว กดซ้ำได้ ไม่ให้ซ้ำ)
+    // เฟส A: แต้มย้อนหลัง + ดึงคืน + พร้อมส่ง 0 → ต้องเซฟผ่านก่อน (ลูกค้ายังไม่เห็นอะไร)
+    store.update(preparePointsLaunch(adminId));
+    const errA = await store.flush(); // DNA save: รอผลเซฟก่อนทำขั้นต่อไป (id ผูกตั๋ว กดซ้ำได้ ไม่ให้ซ้ำ)
+    if (errA) { setBusy(false); flash('บันทึกแต้มย้อนหลังไม่สำเร็จ — ระบบยังไม่เปิดให้ลูกค้า กดใหม่ได้'); return; }
+    // เฟส B: เปิดสวิตช์ + วันเปิดตัว (ลูกค้าเห็นแต้ม + ป๊อปอัป)
+    store.update(enablePointsLaunch(adminId));
+    const err = await store.flush();
+    if (err) { setBusy(false); flash('แต้มย้อนหลังลงแล้ว แต่เปิดสวิตช์ไม่สำเร็จ — กดใหม่ได้'); return; }
+    // push ส่วนตัว (แต้มของแต่ละคน) — ยิงหลังเซฟสำเร็จเท่านั้น (ห้ามบอกลูกค้าก่อนแต้มลง DB จริง)
+    // จับกลุ่มตามข้อความ (คนแต้มเท่ากันได้ข้อความเดียวกัน) → 1 คำขอต่อกลุ่ม ไม่ชนเพดาน /api/push-send
+    let sentTo = 0;
+    if (withPush && pushEnabled(db, 'points_launch')) {
+      const after = store.getState();
+      const groups = new Map<string, { title: string; body: string; url: string; uids: string[] }>();
+      for (const u of bellUsers) {
+        const m = launchNotice(after, u.id);
+        const g = groups.get(m.body) ?? { title: m.title, body: m.body, url: m.url, uids: [] };
+        g.uids.push(u.id);
+        groups.set(m.body, g);
+      }
+      for (const g of groups.values()) {
+        try { await sendPush(subsForUsers(after, g.uids), { title: g.title, body: g.body, url: g.url }, dispatch); sentTo += g.uids.length; }
+        catch { /* push best-effort — แต้มเซฟแล้ว ลูกค้ายังเห็นป๊อปอัปตอนเปิดแอป */ }
+      }
+    }
     setBusy(false);
-    flash(err ? 'บันทึกไม่สำเร็จ — กดใหม่ได้ ระบบกันให้คะแนนซ้ำไว้แล้ว' : `เปิดระบบแล้ว · ให้คะแนนย้อนหลัง ${preview.tickets} ใบ`);
+    flash(`เปิดระบบแล้ว · ให้คะแนนย้อนหลัง ${preview.tickets} ใบ${withPush ? ` · แจ้งเตือน ${sentTo} คน` : ''}`);
   };
   return (
     <div className="mb-4 rounded-xl border border-[#d4af37]/50 bg-[#d4af37]/[0.08] p-4">
@@ -418,6 +476,14 @@ function LaunchCard() {
         <span>ใบพรีที่จะได้ย้อนหลัง <b className="text-ink">{preview.tickets}</b> ใบ</span>
         <span>รวม <b className="text-[#fbbf24]">{num(preview.points)}</b> คะแนน</span>
         <span>ลูกค้า <b className="text-ink">{preview.customers}</b> คน</span>
+        {preview.fixRows > 0 && <span className="text-[#fbbf24]">ดึงคืนแต้มที่ให้ผิดกติกา <b>{preview.fixRows}</b> แถว (−{num(preview.fixPts)})</span>}
+      </div>
+      <div className="mb-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[12px] text-ink-muted2">
+        <b className="text-ink">แจ้งลูกค้าตอนเปิด</b> — ① ป๊อปอัป "ระบบคะแนนสะสมเปิดแล้ว · คะแนนของคุณคือ xx" ขึ้นครั้งเดียวตอนลูกค้าเปิดแอป (ทุกคน ดูพรีวิวด้านล่าง "👀 พรีวิวหน้าลูกค้า")
+        <label className="mt-1.5 flex items-start gap-2">
+          <input type="checkbox" className="mt-0.5" checked={withPush} onChange={(e) => setWithPush(e.target.checked)} />
+          <span>② ส่ง push ส่วนตัวบอกแต้มของแต่ละคน ให้ลูกค้าที่เปิดกระดิ่ง <b className="text-ink">{bellUsers.length}</b> คน ({bellDevices} เครื่อง){!firstLaunch && ' · เคยเปิดตัวไปแล้ว — ส่งซ้ำไหม?'}{!pushEnabled(db, 'points_launch') && ' · ⚠ ปิดอยู่ในหน้า Push Control'}</span>
+        </label>
       </div>
       <button onClick={run} disabled={busy} className="rounded-lg bg-primary px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-40">{busy ? 'กำลังบันทึก…' : 'เปิดระบบให้ลูกค้าเห็นแต้ม (นับเฉพาะใบพรี)'}</button>
     </div>

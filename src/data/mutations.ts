@@ -26,7 +26,7 @@ import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orpha
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
 import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions';
-import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow } from '../domain/services/points';
+import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow, POINTS_LAUNCH_KEY, pointsLaunchInfo, launchCorrectionRows, heldPointsFor } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 
@@ -999,7 +999,7 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
     tickets: db.tickets.map((t) => {
       if (t.id !== pay.ticket_id) return t;
       // ส่วนลดคูปอง + แต้ม (v67) + โบนัสยศ มาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
-      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - (pay.points_redeemed ?? 0) - bonus);
+      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - heldPointsFor(db, pay.id, pay.points_redeemed) - bonus);
       const paid = Math.min(remaining, t.remaining_paid + pay.amount);
       return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
@@ -1148,6 +1148,7 @@ export const deleteCoupon = (couponId: string) => (db: Database): Database => ({
 export const grantCoupon = (couponId: string, userIds: string[], actorId = 'system') => (db: Database): Database => {
   const coupon = db.coupons.find((c) => c.id === couponId);
   if (!coupon) return db;
+  if (isPointsCoupon(coupon) && Math.trunc(coupon.value) < 1) return db; // แถวแต้ม 0 = DB ปฏิเสธทั้งก้อน
   const now = new Date().toISOString();
   const fresh: CouponGrant[] = [];
   const rows: PointLedgerEntry[] = [];
@@ -1261,7 +1262,8 @@ export const grantCampaignRewards = (campaignId: string, userId: string, actorId
   const pts = c.reward_scope === 'points';
   for (const a of pending) {
     const couponId = id('c');
-    const total = a.tier.coupon_value * Math.max(1, a.tier.coupon_count);
+    const total = Math.trunc(a.tier.coupon_value * Math.max(1, a.tier.coupon_count));
+    if (pts && total < 1) continue; // ชั้นที่ตั้งแต้มผิด (0/ทศนิยม) — ไม่สร้างแถว 0 ที่ DB ปฏิเสธ
     if (pts) {
       const coupon: Coupon = { id: couponId, label: `${c.name} · ครบ ${a.required} ใบ · ${total} แต้ม`, value: total, scope: 'points', active: true, created_at: nowIso, campaign_id: c.id };
       const g: CouponGrant = { id: id('cg'), coupon_id: couponId, user_id: userId, status: 'used', granted_at: nowIso, used_at: nowIso, discount_amount: total };
@@ -2499,10 +2501,26 @@ export const setPointsRedeem = (actorId: string, enabled: boolean) => (db: Datab
  *   1) อัตราพร้อมส่ง = 0 (ยังไม่ให้คะแนนของพร้อมส่ง)  2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้วทุกใบ (รอบปกติ+รอบพิเศษ)
  *   3) เปิดสวิตช์ระบบคะแนน (ลูกค้าเห็นแต้ม) — **ไม่แตะ** สวิตช์ใช้แต้ม (ยังปิด)
  *  เรียกซ้ำได้ (ย้อนหลังใช้ id ผูกตั๋ว = ไม่ให้ซ้ำ) */
-export const launchPointsPreOnly = (actorId: string) => (db: Database): Database => {
+export const launchPointsPreOnly = (actorId: string) => (db: Database): Database =>
+  enablePointsLaunch(actorId)(preparePointsLaunch(actorId)(db));
+
+/** เปิดตัว เฟส A (ยังไม่เปิดให้ลูกค้าเห็น): พร้อมส่ง → 0 · ให้แต้มย้อนหลังใบพรี · ดึงคืนแต้มที่เคยให้ผิดกติกา
+ *  แยกเฟสเพราะ adapter เซฟ shop_settings ต่อแม้ point_ledger ล้ม (audit 2026-09-23) → ถ้ารวมเฟสเดียว
+ *  อาจเกิด "เปิดระบบแล้วแต่แต้มยังไม่ลง" ลูกค้าเห็น 0 + ป๊อปอัปถูกปิดทิ้ง · LaunchCard เซฟเฟส A ให้ผ่านก่อนค่อยเฟส B */
+export const preparePointsLaunch = (actorId: string) => (db: Database): Database => {
   let next = updateSettings({ points_per_piece_instock: 0 })(db);
   next = backfillPoints(actorId)(next);
-  next = updateSettings({ points_enabled: true })(next);
+  const fix = launchCorrectionRows(next, actorId);
+  return fix.length ? { ...next, pointLedger: [...fix, ...next.pointLedger] } : next;
+};
+
+/** เปิดตัว เฟส B: เปิดสวิตช์ระบบ (ลูกค้าเห็นแต้ม) + วันเปิดตัว (ครั้งแรก) — สวิตช์ใช้แต้มไม่แตะ */
+export const enablePointsLaunch = (actorId: string) => (db: Database): Database => {
+  let next = updateSettings({ points_enabled: true })(db);
+  // วันเปิดตัว (ครั้งแรกเท่านั้น — ปิด/เปิดใหม่ไม่ทับ) → ป๊อปอัป "ระบบคะแนนเปิดแล้ว" ของลูกค้าโชว์ครั้งเดียว
+  if (!pointsLaunchInfo(next)) {
+    next = { ...next, appConfig: [{ key: POINTS_LAUNCH_KEY, value: { at: new Date().toISOString(), by: actorId } }, ...next.appConfig.filter((c) => c.key !== POINTS_LAUNCH_KEY)] };
+  }
   return logActivity(actorId, 'points_launch', 'เปิดระบบคะแนนให้ลูกค้า (นับเฉพาะใบพรี · ยังไม่เปิดใช้แต้ม)')(next);
 };
 
