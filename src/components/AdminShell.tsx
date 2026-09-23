@@ -14,7 +14,7 @@ import { pendingRpGroups } from '@/domain/services/payments';
 import { isAdminUser } from '@/domain/services/admins';
 import { monthsToClose, closedMonths, ymLabel, type MonthlySnapshot } from '@/domain/services/monthly';
 import { markPlanReminded, closeMonth, mintPointsForTickets } from '@/data/mutations';
-import { pointsLaunchInfo, ticketsMissingEarn } from '@/domain/services/points';
+import { sweepCandidates } from '@/domain/services/points';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { Icon, type IconName } from './Icon';
 import { cx } from './ui';
@@ -104,8 +104,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const sweepRef = useRef(false);
   useEffect(() => {
     if (!ready || sweepRef.current || !isAdminUser(db, adminId)) return;
-    if (!db.settings.points_enabled || !pointsLaunchInfo(db)) return;
-    const ids = ticketsMissingEarn(db).map((t) => t.id);
+    const ids = sweepCandidates(db).map((t) => t.id); // เฉพาะตั๋วที่ปิดยอดหลังวันเปิดตัว (ไม่ย้อนแจกของเก่า)
     if (!ids.length) return;
     sweepRef.current = true;
     const timer = setTimeout(() => {

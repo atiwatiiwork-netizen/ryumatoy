@@ -1,4 +1,5 @@
 import type { Database } from '../entities';
+import { userById } from './indexes';
 
 /**
  * "คนนี้เป็นแอดมินไหม" — ตัวเดียวที่ mutation ใช้ตัดสินสิทธิ์แอดมิน (v57).
@@ -30,5 +31,5 @@ export function isAdminUser(db: Database, userId: string): boolean {
 export function isStaffAccount(db: Database, userId: string): boolean {
   if (!userId) return false;
   if (userId === 'u-admin' || adminIds().includes(userId)) return true;
-  return db.users.find((u) => u.id === userId)?.is_admin === true;
+  return userById(db).get(userId)?.is_admin === true; // ดัชนี — ถูกเรียกต่อตั๋วตอนคิดคะแนนทั้งร้าน
 }

@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 process.env.TZ = 'Asia/Bangkok';
 import { SEED_DATABASE } from '../../src/data/seed';
-import { createCoupon, grantCoupon, grantCouponToRank, revokeGrant, deleteCoupon, grantCampaignRewards, approveMission, submitMission, setMissionConfig, submitRemainingPayment } from '../../src/data/mutations';
+import { createCoupon, grantCoupon, grantCouponToRank, revokeGrant, deleteCoupon, grantCampaignRewards, approveMission, submitMission, setMissionConfig, submitRemainingPayment, rejectRemainingPayment } from '../../src/data/mutations';
 import { balanceOf, lifetimeOf, couponRewardId, redeemHoldId } from '../../src/domain/services/points';
 import { usableGrantsFor, instockCouponsFor, preorderCouponsForTicket, isPointsCoupon, couponAlreadyGranted, orphanUsedGrants, scopeAllows } from '../../src/domain/services/coupons';
 import { unclaimedAwards, nextTierProgress } from '../../src/domain/services/campaigns';
@@ -134,6 +134,24 @@ base.users.push({ id: U2, display_name: 'Audit CP', rank: 'bronze', created_at: 
   const on = submitRemainingPayment(t.id, U, due - 100, 'slip', undefined, { points: 100 })(enabled);
   const rpOn = on.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending')!;
   ok('E2 สวิตช์เปิด: ใช้แต้มจากคูปอง 100 ตัดยอดได้ (จอง pl-redeem)', rpOn.points_redeemed === 100 && on.pointLedger.some((e) => e.id === redeemHoldId(rpOn.id)));
+}
+
+// ── F) คืนคูปองตอนปฏิเสธ ต้องล้างค่าเป็น null (undefined ถูกตัดทิ้งตอนส่ง JSON → DB เก็บค่าเก่า) — audit 2026-09-23 ──
+{
+  let db = structuredClone(base);
+  db = grantCoupon(bahtCoupon.id, [U], 'u-admin')(db);
+  const g = db.couponGrants.find((x) => x.coupon_id === bahtCoupon.id && x.user_id === U)!;
+  const t = db.tickets.find((x) => x.owner_id === U && x.remaining_amount - x.remaining_paid > 0 && x.status === 'active')!;
+  const due = t.remaining_amount - t.remaining_paid;
+  db = submitRemainingPayment(t.id, U, due - 100, 'slip', { grantId: g.id, discount: 100 })(db);
+  const rp = db.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending')!;
+  db = rejectRemainingPayment(rp.id)(db);
+  const g2 = db.couponGrants.find((x) => x.id === g.id)!;
+  ok('F1 ปฏิเสธสลิป → คูปองกลับ active และ ticket_id/used_at/discount เป็น null (ส่งถึง DB จริง)', g2.status === 'active' && g2.ticket_id === null && g2.used_at === null && g2.discount_amount === null && JSON.stringify(g2).includes('"ticket_id":null'), g2);
+  // คูปองที่ถูกคืนแล้วเอาไปใช้ใบใหม่ แต่ order_id เก่าค้าง → ต้องไม่ถูกตีเป็น "ใช้ไม่สมบูรณ์"
+  const stale = { ...db, couponGrants: db.couponGrants.map((x) => (x.id === g.id ? { ...x, order_id: 'o-ghost' } : x)) };
+  const again = submitRemainingPayment(t.id, U, due - 100, 'slip', { grantId: g.id, discount: 100 })(stale);
+  ok('F2 grant ใช้อยู่กับสลิปจริง แม้ order_id เก่าค้าง → ไม่ใช่ orphan', !orphanUsedGrants(again, U).some((o) => o.grant.id === g.id));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

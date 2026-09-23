@@ -4,7 +4,8 @@ process.env.TZ = 'Asia/Bangkok'; // ตัดเดือนตามเวล�
 import { SEED_DATABASE } from '../../src/data/seed';
 import { approveOrder, approveRemainingPayment, submitOrder, closeMonth, deleteTicket, backfillPoints, adjustPoints, submitRemainingPayment, setMonthlyConfig, launchPointsPreOnly } from '../../src/data/mutations';
 import { balanceOf, lifetimeOf, ticketIsFullPay, ticketIsPre, rawPointsForTicket, ticketEarnEligible, earnIdFor, ticketsMissingEarn, earnRowForTicket, pointsRates, redeemEnabled, pointsLaunchInfo, launchNotice, earnedTicketCount, launchCorrectionRows, heldPointsFor, redeemHoldId, refundId, reverseIdFor } from '../../src/domain/services/points';
-import { preparePointsLaunch, enablePointsLaunch, editTicketDeposit, mintPointsForTickets, createCoupon, grantCoupon } from '../../src/data/mutations';
+import { preparePointsLaunch, enablePointsLaunch, editTicketDeposit, mintPointsForTickets, createCoupon, grantCoupon, simulateAfterLaunch, updateSettings } from '../../src/data/mutations';
+import { sweepCandidates, earnFixIdFor } from '../../src/domain/services/points';
 import { monthlyConfig, monthlyStatus, monthlyBoard, monthlyPieces, ticketYm, countsForMonthly, DEFAULT_MONTHLY, currentYm, prevYm, closedMonths, monthsToClose, computeMonthSnapshot, monthlyBonusForTicket, pendingBonusDiscount, mbonusId, latestRankOf } from '../../src/domain/services/monthly';
 import type { Database, PreorderTicket, Order } from '../../src/domain/entities';
 
@@ -286,8 +287,7 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   db.remainingPayments.push({ id: 'rp-forged', ticket_id: t5.id, user_id: U, amount: due - 100, slip_url: 'x', status: 'pending', created_at: at(7), points_redeemed: 100 } as any);
   ok('K5a ไม่มีแถวจอง → heldPointsFor 0', heldPointsFor(db, 'rp-forged', 100) === 0);
   const ap = approveRemainingPayment('rp-forged')(db);
-  const t5b = ap.tickets.find((t) => t.id === t5.id)!;
-  ok('K5b อนุมัติสลิปแต้มปลอม → หนี้ไม่ถูกหักด้วยแต้ม (ยังค้าง 100 = ไม่ปิดใบ ไม่ได้ 20)', t5b.remaining_amount === due && t5b.remaining_amount - t5b.remaining_paid === 100 && !ap.pointLedger.some((e) => e.id === earnIdFor(t5.id)), t5b);
+  ok('K5b อ้างแต้มแต่ DB ไม่ได้จอง → อนุมัติไม่ได้ (สลิปค้าง pending ตั๋วไม่ขยับ ไม่ได้ 20)', ap === db && ap.remainingPayments.find((r) => r.id === 'rp-forged')?.status === 'pending' && !ap.pointLedger.some((e) => e.id === earnIdFor(t5.id)));
   const withHold = { ...db, pointLedger: [{ id: redeemHoldId('rp-forged'), user_id: U, delta: -100, kind: 'redeem_remaining', ref_type: 'remaining_payment', ref_id: 'rp-forged', created_at: at(7) } as any, ...db.pointLedger] };
   ok('K5c มีแถวจองยอดตรง → 100 · จองไม่ตรงยอด → 0', heldPointsFor(withHold, 'rp-forged', 100) === 100 && heldPointsFor(withHold, 'rp-forged', 150) === 0);
   const refunded = { ...withHold, pointLedger: [{ id: refundId('rp-forged'), user_id: U, delta: 100, kind: 'refund', created_at: at(8) } as any, ...withHold.pointLedger] };
@@ -298,13 +298,54 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   db.settings.points_enabled = true;
   const t6 = preTicket(db, U, 9, { price: 1000, deposit: 300 });
   db = editTicketDeposit(t6.id, 1000)(db);
-  ok('K6 แก้มัดจำเต็มราคา → ปิดยอด → อยู่ในรายการตกหล่น → กวาดแล้วได้ 20', ticketsMissingEarn(db).some((t) => t.id === t6.id) && balanceOf(mintPointsForTickets([t6.id], 'u-admin')(db), U) === 20);
+  ok('K6 แก้มัดจำเต็มราคา → ปิดยอด → ได้ 20 ทันที ไม่ตกหล่น', !ticketsMissingEarn(db).some((t) => t.id === t6.id) && balanceOf(db, U) === 20);
 
   // K7: คูปองแต้มค่า 0/ทศนิยม → ไม่สร้างแถว 0 (DB ปฏิเสธทั้งก้อน)
   db = createCoupon({ label: 'bad', value: 0.5, scope: 'points' })(structuredClone(base));
   const bad = db.coupons[0];
   const g7 = grantCoupon(bad.id, [U], 'u-admin')(db);
   ok('K7 คูปองแต้ม 0.5 → มอบไม่ได้ ไม่มีแถว delta 0', g7 === db && !g7.pointLedger.some((e) => e.delta === 0));
+
+  // K8: รอบพิเศษจ่ายเต็มเคยได้ 30 ช่วงพรีวิว (กติกาเก่า) → เปิดตัวปรับส่วนต่าง −10 (pl-fix) · ลบตั๋ว = ดึงคืนสุทธิ 20
+  db = structuredClone(base);
+  db.settings.points_enabled = false;
+  const sp = preTicket(db, U2, 4, { closed: true, price: 1200, deposit: 1200 });
+  db.tickets.find((t) => t.id === sp.id)!.batch_id = 'b-k8';
+  db.pointLedger.unshift({ id: earnIdFor(sp.id), user_id: U2, delta: 30, kind: 'earn_ticket', ref_type: 'ticket', ref_id: sp.id, note: 'preview 30', created_at: at(4) } as any);
+  let k8 = launchPointsPreOnly('u-admin')(db);
+  const fixRow = k8.pointLedger.find((e) => e.id === earnFixIdFor(sp.id));
+  ok('K8a ปรับส่วนต่าง 30 → 20 (แถว earn_adjust −10) · คงเหลือ 20 · ยอดสะสม 20', fixRow?.delta === -10 && fixRow.kind === 'earn_adjust' && balanceOf(k8, U2) === 20 && lifetimeOf(k8, U2) === 20, { fixRow, bal: balanceOf(k8, U2) });
+  ok('K8b เปิดตัวซ้ำไม่ปรับซ้ำ', launchCorrectionRows(k8, 'u-admin').length === 0);
+  k8 = deleteTicket(sp.id)(k8);
+  ok('K8c ลบตั๋ว → ดึงคืนสุทธิ 20 → คงเหลือ 0', balanceOf(k8, U2) === 0 && k8.pointLedger.find((e) => e.id === reverseIdFor(sp.id))?.delta === -20);
+
+  // K9: เติมแต้มอัตโนมัติ (AdminShell) เฉพาะตั๋วปิดยอด "หลังวันเปิดตัว" — ปรับอัตราพร้อมส่งขึ้นทีหลังไม่แจกย้อนหลังเงียบๆ
+  db = structuredClone(base);
+  db.settings.points_enabled = false;
+  const oldFull = preTicket(db, U2, 2, { closed: true, price: 900, deposit: 900 });   // พร้อมส่ง ปิดก่อนเปิดตัว
+  db = launchPointsPreOnly('u-admin')(db);
+  ok('K9a หลังเปิดตัว ไม่มีอะไรให้กวาด', sweepCandidates(db).length === 0);
+  const raised = updateSettings({ points_per_piece_instock: 30 })(db);
+  ok('K9b ปรับพร้อมส่งเป็น 30 → ของเก่าก่อนเปิดตัวไม่ถูกกวาด (แต่ยังอยู่ในรายการย้อนหลังให้แอดมินตัดสินใจเอง)', !sweepCandidates(raised).some((t) => t.id === oldFull.id) && ticketsMissingEarn(raised).some((t) => t.id === oldFull.id));
+  // เครื่องแอดมินที่ยังไม่รู้ว่าเปิดระบบ อนุมัติสลิปหลังเปิดตัว → ไม่มีแถวแต้ม → กวาดได้
+  const stale = { ...db, settings: { ...db.settings, points_enabled: false } };
+  const t9 = preTicket(stale, U2, 3);
+  const approved = closeTicket(stale, t9, U2).db;
+  const merged = { ...approved, settings: { ...approved.settings, points_enabled: true } };
+  ok('K9c ปิดใบหลังเปิดตัวแต่ไม่ได้แต้ม (เครื่องเก่า) → อยู่ในรายการกวาด', !merged.pointLedger.some((e) => e.id === earnIdFor(t9.id)) && sweepCandidates(merged).some((t) => t.id === t9.id));
+
+  // K10: เปิดตัวแล้ว ปิดไว้ แล้วจำลอง/เปิดใหม่ → แค่เปิดสวิตช์ ไม่ดึงคืนแต้มที่ให้ถูกไปแล้ว
+  const off = { ...raised, settings: { ...raised.settings, points_enabled: false } };
+  const off2 = mintPointsForTickets([oldFull.id], 'u-admin')({ ...off, settings: { ...off.settings, points_enabled: true } });
+  const beforeBal = balanceOf(off2, U2);
+  const re = simulateAfterLaunch('u-admin')({ ...off2, settings: { ...off2.settings, points_enabled: false } });
+  ok('K10 จำลองหลังเปิดตัว (เคยเปิดแล้ว) → ไม่ตั้งอัตราใหม่ ไม่ดึงคืน · แต้มเท่าเดิม', re.settings.points_enabled && re.settings.points_per_piece_instock === 30 && balanceOf(re, U2) === beforeBal && beforeBal > 0, { beforeBal, after: balanceOf(re, U2) });
+
+  // K11: แก้มัดจำจนครบ → ได้แต้มทันที (ไม่ต้องรอกวาด)
+  db = structuredClone(base);
+  db.settings.points_enabled = true;
+  const t11 = preTicket(db, U, 9, { price: 1000, deposit: 300 });
+  ok('K11 editTicketDeposit ปิดยอด → +20 ทันที', balanceOf(editTicketDeposit(t11.id, 1000)(db), U) === 20);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

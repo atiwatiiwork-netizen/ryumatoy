@@ -1,4 +1,5 @@
 import { supabase } from '@/data/supabaseClient';
+import { simActive } from './sim';
 
 type Res = { ok?: boolean; error?: string; reservation_id?: string; until?: string; available?: number };
 
@@ -10,6 +11,7 @@ type Res = { ok?: boolean; error?: string; reservation_id?: string; until?: stri
 const RPC_TIMEOUT = 12_000;
 
 async function call(fn: string, args: Record<string, unknown>): Promise<Res> {
+  if (simActive()) return { error: 'sim' }; // โหมดจำลองดูเป็นลูกค้า — ห้ามจอง/ปล่อยสต๊อกจริง
   if (!supabase) return { error: 'no_server' };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

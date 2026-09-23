@@ -40,7 +40,8 @@ begin
   if new.points_redeemed > v_bal then raise exception 'ryuma: แต้มไม่พอ (คงเหลือ % แต้ม — อาจมีสลิปอื่นจองแต้มอยู่)', v_bal; end if;
   insert into point_ledger(id, user_id, delta, kind, ref_type, ref_id, note, created_by)
     values ('pl-redeem-' || new.id, v_uid, -new.points_redeemed, 'redeem_remaining', 'remaining_payment', new.id,
-            'ใช้แต้มลดส่วนต่าง ' || new.points_redeemed || ' แต้ม (รอตรวจสลิป)', 'system');
+            'ใช้แต้มลดส่วนต่าง ' || new.points_redeemed || ' แต้ม (รอตรวจสลิป)', 'system')
+    on conflict (id) do nothing; -- ส่งซ้ำพร้อมกัน (retry หลัง timeout) — id เก่าที่ใช้ซ้ำถูกดักด้านบนแล้ว
   return new;
 end $$;
 
@@ -66,7 +67,8 @@ begin
   if new.points_redeemed > v_bal then raise exception 'ryuma: แต้มไม่พอ (คงเหลือ % แต้ม — อาจมีสลิปอื่นจองแต้มอยู่)', v_bal; end if;
   insert into point_ledger(id, user_id, delta, kind, ref_type, ref_id, note, created_by)
     values ('pl-redeem-' || new.id, v_uid, -new.points_redeemed, 'redeem_order', 'order', new.id,
-            'ใช้แต้มลดของพร้อมส่ง ' || new.points_redeemed || ' แต้ม (รอตรวจสลิป)', 'system');
+            'ใช้แต้มลดของพร้อมส่ง ' || new.points_redeemed || ' แต้ม (รอตรวจสลิป)', 'system')
+    on conflict (id) do nothing; -- ส่งซ้ำพร้อมกัน (retry หลัง timeout) — id เก่าที่ใช้ซ้ำถูกดักด้านบนแล้ว
   return new;
 end $$;
 

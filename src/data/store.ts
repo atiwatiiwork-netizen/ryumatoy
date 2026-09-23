@@ -3,6 +3,7 @@ import { localStorageAdapter, type PersistenceAdapter } from './persistence';
 import { hasSupabase } from './supabaseClient';
 import { supabaseAdapter } from './supabaseAdapter';
 import { SEED_DATABASE } from './seed';
+import { simActive } from '@/lib/sim';
 
 /**
  * The central store — the single runtime source of truth.
@@ -75,6 +76,8 @@ export class Store {
   };
 
   update = (mutation: Mutation): Database => {
+    // โหมดจำลองดูเป็นลูกค้า: หน้าลูกค้าต้องไม่แตะข้อมูลจริง (ปกติเขียนผ่าน store จำลองอยู่แล้ว — นี่คือด่านสำรอง)
+    if (simActive()) return this.db;
     this.db = mutation(this.db);
     this.emit();
     this.scheduleFlush();

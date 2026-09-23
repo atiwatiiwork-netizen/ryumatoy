@@ -1,4 +1,5 @@
 import { supabase } from '@/data/supabaseClient';
+import { simActive, SIM_BLOCKED } from './sim';
 
 /**
  * Upload an image to the public `logos` Storage bucket and return its public URL.
@@ -7,6 +8,7 @@ import { supabase } from '@/data/supabaseClient';
  * to an inline data URL so the UI still works.
  */
 export async function uploadImage(file: File, prefix: string): Promise<string> {
+  if (simActive()) throw new Error(SIM_BLOCKED); // โหมดจำลองดูเป็นลูกค้า — ห้ามอัปโหลดจริง
   if (!supabase) {
     return new Promise((resolve) => {
       const r = new FileReader();

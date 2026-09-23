@@ -1,4 +1,5 @@
 import { supabase } from '@/data/supabaseClient';
+import { simActive } from './sim';
 
 /**
  * Fire-and-forget shop-owner notifications (LINE). Never blocks or breaks the calling
@@ -10,6 +11,7 @@ import { supabase } from '@/data/supabaseClient';
  * DNA: ทุก await ที่วิ่งเน็ตต้องมีเพดานเวลา — getSession() เคยค้างตอนกลับจากพักหน้าจอ
  */
 export function notifyAdminLine(message: string): void {
+  if (simActive()) return; // โหมดจำลองดูเป็นลูกค้า — ห้ามส่ง LINE จริง
   try {
     void (async () => {
       const token = supabase

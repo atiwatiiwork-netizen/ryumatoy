@@ -1,5 +1,6 @@
 import type { Database, PreorderTicket } from '../entities';
 import { ymOf } from './analytics';
+import { sourcingKeys } from './indexes';
 
 /**
  * เส้นเงิน — แหล่งความจริงเดียวของ "เงินเข้า/เงินค้าง" ทั้งระบบ (flow review 2026-07-25).
@@ -85,7 +86,7 @@ const grantedCache = new WeakMap<Database, Set<string>>();
  * `r.user_id` บน `pid` เท่านั้น) และถ้าผูกรอบ รอบนั้นต้องเป็นรอบของงานหาของ
  */
 export function isSourcingTicket(db: Database, t: PreorderTicket): boolean {
-  if (!db.sourcingRequests.some((s) => s.product_id === t.product_id && s.user_id === t.owner_id)) return false;
+  if (!sourcingKeys(db).has(`${t.product_id}|${t.owner_id}`)) return false; // ดัชนี (เดิมวนทุกเรื่องหาของต่อตั๋ว)
   if (!t.batch_id) return true;
   return db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ';
 }

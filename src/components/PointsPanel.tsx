@@ -7,7 +7,7 @@ import { Icon } from '@/components/Icon';
 import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag } from '@/domain/services/points';
 import type { Database } from '@/domain/entities';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
-import { isAdminUser } from '@/domain/services/admins';
+import { isStaffAccount } from '@/domain/services/admins';
 import { activeCampaign } from '@/domain/services/campaigns';
 import { missionLive } from '@/domain/services/missions';
 import { ticketDue } from '@/domain/services/money';
@@ -47,7 +47,8 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
   // สวิตช์ 2 "ใช้แต้มตัดยอด" (เจ้าของ 2026-09-12 ค่ำ): เปิดตัวแบบโชว์แต้มก่อน → ส่วน "แลกใช้ได้" บอกว่าเร็วๆ นี้
   // พรีวิวต้องตรงความจริง (เจ้าของ 2026-09-23 "ลูกค้าจะเห็นยังไง"): จำลองว่าเปิดระบบ ≠ เปิดใช้แต้ม → ดูสวิตช์ใช้แต้มจริง
   const canRedeem = simulating ? redeemFlag(db) : redeemEnabled(db);
-  const adminPreview = mode === 'live' && isAdminUser(db, uid);
+  // บัญชีทีมงานจริงเท่านั้น (ไม่ใช่ทุกคนในโหมด seed) — โหมดจำลองดูเป็นลูกค้าต้องเห็นเหมือนลูกค้าจริงเป๊ะ
+  const adminPreview = mode === 'live' && isStaffAccount(db, uid);
 
   const balance = balanceOf(db, uid);
   const lifetime = lifetimeOf(db, uid);

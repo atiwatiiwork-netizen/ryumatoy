@@ -324,10 +324,11 @@ export interface CouponGrant {
   user_id: string;
   status: CouponGrantStatus;
   granted_at: string;
-  used_at?: string;
-  order_id?: string; // set when redeemed on an in-stock checkout
-  ticket_id?: string; // set when redeemed on a pre-order remaining payment
-  discount_amount?: number; // baht actually discounted (snapshot)
+  // null (ไม่ใช่ undefined) ตอนคืนคูปอง — adapter ส่ง JSON ที่ตัด undefined ทิ้ง → DB เก็บค่าเก่าค้าง (audit 2026-09-23)
+  used_at?: string | null;
+  order_id?: string | null; // set when redeemed on an in-stock checkout
+  ticket_id?: string | null; // set when redeemed on a pre-order remaining payment
+  discount_amount?: number | null; // baht actually discounted (snapshot)
 }
 
 export interface RankTier {
@@ -801,7 +802,7 @@ export interface AuctionEntry {
 
 /** สมุดคะแนนสะสม (migration v66 · ryuma-points-spec) — เขียนเพิ่มอย่างเดียว ยอดคงเหลือ = sum(delta).
  *  แถว "ได้คะแนน" ผูก id กับตั๋ว (pl-earn-<ticket_id>) เสมอ → มินต์ซ้ำจากคนละเครื่อง = แถวเดิม ไม่ใช่แถวใหม่. */
-export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'monthly_reward' | 'coupon_reward' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
+export type PointLedgerKind = 'earn_ticket' | 'reverse_ticket' | 'earn_adjust' | 'monthly_reward' | 'coupon_reward' | 'redeem_order' | 'redeem_remaining' | 'refund' | 'expire' | 'admin_adjust';
 export interface PointLedgerEntry {
   id: string;
   user_id: string;

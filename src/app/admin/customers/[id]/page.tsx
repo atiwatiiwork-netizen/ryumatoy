@@ -182,7 +182,7 @@ export default function CustomerPage() {
             const c = db.coupons.find((x) => x.id === g.coupon_id);
             if (!c) return null;
             const pts = c.scope === 'points'; // คูปองแต้ม: grant = ใบเสร็จ (used ตั้งแต่เกิด) แต้มอยู่ในสมุดคะแนน
-            const label = pts ? `ได้รับแต้ม ${fmtDate(g.granted_at)}` : g.status === 'used' ? `ใช้แล้ว ${fmtDate(g.used_at)}` : g.status === 'revoked' ? 'ถูกถอน' : couponExpired(c) ? 'หมดอายุ' : 'พร้อมใช้';
+            const label = pts ? `ได้รับแต้ม ${fmtDate(g.granted_at)}` : g.status === 'used' ? `ใช้แล้ว ${fmtDate(g.used_at ?? undefined)}` : g.status === 'revoked' ? 'ถูกถอน' : couponExpired(c) ? 'หมดอายุ' : 'พร้อมใช้';
             return (
               <div key={g.id} className="flex flex-wrap items-center gap-2 py-2">
                 <CouponTierPill value={c.value} />

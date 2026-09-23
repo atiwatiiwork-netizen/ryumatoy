@@ -257,3 +257,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export const useAuth = () => useContext(AuthContext);
 export const useCurrentUserId = () => useContext(AuthContext).currentUserId;
 export const canLogin = hasSupabase;
+
+/** โหมดจำลองดูเป็นลูกค้า (SimGate): หน้าลูกค้าเห็นตัวเองเป็นลูกค้าคนนี้ (ไม่ใช่แอดมิน · ล็อกอินแล้ว · อนุมัติแล้ว)
+ *  userId = null → ส่งค่าจริงผ่าน (ต้นไม้คงที่ ไม่ remount หน้า) */
+export function AuthOverride({ userId, children }: { userId: string | null; children: ReactNode }) {
+  const real = useContext(AuthContext);
+  if (!userId) return <>{children}</>;
+  return (
+    <AuthContext.Provider value={{ ...real, currentUserId: userId, isLoggedIn: true, isAdmin: false, isApproved: true, needsApproval: false, needsProfile: false }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}

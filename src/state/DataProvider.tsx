@@ -49,3 +49,8 @@ export function useDispatch() {
   const s = useStore();
   return useCallback((mutation: Mutation) => s.update(mutation), [s]);
 }
+
+/** โหมดจำลองดูเป็นลูกค้า (SimGate): สลับ store ที่หน้าลูกค้าอ่าน/เขียน เป็นตัวจำลอง (ไม่บันทึก) · null = ตัวจริง */
+export function StoreOverride({ value, children }: { value: typeof store | null; children: ReactNode }) {
+  return <StoreContext.Provider value={value ?? store}>{children}</StoreContext.Provider>;
+}

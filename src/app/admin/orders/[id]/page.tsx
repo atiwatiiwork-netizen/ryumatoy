@@ -185,7 +185,7 @@ export default function SlipApprovalPage() {
             {/* แต้มที่ลูกค้าใช้ (v67) — แอดมินต้องเห็นก่อนอนุมัติ + เตือนถ้า DB ไม่ได้จองแต้มจริง (audit 2026-09-23) */}
             {(order.points_redeemed ?? 0) > 0 && (
               <div className="mb-1 flex justify-between text-[12.5px] font-bold text-[#f1d27a]">
-                <span>⭐ ใช้แต้ม{heldPointsFor(db, order.id, order.points_redeemed) === 0 && <span className="text-[#f87171]"> · ⚠ แต้มไม่ได้ถูกจองจริง — อย่าอนุมัติ</span>}</span>
+                <span>⭐ ใช้แต้ม{heldPointsFor(db, order.id, order.points_redeemed) === 0 && <span className="text-[#f87171]"> · ⚠ แต้มยังไม่ถูกจอง — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>}</span>
                 <span>−{baht(order.points_redeemed ?? 0)}</span>
               </div>
             )}

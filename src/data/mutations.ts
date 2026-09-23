@@ -305,6 +305,8 @@ export function approveOrder(orderId: string, opts: { mintRewards?: boolean; sta
   return (db: Database): Database => {
     const order = db.orders.find((o) => o.id === orderId);
     if (!order || order.status !== 'pending_approval') return db;
+    // อ้างใช้แต้มแต่ DB ไม่ได้จองจริง → ไม่อนุมัติ (ให้รีเฟรช หรือปฏิเสธ) — audit 2026-09-23
+    if ((order.points_redeemed ?? 0) > 0 && heldPointsFor(db, orderId, order.points_redeemed) === 0) return db;
 
     const when = new Date();
     const now = when.toISOString();
@@ -400,7 +402,7 @@ export const rejectOrder = (orderId: string) => (db: Database): Database => {
       ? [refundRow(order.user_id, orderId, 'order', order.points_redeemed, `คืนแต้ม ${order.points_redeemed} — สลิปไม่ผ่าน`), ...db.pointLedger]
       : db.pointLedger,
     couponGrants: order?.coupon_grant_id
-      ? db.couponGrants.map((g) => (g.id === order.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, discount_amount: undefined } : g))
+      ? db.couponGrants.map((g) => (g.id === order.coupon_grant_id ? { ...g, status: 'active' as const, used_at: null, order_id: null, discount_amount: null } : g))
       : db.couponGrants,
     // สลิปไม่ผ่าน → "นัดชำระ" ที่ปิดไปตอนส่งสลิปต้องกลับมาเปิด ไม่งั้นยอดนั้นหายจากคิวทวงถาวร
     // และลูกค้าเห็นว่า "จ่ายแล้ว ✓" ทั้งที่ยังไม่ได้จ่าย (audit v57 #1)
@@ -989,6 +991,8 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
   const pay = db.remainingPayments.find((r) => r.id === paymentId);
   if (!pay || pay.status !== 'pending') return db;
+  // อ้างใช้แต้มแต่ DB ไม่ได้จองจริง (ข้อมูลยังโหลดไม่ครบ / สลิปปลอม) → ไม่อนุมัติ (audit 2026-09-23: อนุมัติไป = หนี้ไม่ลดแต่แต้มถูกจอง)
+  if ((pay.points_redeemed ?? 0) > 0 && heldPointsFor(db, pay.id, pay.points_redeemed) === 0) return db;
   // โบนัสยศผูกใบ (Phase 1): ส่วนลดอัตโนมัติตอนปิดใบ — คำนวณจาก snapshot เดือนที่ปิดแล้วในเซสชันแอดมิน (เชื่อถือได้)
   // ไม่เชื่อตัวเลขจากลูกค้า: ถ้าลูกค้าโอนน้อยกว่าที่ควร (อ้างโบนัสเกิน) หนี้จะยังค้างให้เห็น ไม่หายเงียบ
   const t0 = db.tickets.find((t) => t.id === pay.ticket_id);
@@ -1019,7 +1023,7 @@ export const rejectRemainingPayment = (paymentId: string) => (db: Database): Dat
     ...db,
     remainingPayments: db.remainingPayments.filter((r) => r.id !== paymentId),
     couponGrants: pay.coupon_grant_id
-      ? db.couponGrants.map((g) => (g.id === pay.coupon_grant_id ? { ...g, status: 'active' as const, used_at: undefined, ticket_id: undefined, discount_amount: undefined } : g))
+      ? db.couponGrants.map((g) => (g.id === pay.coupon_grant_id ? { ...g, status: 'active' as const, used_at: null, ticket_id: null, discount_amount: null } : g))
       : db.couponGrants,
     // แต้มที่จองไว้คืน (v67) — DB trigger คืนจริงตอนแถวถูกลบ (AFTER DELETE); นี่คือสำเนาโชว์ล่วงหน้า (adapter ไม่ส่ง)
     pointLedger: pay.points_redeemed && db.pointLedger.some((e) => e.id === redeemHoldId(paymentId)) && !db.pointLedger.some((e) => e.id === refundRow(pay.user_id, paymentId, 'remaining_payment', 0, '').id)
@@ -1526,7 +1530,7 @@ export const reclaimOrphanCouponGrants = (userId: string) => (db: Database): Dat
   return {
     ...db,
     couponGrants: db.couponGrants.map((g) => (ids.has(g.id)
-      ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, ticket_id: undefined, discount_amount: undefined }
+      ? { ...g, status: 'active' as const, used_at: null, order_id: null, ticket_id: null, discount_amount: null }
       : g)),
     tickets: revertByTicket.size
       ? db.tickets.map((t) => (revertByTicket.has(t.id) ? { ...t, remaining_amount: t.remaining_amount + revertByTicket.get(t.id)! } : t))
@@ -2001,12 +2005,13 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
   //   ไม่เข้าเงื่อนไขนี้ — cashIn.granted อ่านจากตั๋วตรงๆ อยู่แล้ว จึงถูกต้องโดยไม่ต้องแตะออเดอร์
   const itemId = ticketId.startsWith('t-') ? ticketId.slice(2) : null;
   const orderId = itemId ? db.orders.find((o) => o.items.some((it) => it.id === itemId))?.id : undefined;
-  return {
+  // แก้มัดจำจนจ่ายครบ = ปิดใบ → ให้แต้มเลย (audit 2026-09-23: เดิมตกหล่น) · mintPointsForTickets กันซ้ำ/เช็คสิทธิ์เอง
+  return mintPointsForTickets([ticketId])({
     ...db,
     tickets: db.tickets.map((t) => (t.id === ticketId ? { ...t, deposit_paid: dep, remaining_amount: remaining, remaining_paid: paid, status } : t)),
     orders: delta === 0 || !orderId ? db.orders
       : db.orders.map((o) => (o.id === orderId ? { ...o, total_deposit: Math.max(0, (o.total_deposit ?? 0) + delta) } : o)),
-  };
+  });
 };
 
 /** Admin deletes a ticket entirely — removes it + any linked remaining-payments and
@@ -2213,7 +2218,7 @@ export const reclaimCouponGrantsFor = (userId: string) => (db: Database): Databa
   return {
     ...db,
     couponGrants: db.couponGrants.map((g) => (orphans.has(g.id)
-      ? { ...g, status: 'active' as const, used_at: undefined, order_id: undefined, ticket_id: undefined, discount_amount: undefined }
+      ? { ...g, status: 'active' as const, used_at: null, order_id: null, ticket_id: null, discount_amount: null }
       : g)),
   };
 };
@@ -2501,6 +2506,9 @@ export const setPointsRedeem = (actorId: string, enabled: boolean) => (db: Datab
  *   1) อัตราพร้อมส่ง = 0 (ยังไม่ให้คะแนนของพร้อมส่ง)  2) ให้คะแนนย้อนหลังใบพรีที่ปิดแล้วทุกใบ (รอบปกติ+รอบพิเศษ)
  *   3) เปิดสวิตช์ระบบคะแนน (ลูกค้าเห็นแต้ม) — **ไม่แตะ** สวิตช์ใช้แต้ม (ยังปิด)
  *  เรียกซ้ำได้ (ย้อนหลังใช้ id ผูกตั๋ว = ไม่ให้ซ้ำ) */
+export const simulateAfterLaunch = (actorId: string) => (db: Database): Database =>
+  db.settings.points_enabled ? db : pointsLaunchInfo(db) ? enablePointsLaunch(actorId)(db) : launchPointsPreOnly(actorId)(db);
+
 export const launchPointsPreOnly = (actorId: string) => (db: Database): Database =>
   enablePointsLaunch(actorId)(preparePointsLaunch(actorId)(db));
 

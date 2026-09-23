@@ -297,7 +297,7 @@ function DetailPanel({ coupon }: { coupon: Coupon }) {
       {grants.length === 0 ? <div className="p-3 text-[12.5px] text-ink-faint">ยังไม่ได้มอบให้ใคร</div> : grants.map((g) => (
         <div key={g.id} className="flex items-center gap-2 border-b border-subtle px-3 py-2 last:border-0">
           <span className="flex-1 text-[13px]">{uname(g.user_id)}</span>
-          <span className="text-[11px] text-ink-faint">{pts ? `ได้รับ ${fmtDate(g.granted_at)}` : g.status === 'used' ? `ใช้ ${fmtDate(g.used_at)}` : `มอบ ${fmtDate(g.granted_at)}`}</span>
+          <span className="text-[11px] text-ink-faint">{pts ? `ได้รับ ${fmtDate(g.granted_at)}` : g.status === 'used' ? `ใช้ ${fmtDate(g.used_at ?? undefined)}` : `มอบ ${fmtDate(g.granted_at)}`}</span>
           <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-semibold', badge[g.status])}>{badgeLabel[g.status]}</span>
           {g.status === 'active' && <button onClick={() => { dispatch(revokeGrant(g.id)); flash('ถอนคูปองแล้ว'); }} className="text-[11px] font-semibold text-primary-soft">ถอน</button>}
         </div>

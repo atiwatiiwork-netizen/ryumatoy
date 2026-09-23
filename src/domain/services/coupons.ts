@@ -98,6 +98,9 @@ export function orphanUsedGrants(db: Database, userId?: string): { grant: Coupon
   for (const g of db.couponGrants) {
     if (g.status !== 'used') continue;
     if (userId && g.user_id !== userId) continue;
+    // ใช้อยู่จริงกับสลิป/ออเดอร์ที่ยังไม่ถูกปฏิเสธ = ไม่ใช่ orphan (audit 2026-09-23: คูปองที่ถูกคืนแล้วเอาไปใช้ใบอื่น
+    //   แต่ order_id เก่าค้างใน DB → เคยถูกตีเป็น "ใช้ไม่สมบูรณ์" แล้วแอดมินกดคืนซ้ำทั้งที่สลิปยังใช้อยู่)
+    if (db.remainingPayments.some((r) => r.coupon_grant_id === g.id) || db.orders.some((o) => o.coupon_grant_id === g.id && o.status !== 'rejected')) continue;
     if (g.order_id) {
       const order = db.orders.find((o) => o.id === g.order_id);
       if (!order || order.status === 'rejected') out.push({ grant: g, kind: 'order', revertTicket: false });

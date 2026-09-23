@@ -8,7 +8,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
-import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, launchPointsPreOnly, preparePointsLaunch, enablePointsLaunch } from '@/data/mutations';
+import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, simulateAfterLaunch, preparePointsLaunch, enablePointsLaunch } from '@/data/mutations';
 import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows } from '@/domain/services/points';
 import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
@@ -89,7 +89,8 @@ function SettingsPanel() {
       <div className="mb-1 font-bold">⚙️ ตั้งค่า</div>
       <div className="mb-4 text-[12.5px] text-ink-faint">ทุกหน้าคิดคะแนนผ่านสูตรกลาง (points.ts) — แก้ที่นี่มีผลทันทีทั้งฝั่งลูกค้าและแอดมิน</div>
 
-      {!s.points_enabled && <LaunchCard />}
+      {/* ปุ่ม 🚀 ใช้ได้ครั้งเดียว (audit 2026-09-23): กดซ้ำหลังเคยเปิด = ตั้งอัตราพร้อมส่ง 0 + ดึงคืนแต้มที่ให้ถูกต้องไปแล้ว → หลังเปิดตัวใช้สวิตช์ธรรมดา */}
+      {!s.points_enabled && !pointsLaunchInfo(db) && <LaunchCard />}
 
       <button
         // ก่อนเปิดตัวครั้งแรก ห้ามเปิดด้วยสวิตช์ธรรมดา (audit 2026-09-23): จะเปิดทั้งที่พร้อมส่งยัง 30 + ไม่มีแต้มย้อนหลัง/ป๊อปอัป → ใช้ปุ่ม 🚀
@@ -357,7 +358,7 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
   const enabledNow = db.settings.points_enabled;
   // "หลังกดเปิดตัว" = รัน launchPointsPreOnly จริงบนสำเนา db (ไม่เซฟ) → แต้มย้อนหลัง/ข้อความ/สวิตช์ ตรงกับที่ลูกค้าจะเห็นเป๊ะ
   // (เดิมแค่บังคับ enabled=true → แต้มยังเป็น 0 เพราะยังไม่ backfill + โชว์ส่วนรายเดือนที่ลูกค้าไม่เห็น = พรีวิวไม่ตรง)
-  const simDb = useMemo(() => (!enabledNow && simOn ? launchPointsPreOnly(adminId || 'preview')(db) : db), [db, simOn, enabledNow, adminId]);
+  const simDb = useMemo(() => (!enabledNow && simOn ? simulateAfterLaunch(adminId || 'preview')(db) : db), [db, simOn, enabledNow, adminId]);
   const showNotice = !!pointsLaunchInfo(simDb) && simDb.settings.points_enabled;
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
@@ -378,6 +379,11 @@ function CustomerPreviewPanel({ rows }: { rows: ReturnType<typeof simulateAll> }
           <input type="checkbox" checked={simOn} onChange={(e) => setSimOn(e.target.checked)} />
           จำลองหลังกดเปิดตัว (คิดแต้มย้อนหลังจริง)
         </label>
+        {u && (
+          <Link href={`/wallet?sim=${encodeURIComponent(u.id)}`} className="rounded-lg bg-[linear-gradient(90deg,#7f1d1d,#b91c1c)] px-3 py-1.5 text-[12.5px] font-bold text-white shadow-[0_0_0_1px_rgba(212,175,55,.45)]">
+            📱 เปิดดูเป็น {u.display_name} (กดได้ทุกหน้า เริ่มที่กระเป๋า)
+          </Link>
+        )}
         <span className={cx('rounded-full px-2.5 py-0.5 text-[11px] font-bold', (simOn || enabledNow) ? 'bg-[#16a34a]/[0.18] text-[#4ade80]' : 'bg-[#d97706]/[0.18] text-[#fbbf24]')}>
           {enabledNow ? 'ตอนนี้ลูกค้าเห็นแบบนี้จริง' : simOn ? 'ลูกค้าจะเห็นแบบนี้ "หลังกดเปิด"' : 'ตอนนี้ลูกค้าเห็นแบบนี้ (ระบบปิด)'}
         </span>
@@ -434,7 +440,10 @@ function LaunchCard() {
     const tix = ticketsMissingEarn(d);
     // แต้มที่เคยให้ไปแล้วแต่ผิดกติกาเปิดตัว (พร้อมส่งช่วงพรีวิว / บัญชีแอดมิน / ตั๋วที่ลบแล้ว) → ดึงคืนในเฟส A
     const fix = launchCorrectionRows(d);
-    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size, fixRows: fix.length, fixPts: fix.reduce((a, r) => a - r.delta, 0) };
+    // เคยหักมือ (admin_adjust ติดลบ) ช่วงพรีวิว + จะโดนดึงคืนตอนเปิดตัวอีก = อาจหักซ้ำ → ให้แอดมินตรวจก่อนกด (audit ความถูกต้อง 2026-09-23)
+    const fixUsers = new Set(fix.filter((r) => r.delta < 0).map((r) => r.user_id));
+    const doubleRisk = [...new Set(d.pointLedger.filter((e) => e.kind === 'admin_adjust' && e.delta < 0 && fixUsers.has(e.user_id)).map((e) => e.user_id))];
+    return { tickets: tix.length, points: tix.reduce((a, t) => a + rawPointsForTicket(d, t), 0), customers: new Set(tix.map((t) => t.owner_id)).size, fixRows: fix.length, fixPts: fix.reduce((a, r) => a - r.delta, 0), doubleRisk };
   }, [db]);
   const run = async () => {
     if (busy) return;
@@ -476,8 +485,13 @@ function LaunchCard() {
         <span>ใบพรีที่จะได้ย้อนหลัง <b className="text-ink">{preview.tickets}</b> ใบ</span>
         <span>รวม <b className="text-[#fbbf24]">{num(preview.points)}</b> คะแนน</span>
         <span>ลูกค้า <b className="text-ink">{preview.customers}</b> คน</span>
-        {preview.fixRows > 0 && <span className="text-[#fbbf24]">ดึงคืนแต้มที่ให้ผิดกติกา <b>{preview.fixRows}</b> แถว (−{num(preview.fixPts)})</span>}
+        {preview.fixRows > 0 && <span className="text-[#fbbf24]">ปรับ/ดึงคืนแต้มที่ให้ผิดกติกา <b>{preview.fixRows}</b> แถว (สุทธิ −{num(preview.fixPts)})</span>}
       </div>
+      {preview.doubleRisk.length > 0 && (
+        <div className="mb-3 rounded-lg border border-[#f87171]/40 bg-[#b91c1c]/[0.10] px-3 py-2 text-[12px] text-[#fca5a5]">
+          ⚠ ลูกค้า {preview.doubleRisk.length} คนเคยถูก "หักแต้มมือ" ไปแล้ว และจะถูกดึงคืนตอนเปิดตัวอีก — อาจหักซ้ำ ตรวจในสมุดคะแนนก่อนกด: {preview.doubleRisk.map((uid) => db.users.find((u) => u.id === uid)?.display_name ?? uid).join(', ')}
+        </div>
+      )}
       <div className="mb-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[12px] text-ink-muted2">
         <b className="text-ink">แจ้งลูกค้าตอนเปิด</b> — ① ป๊อปอัป "ระบบคะแนนสะสมเปิดแล้ว · คะแนนของคุณคือ xx" ขึ้นครั้งเดียวตอนลูกค้าเปิดแอป (ทุกคน ดูพรีวิวด้านล่าง "👀 พรีวิวหน้าลูกค้า")
         <label className="mt-1.5 flex items-start gap-2">

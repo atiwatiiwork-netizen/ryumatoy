@@ -1,5 +1,6 @@
 import type { Database, PushSubscription as PushRow } from '@/domain/entities';
 import { addPushSubscription, removePushSubscriptionByEndpoint } from '@/data/mutations';
+import { simActive, SIM_BLOCKED } from './sim';
 import { supabase } from '@/data/supabaseClient';
 
 /**
@@ -32,6 +33,7 @@ type Dispatch = (m: (db: Database) => Database) => void;
 
 /** Ask permission + subscribe this device + save the row (must run from a user tap). */
 export async function enablePush(userId: string, dispatch: Dispatch): Promise<void> {
+  if (simActive()) throw new Error(SIM_BLOCKED); // โหมดจำลอง — ห้ามผูกเครื่องแอดมินเป็นเครื่องของลูกค้า
   await navigator.serviceWorker.register('/sw.js');
   const reg = await navigator.serviceWorker.ready; // subscribe only on an ACTIVE worker
   const perm = await Notification.requestPermission();
@@ -102,6 +104,7 @@ export function subsForNewProduct(db: Database, product: { manufacturer_id: stri
  * best-effort เสมอ: ล้มเหลว/ถูกจำกัดความถี่ = เงียบ ห้ามกระทบการบิด
  */
 export async function sendAuctionPush(auctionId: string, kind: 'outbid' | 'price'): Promise<void> {
+  if (simActive()) return;
   try {
     const token = supabase
       ? await Promise.race([
@@ -121,7 +124,7 @@ export async function sendAuctionPush(auctionId: string, kind: 'outbid' | 'price
 /** Send a notification to a set of devices, then prune endpoints the browser has revoked.
  *  Fire-and-forget from admin flows — a push must never block or fail the actual save. */
 export async function sendPush(subs: PushRow[], payload: PushPayload, dispatch?: Dispatch): Promise<{ sent: number; gone: string[] }> {
-  if (subs.length === 0) return { sent: 0, gone: [] };
+  if (subs.length === 0 || simActive()) return { sent: 0, gone: [] }; // โหมดจำลอง — ห้ามยิง push จริง
   // แนบ access token ของผู้ใช้ที่ล็อกอิน — /api/push-send ปฏิเสธคำขอที่ไม่มี token (ปิดช่องยิง spam 2026-07-25)
   // DNA: ทุก await ที่วิ่งเน็ตต้องมี timeout — getSession() เคยค้างตอนกลับมาจากพักหน้าจอ
   // ถ้าค้างตรงนี้จะลาก flow แอดมิน (กดของถึงไทย) ค้างไปด้วย ทั้งที่ push แค่ best-effort

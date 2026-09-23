@@ -127,7 +127,7 @@ export default function OrdersHubPage() {
                 <div className="grid h-[52px] w-[42px] place-items-center rounded-lg bg-stripe"><Icon name="copy" size={17} className="text-ink-faint" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{userName(o.user_id)}</div>
-                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}{(o.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> · ⭐ ใช้แต้ม −{baht(o.points_redeemed ?? 0)}{heldPointsFor(db, o.id, o.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ แต้มไม่ได้ถูกจองจริง — อย่าอนุมัติ</span>}</span> : null}
+                  <div className="text-xs text-ink-faint">{o.items.length} รายการ · {baht(o.total_deposit)}{o.coupon_discount ? <span className="text-[#4ade80]"> · คูปอง −{baht(o.coupon_discount)}</span> : null}{(o.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> · ⭐ ใช้แต้ม −{baht(o.points_redeemed ?? 0)}{heldPointsFor(db, o.id, o.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ แต้มยังไม่ถูกจอง — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>}</span> : null}
                     {/* ออเดอร์ 0 บาท (Diamond/คูปองคลุมเต็ม) ไม่มีสลิปโดยธรรมชาติ — ป้ายกันเข้าใจผิดว่าเป็นขยะแล้วกดปฏิเสธ (เคสจริง 2026-09-03) */}
                     {(o.total_deposit ?? 0) <= 0 && <span className="ml-1 rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-bold text-[#c4b5fd]">💎 ไม่ต้องโอน · กดยืนยันได้เลย</span>}
                   </div>
@@ -324,7 +324,7 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
               <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[12.5px]">
                 <span className="w-[130px] shrink-0 font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</span>
                 <span className="min-w-0 flex-1 truncate">{tk ? nameOf(tk) : ''}</span>
-                <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}{(r.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> (⭐ แต้ม −{baht(r.points_redeemed ?? 0)}{heldPointsFor(db, r.id, r.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ ไม่ได้จองจริง — ระบบจะไม่หักให้</span>})</span> : null}</span>
+                <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}{(r.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> (⭐ แต้ม −{baht(r.points_redeemed ?? 0)}{heldPointsFor(db, r.id, r.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ ยังไม่ถูกจอง — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>})</span> : null}</span>
                 <button disabled={busy} onClick={() => onRejectOne(r)} title="ปฏิเสธเฉพาะใบนี้" className="grid h-6 w-6 place-items-center rounded-md border border-[#f87171]/40 text-[#f87171] disabled:opacity-40">×</button>
               </div>
             );

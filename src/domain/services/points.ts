@@ -2,6 +2,7 @@ import type { Database, OrderItem, PointLedgerEntry, PreorderTicket, ShopSetting
 import { ticketPaid, ticketDue, isSourcingTicket } from './money';
 import { orderOfTicket } from './journey';
 import { isAdminUser, isStaffAccount } from './admins';
+import { ledgerById, ledgerTotals, orderItemById, auctionPayOrderIds, approvedRpTicketIds, ticketById, lastApprovedRpAt } from './indexes';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -30,6 +31,8 @@ import { isAdminUser, isStaffAccount } from './admins';
 /** id แถว "ได้คะแนน" ของตั๋วใบนี้ — ตัวเดียวที่ทุกทางต้องใช้ (idempotency key) */
 export const earnIdFor = (ticketId: string) => `pl-earn-${ticketId}`;
 export const reverseIdFor = (ticketId: string) => `pl-rev-${ticketId}`;
+/** ปรับยอดแต้มปิดยอดให้ตรงอัตราตอนเปิดตัว (เช่น รอบพิเศษจ่ายเต็มที่เคยได้ 30 ช่วงพรีวิว → 20) — ใบละครั้งเดียว */
+export const earnFixIdFor = (ticketId: string) => `pl-fix-${ticketId}`;
 
 /** ตั๋ว "จ่ายเต็มตั้งแต่เกิด" (พร้อมส่ง / รอบจ่ายเต็ม) → ใช้อัตราพร้อมส่ง + ไม่นับเป็น "ใบพรี" รายเดือน.
  *  ตัดสินจาก **snapshot ของรายการในออเดอร์** (unit_deposit ≥ unit_price) ไม่ใช่สภาพตั๋วปัจจุบัน — เพราะ
@@ -39,26 +42,14 @@ export const reverseIdFor = (ticketId: string) => `pl-rev-${ticketId}`;
  *  ตั๋วมอบ/legacy (ไม่มีรายการออเดอร์คู่): จ่ายเต็ม = ไม่มีส่วนต่างตั้งแต่เกิด และไม่เคยมีสลิปส่วนต่านอนุมัติ */
 export function ticketIsFullPay(db: Database, t: PreorderTicket): boolean {
   if (t.id.startsWith('t-')) {
-    const it = orderItemIndex(db).get(t.id.slice(2));
+    const it = orderItemById(db).get(t.id.slice(2))?.item;
     if (it && it.unit_price != null && it.unit_deposit != null) return it.unit_deposit >= it.unit_price;
     // แถวรุ่นเก่าไม่มี snapshot → ใช้ fallback ด้านล่าง
   }
   return (t.remaining_amount ?? 0) === 0 && (t.remaining_paid ?? 0) === 0
-    && !db.remainingPayments.some((r) => r.ticket_id === t.id && r.status === 'approved');
+    && !approvedRpTicketIds(db).has(t.id);
 }
 
-/** ดัชนี order_item ตาม id — แคชต่อ db (WeakMap) เพราะ ticketIsFullPay ถูกเรียกต่อตั๋ว×ต่อคนในกระดาน/จำลอง
- *  (ไล่สแกน orders ทุกครั้ง = O(ตั๋ว×ออเดอร์×คน) หน้าแอดมินจะหน่วงเมื่อร้านโต) */
-const itemIndexCache = new WeakMap<Database, Map<string, OrderItem>>();
-function orderItemIndex(db: Database): Map<string, OrderItem> {
-  let m = itemIndexCache.get(db);
-  if (!m) {
-    m = new Map();
-    for (const o of db.orders) for (const it of o.items) m.set(it.id, it);
-    itemIndexCache.set(db, m);
-  }
-  return m;
-}
 
 /** อัตราคะแนนต่อชิ้น (พรี / พร้อมส่ง) — ตัวเดียวที่หน้าจอใช้โชว์ตัวเลข.
  *  fallback 20/30 เมื่อ settings มาจากสแนปช็อตเก่าที่ยังไม่มีคีย์ (กัน NaN/0 เงียบๆ) */
@@ -101,12 +92,12 @@ export function ticketEarnBlock(db: Database, t: PreorderTicket): string | null 
   if (isSourcingTicket(db, t)) return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
   // ออเดอร์ที่เป็นตัวจ่ายค่าประมูล (v61) — คะแนนประมูลค่อยว่ากันเฟสหน้า
   if (t.id.startsWith('t-')) {
-    const itemId = t.id.slice(2);
-    const order = db.orders.find((o) => o.items.some((i) => i.id === itemId));
-    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
+    const orderId = orderItemById(db).get(t.id.slice(2))?.orderId;
+    if (orderId && auctionPayOrderIds(db).has(orderId)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
   } else {
-    const order = orderOfTicket(db, t);
-    if (order && db.auctions.some((a) => a.pay_order_id === order.id)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
+    const pays = auctionPayOrderIds(db);
+    const order = pays.size ? orderOfTicket(db, t) : undefined;
+    if (order && pays.has(order.id)) return 'ออเดอร์ประมูล (ไม่ให้เฟสนี้)';
   }
   return null;
 }
@@ -116,7 +107,7 @@ export function pointsForTicket(db: Database, t: PreorderTicket): number {
   return ticketEarnEligible(db, t).ok ? rawPointsForTicket(db, t) : 0;
 }
 
-export const hasEarned = (db: Database, ticketId: string) => db.pointLedger.some((e) => e.id === earnIdFor(ticketId));
+export const hasEarned = (db: Database, ticketId: string) => ledgerById(db).has(earnIdFor(ticketId));
 
 /**
  * สร้างแถว "ได้คะแนน" ให้ตั๋วใบนี้ — คืน null เมื่อ: ระบบปิด / ไม่เข้าเกณฑ์ / ได้ไปแล้ว / คะแนนเป็น 0.
@@ -144,13 +135,17 @@ export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorI
 
 /** แถว "ดึงคะแนนกลับ" เมื่อตั๋วที่เคยได้คะแนนถูกลบ — null ถ้าไม่เคยได้ หรือดึงกลับไปแล้ว */
 export function reverseRowForTicket(db: Database, ticketId: string, opts: { actorId?: string; note?: string } = {}): PointLedgerEntry | null {
-  const earn = db.pointLedger.find((e) => e.id === earnIdFor(ticketId));
+  const idx = ledgerById(db);
+  const earn = idx.get(earnIdFor(ticketId));
   if (!earn) return null;
-  if (db.pointLedger.some((e) => e.id === reverseIdFor(ticketId))) return null;
+  if (idx.has(reverseIdFor(ticketId))) return null;
+  const fix = idx.get(earnFixIdFor(ticketId)); // ปรับอัตราตอนเปิดตัว (ถ้ามี) → ดึงคืน "สุทธิ"
+  const net = earn.delta + (fix?.delta ?? 0);
+  if (net === 0) return null;
   return {
     id: reverseIdFor(ticketId),
     user_id: earn.user_id,
-    delta: -earn.delta,
+    delta: -net,
     kind: 'reverse_ticket',
     ref_type: 'ticket',
     ref_id: ticketId,
@@ -166,14 +161,10 @@ export const ledgerOf = (db: Database, userId: string) =>
   db.pointLedger.filter((e) => e.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
 /** ยอดคงเหลือใช้ได้ = ผลรวมทุกแถว (ไม่ติดลบเวลาโชว์) */
-export const balanceOf = (db: Database, userId: string) =>
-  Math.max(0, db.pointLedger.filter((e) => e.user_id === userId).reduce((s, e) => s + e.delta, 0));
+export const balanceOf = (db: Database, userId: string) => Math.max(0, ledgerTotals(db).get(userId)?.sum ?? 0);
 
 /** ยอดสะสม = ผลรวมคะแนนที่ "ได้จริง" (ปิดตั๋ว + รางวัลยศรายเดือน) หัก reverse — ไม่นับแอดมินเติม/คืน */
-export const lifetimeOf = (db: Database, userId: string) =>
-  Math.max(0, db.pointLedger
-    .filter((e) => e.user_id === userId && (e.kind === 'earn_ticket' || e.kind === 'reverse_ticket' || e.kind === 'monthly_reward' || e.kind === 'coupon_reward'))
-    .reduce((s, e) => s + e.delta, 0));
+export const lifetimeOf = (db: Database, userId: string) => Math.max(0, ledgerTotals(db).get(userId)?.life ?? 0);
 
 /** วันที่เคลื่อนไหวล่าสุด (ใช้กับกติกาหมดอายุ 12 เดือน — ตัวกวาดยังไม่เปิด) */
 export const lastActivityOf = (db: Database, userId: string) => ledgerOf(db, userId)[0]?.created_at;
@@ -279,8 +270,9 @@ export function simulateAll(db: Database): SimRow[] {
     r.closedTickets += 1;
     r.wouldEarn += pts;
     // ที่ให้ไปแล้ว = ตัวเลขในสมุดจริง (อัตราอาจเปลี่ยนหลังให้ไป) ไม่ใช่สูตรปัจจุบัน
-    const earn = db.pointLedger.find((e) => e.id === earnIdFor(t.id));
-    if (earn) r.earned += earn.delta; else r.missing += pts;
+    const idx = ledgerById(db);
+    const earn = idx.get(earnIdFor(t.id));
+    if (earn) r.earned += earn.delta + (idx.get(earnFixIdFor(t.id))?.delta ?? 0); else r.missing += pts;
   }
   // คนที่มีแถวในสมุดแต่ตั๋วถูกลบไปแล้ว ก็ต้องโผล่ (ยอดคงเหลือ/หนี้)
   for (const e of db.pointLedger) get(e.user_id);
@@ -295,6 +287,7 @@ export function ticketsMissingEarn(db: Database): PreorderTicket[] {
 export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji: string }> = {
   earn_ticket: { label: 'ได้คะแนน · ปิดยอด', emoji: '✨' },
   reverse_ticket: { label: 'ดึงคืน · ตั๋วถูกลบ', emoji: '↩️' },
+  earn_adjust: { label: 'ปรับคะแนนปิดยอดตามกติกา', emoji: '⚖️' },
   monthly_reward: { label: 'รางวัลยศประจำเดือน', emoji: '🏆' },
   coupon_reward: { label: 'รางวัลแต้ม · คูปอง / Event / ภารกิจ', emoji: '🎁' },
   redeem_order: { label: 'ใช้ลด · ซื้อพร้อมส่ง', emoji: '🛒' },
@@ -368,13 +361,30 @@ export function launchNotice(db: Database, userId: string): { balance: number; t
  *  id = pl-rev-<ticketId> (ตัวเดียวกับตอนลบตั๋ว) → เรียกซ้ำไม่ดึงซ้ำ */
 export function launchCorrectionRows(db: Database, actorId?: string): PointLedgerEntry[] {
   const out: PointLedgerEntry[] = [];
+  const idx = ledgerById(db);
+  const tix = ticketById(db);
+  const now = new Date().toISOString();
   for (const e of db.pointLedger) {
     if (e.kind !== 'earn_ticket' || !e.ref_id) continue;
-    const t = db.tickets.find((x) => x.id === e.ref_id);
-    const why = !t ? 'ตั๋วถูกลบไปแล้ว' : rawPointsForTicket(db, t) === 0 ? 'ยังไม่ให้คะแนนของพร้อมส่ง' : ticketEarnBlock(db, t);
-    if (!why) continue;
-    const r = reverseRowForTicket(db, e.ref_id, { actorId, note: `ปรับตอนเปิดตัว — ${why} (${e.note ?? e.ref_id})` });
-    if (r && !out.some((x) => x.id === r.id)) out.push(r);
+    if (idx.has(reverseIdFor(e.ref_id)) || out.some((x) => x.ref_id === e.ref_id)) continue; // ดึงคืน/ปรับไปแล้ว
+    const t = tix.get(e.ref_id);
+    const raw = t ? rawPointsForTicket(db, t) : 0;
+    const why = !t ? 'ตั๋วถูกลบไปแล้ว' : raw === 0 ? 'ยังไม่ให้คะแนนของพร้อมส่ง' : ticketEarnBlock(db, t);
+    if (why) {
+      const r = reverseRowForTicket(db, e.ref_id, { actorId, note: `ปรับตอนเปิดตัว — ${why} (${e.note ?? e.ref_id})` });
+      if (r) out.push(r);
+      continue;
+    }
+    // ได้ไปคนละอัตรากับกติกาตอนนี้ (เช่น รอบพิเศษจ่ายเต็มได้ 30 ช่วงพรีวิว → ตอนนี้ใบพรี 20) → แถวปรับส่วนต่าง ใบละครั้ง
+    // kind แยก (earn_adjust) เพราะ DB มี unique(kind, ref_id) — ใช้ earn_ticket ซ้ำ ref_id เดิมไม่ได้
+    const fix = idx.get(earnFixIdFor(e.ref_id));
+    const net = e.delta + (fix?.delta ?? 0);
+    if (!fix && net !== raw) {
+      out.push({
+        id: earnFixIdFor(e.ref_id), user_id: e.user_id, delta: raw - net, kind: 'earn_adjust', ref_type: 'ticket', ref_id: e.ref_id,
+        note: `ปรับตอนเปิดตัว — คะแนนปิดยอดตามอัตราปัจจุบัน ${raw} (เดิม ${net})`, created_by: actorId ?? 'system', created_at: now,
+      });
+    }
   }
   return out;
 }
@@ -385,8 +395,25 @@ export function launchCorrectionRows(db: Database, actorId?: string): PointLedge
 export function heldPointsFor(db: Database, rowId: string, requested: number | undefined): number {
   const want = Math.max(0, Math.trunc(requested ?? 0));
   if (want <= 0) return 0;
-  const hold = db.pointLedger.find((e) => e.id === redeemHoldId(rowId));
+  const idx = ledgerById(db);
+  const hold = idx.get(redeemHoldId(rowId));
   if (!hold || hold.delta !== -want) return 0;
-  if (db.pointLedger.some((e) => e.id === refundId(rowId))) return 0;
+  if (idx.has(refundId(rowId))) return 0;
   return want;
+}
+
+/** เวลาที่ตั๋ว "ปิดยอด" (ประมาณ, ISO): สลิปส่วนต่างอนุมัติล่าสุด / ปิดใบนอกระบบ / อนุมัติออเดอร์หรือวันออกตั๋ว (จ่ายครบตั้งแต่เกิด) */
+export function ticketClosedAt(db: Database, t: PreorderTicket): string {
+  return [lastApprovedRpAt(db).get(t.id), t.shipped_out_at, t.approved_at ?? t.created_at]
+    .filter((x): x is string => !!x)
+    .reduce((a, b) => (b > a ? b : a), '');
+}
+
+/** ตั๋วที่ระบบแอดมิน "เติมแต้มให้เองอัตโนมัติ" (AdminShell) — ตกหล่น + ปิดยอด **หลังวันเปิดตัว** เท่านั้น
+ *  (audit 2026-09-23: ถ้ากวาดทุกใบ พอเจ้าของปรับอัตราพร้อมส่งขึ้นทีหลัง ระบบจะแจกย้อนหลังของพร้อมส่งทุกใบทันทีแบบไม่ถาม)
+ *  ของเก่าก่อนเปิดตัว = ปุ่ม "ให้คะแนนย้อนหลัง" ที่แอดมินกดเองเท่านั้น */
+export function sweepCandidates(db: Database): PreorderTicket[] {
+  const li = pointsLaunchInfo(db);
+  if (!li || !db.settings.points_enabled) return [];
+  return ticketsMissingEarn(db).filter((t) => ticketClosedAt(db, t) >= li.at);
 }
