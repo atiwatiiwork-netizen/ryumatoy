@@ -416,7 +416,9 @@ function SurplusList() {
   const avail = db.products.filter((p) => stockRemaining(db, p) - poolHeld(db, p.id) > 0 && !hasOpenBatch(db, p.id));
   const busy = db.products.filter((p) => stockRemaining(db, p) > 0 && hasOpenBatch(db, p.id));
   // แยกตามค่าย → กลุ่มซีรีย์ (เจ้าของ 2026-09-15) — ตัวจัดกลุ่มเดียวกับหน้าปิดรอบ/ช็อป
-  const makers = groupByMakerSeries(db, avail);
+  // SKU ที่มีรอบเปิดอยู่ "อยู่ในกลุ่มตำแหน่งปกติ" ด้วย (เจ้าของ 2026-09-28: เดิมโยนไปท้ายลิสต์ = เหมือนอยู่คนละที่)
+  const busySet = new Set(busy.map((p) => p.id));
+  const makers = groupByMakerSeries(db, [...avail, ...busy]);
   return (
     <div className="mb-6 rounded-2xl border border-subtle bg-surface-2 p-4">
       <div className="mb-2 text-[13px] text-ink-faint">ส่วนเกินจากการปิดยอด — เปิดรอบพิเศษได้ (ทีละรอบต่อ SKU)</div>
@@ -441,24 +443,53 @@ function SurplusList() {
                     <span className="text-[11px] text-ink-faint">· {g.products.length} ตัว · เหลือรวม {g.products.reduce((s, p) => s + stockRemaining(db, p), 0)}</span>
                   </div>
                   <div className="flex flex-col divide-y divide-hair">
-                    {g.products.map((p) => <SurplusRow key={p.id} product={p} />)}
+                    {g.products.map((p) => (busySet.has(p.id) ? <BusyRow key={p.id} product={p} /> : <SurplusRow key={p.id} product={p} />))}
                   </div>
                 </div>
               ))}
             </div>
           ))}
-          {busy.length > 0 && (
-            <div className="mt-2 flex flex-col divide-y divide-hair border-t border-hair pt-1">
-              {busy.map((p) => (
-                <div key={p.id} className="flex items-center justify-between px-1 py-3 text-[13px]">
-                  <span className="font-semibold">{p.series_name}</span>
-                  <span className="text-[12px] text-[#fbbf24]">กำลังเปิดรอบอยู่ · จัดการด้านล่าง</span>
-                </div>
-              ))}
-            </div>
-          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** แถว SKU ที่ "มีรอบเปิดอยู่" ในลิสต์ส่วนเกิน — โชว์ตำแหน่งปกติในกลุ่มค่าย/ซีรีย์ พร้อมสถานะรอบ + ปุ่มกระโดด
+ *  ไปการ์ดรอบด้านล่าง (เจ้าของ 2026-09-28 "เหมือนอยู่คนละที่กัน") · ปุ่มเปิดรอบ/มอบตั๋วอยู่ที่การ์ดรอบ (1 SKU 1 รอบ) */
+function BusyRow({ product: p }: { product: Product }) {
+  const db = useDatabase();
+  const b = db.batches.find((x) => x.product_id === p.id && x.status === 'open');
+  if (!b) return null;
+  const sold = batchSoldQty(db, b.id);
+  const left = batchRemaining(db, b.id, b.stock_qty);
+  const held = pendingHeld(db, p.id, b.id);
+  const isDraft = b.published === false;
+  const jump = () => {
+    const el = document.getElementById(`round-${b.id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // ไฮไลต์การ์ดปลายทางแวบหนึ่งให้ตาไปถูกใบ
+    el.classList.add('ring-2', 'ring-[#8b5cf6]');
+    setTimeout(() => el.classList.remove('ring-2', 'ring-[#8b5cf6]'), 1800);
+  };
+  return (
+    <div className="px-1 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="h-[48px] w-[48px] shrink-0 overflow-hidden rounded-[9px] border border-subtle bg-stripe">
+          {p.images[0]
+            ? <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+            : <div className="grid h-full w-full place-items-center"><Icon name="box" size={20} className="text-primary-soft/25" /></div>}
+        </div>
+        <span className="min-w-[140px] flex-1">
+          <span className="block text-sm font-semibold">{p.character_name || p.series_name}</span>
+          <span className="block font-mono text-[11px] text-ink-faint">{franchiseOf(db, p)?.abbr.toUpperCase()} · คลัง {stockRemaining(db, p)}</span>
+        </span>
+        <span className={cx('rounded-lg border px-2.5 py-1.5 text-[11.5px] font-bold', isDraft ? 'border-[#d97706]/45 bg-[#d97706]/[0.12] text-[#fbbf24]' : 'border-[#16a34a]/45 bg-[#16a34a]/[0.12] text-[#4ade80]')}>
+          {isDraft ? '📝 รอบร่าง' : '🟢 กำลังขาย'} “{b.label}” · เหลือ {left}/{b.stock_qty} · ขาย {sold}{held > 0 ? ` · ⏳ ติดจอง ${held}` : ''}
+        </span>
+        <button onClick={jump} className="rounded-lg border border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.12] px-3 py-2 text-[12.5px] font-bold text-[#c4b5fd]">จัดการรอบ ↓</button>
+      </div>
     </div>
   );
 }
@@ -1391,7 +1422,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
   };
 
   return (
-    <div className={cx('rounded-xl border border-subtle p-3.5', inGroup ? 'bg-surface-3/40' : 'bg-surface-2', readOnly && moving.length === 0 && 'opacity-75')}>
+    <div id={`round-${b.id}`} className={cx('rounded-xl border border-subtle p-3.5 transition-shadow', inGroup ? 'bg-surface-3/40' : 'bg-surface-2', readOnly && moving.length === 0 && 'opacity-75')}>
       {/* การ์ดรูปสไตล์ "หาของนอกระบบ": รูป + ชื่อ + ราคา + chips สถานะรอบ
           inGroup = อยู่ในการ์ดรวม SKU แล้ว → ไม่ต้องซ้ำรูป/ชื่อสินค้า โชว์แค่ชื่อลอต */}
       <div className="flex items-start gap-3">
