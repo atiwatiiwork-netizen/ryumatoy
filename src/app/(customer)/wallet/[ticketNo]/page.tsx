@@ -29,7 +29,8 @@ import { shippingInfoOf, composeAddress, addressProblem, splitComposed } from '@
 import type { ProductStatus, PreorderTicket, DeliveryMethod, ShippingInfo } from '@/domain/entities';
 import Link from 'next/link';
 import { SellSheet } from '@/components/market/SellSheet';
-import { marketVisibleTo, activeListingOf, boughtFromMarket, TRANSFER_STATUS_LABEL, effectiveStatus } from '@/domain/services/market';
+import { marketVisibleTo, directVisibleTo, activeListingOf, boughtFromMarket, dealStatusLabel, isDirect } from '@/domain/services/market';
+import type { SellMode } from '@/components/market/SellSheet';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
   { key: 'open', label: 'เปิดจอง' },
@@ -56,7 +57,7 @@ export default function TicketDetailPage() {
   const [busy, setBusy] = useState(false);
   const [couponGrantId, setCouponGrantId] = useState<string>('');
   const [usePts, setUsePts] = useState(0); // แต้มที่เลือกใช้ (v67) — 0 = ไม่ใช้
-  const [selling, setSelling] = useState(false); // แผงลงขายตลาดใบพรี
+  const [selling, setSelling] = useState<SellMode | null>(null); // แผงลงขาย ('market') / เปลี่ยนใบพรี ('direct' · v73)
 
   const ticket = db.tickets.find((t) => t.ticket_no === decodeURIComponent(ticketNo));
   if (!ticket) {
@@ -151,7 +152,13 @@ export default function TicketDetailPage() {
     // ตลาดยังไม่เปิดให้ลูกค้า (เจ้าของ 2026-09-23) → ลูกค้าเห็น "เร็วๆ นี้" เหมือนเดิม · แอดมินลองลงขายได้จริง
     if (!marketVisibleTo(db, CURRENT_USER_ID)) { flash('ตลาดซื้อขายใบพรี — เร็วๆ นี้'); return; }
     if (listing) { router.push(`/market/${listing.id}`); return; }
-    setSelling(true);
+    setSelling('market');
+  };
+  // "เปลี่ยนใบพรี" ให้คนที่รู้จักด้วยเลขกระเป๋า (v73) — สวิตช์แยกจากกระดาน · ยังปิด = ลูกค้าไม่เห็นปุ่มเลย
+  const canDirect = directVisibleTo(db, CURRENT_USER_ID);
+  const transfer = () => {
+    if (listing) { router.push(`/market/${listing.id}`); return; }
+    setSelling('direct');
   };
 
   return (
@@ -238,8 +245,8 @@ export default function TicketDetailPage() {
         <Link href={`/market/${listing.id}`} className="mb-4 flex items-center gap-2.5 rounded-card border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-4 py-3">
           <Icon name="swap" size={18} className="text-[#f1d27a]" />
           <div className="flex-1 text-[12.5px] leading-relaxed text-ink-muted2">
-            <b className="text-[#f1d27a]">🔒 ลงขายอยู่ในตลาด · {baht(listing.asking_price)}</b> · {TRANSFER_STATUS_LABEL[effectiveStatus(listing)]}<br />
-            จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะขายหรือถอนประกาศ
+            <b className="text-[#f1d27a]">🔒 {isDirect(listing) ? 'กำลังเปลี่ยนใบให้คนอื่น' : 'ลงขายอยู่ในตลาด'} · {listing.asking_price > 0 ? baht(listing.asking_price) : 'ยกให้ฟรี'}</b> · {dealStatusLabel(listing)}<br />
+            จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะจบดีลหรือถอน
           </div>
           <Icon name="chevronRight" size={16} className="text-ink-faint" />
         </Link>
@@ -316,9 +323,12 @@ export default function TicketDetailPage() {
       {/* จ่ายครบ + ของถึงไทย/พร้อมส่ง → เลือกวิธีรับของ (ryuma delivery spec) */}
       {deliveryReady(db, ticket) && !listing && <DeliverySection ticket={ticket} />}
 
-      {selling && <SellSheet ticket={ticket} onClose={() => setSelling(false)} />}
+      {selling && <SellSheet ticket={ticket} mode={selling} onClose={() => setSelling(null)} />}
       <div className="flex gap-2.5">
-        <Button variant="outline" icon="swap" onClick={resell}>{listing ? 'ดูประกาศขาย' : 'ลงขาย P2P'}</Button>
+        {canDirect && !listing && <Button variant="outline" icon="swap" onClick={transfer}>เปลี่ยนใบพรี</Button>}
+        {(!canDirect || listing || marketVisibleTo(db, CURRENT_USER_ID)) && (
+          <Button variant="outline" icon="swap" onClick={listing ? transfer : resell}>{listing ? (isDirect(listing) ? 'ดูข้อเสนอ' : 'ดูประกาศขาย') : 'ลงขาย P2P'}</Button>
+        )}
         {canPay && !pendingRP && !paying && (
           <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
         )}

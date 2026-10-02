@@ -16,6 +16,7 @@ import { ticketDue } from '@/domain/services/money';
 import { usableGrantsFor } from '@/domain/services/coupons';
 import { balanceOf, pointsVisibleTo } from '@/domain/services/points';
 import { MyCoupons } from '@/components/CouponTicket';
+import { WalletCodeChip } from '@/components/market/WalletCodeChip';
 import type { Database, PreorderTicket } from '@/domain/entities';
 
 type Tab = 'all' | 'preorder' | 'pay' | 'shipping' | 'done' | 'coupon';
@@ -72,6 +73,8 @@ export default function WalletPage() {
     <div className="mx-auto max-w-[640px] pb-24">
       <div className="text-[26px] font-extrabold">กระเป๋าพรี</div>
       <div className="mb-4 mt-1 text-[13px] text-ink-muted">{mine.length} ใบ · ค้างชำระรวม <span className="font-bold text-primary-soft">{baht(totalDue)}</span>{pointsVisibleTo(db, CURRENT_USER_ID) && <> · <Link href="/points" className="font-bold text-[#f1d27a]">⭐ {points.toLocaleString('en-US')} คะแนน</Link></>}</div>
+      {/* เลขกระเป๋ารายวัน (v73 เปลี่ยนใบพรี) — คอมโพเนนต์ซ่อนตัวเองถ้าสวิตช์ยังปิด */}
+      <WalletCodeChip className="mb-4" />
 
       <div className="mb-[18px] flex items-center gap-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">

@@ -6,31 +6,32 @@ import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { store } from '@/data/store';
-import { submitRemainingPayment, setPayoutInfo } from '@/data/mutations';
+import { submitRemainingPayment, payoutInfoOf } from '@/data/mutations';
 import { uploadImage } from '@/lib/upload';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
 import { baht } from '@/lib/theme';
-import { promptPayTarget } from '@/lib/promptpay';
 import { productLabel } from '@/domain/services/catalog';
 import { depositGap, listingPreview, sellBlockReason, standardDepositPerUnit, MARKET } from '@/domain/services/market';
 import { heldByPayer } from '@/domain/services/tickets';
 import * as mk from '@/lib/market';
-import type { PreorderTicket } from '@/domain/entities';
+import type { PayoutAccount, PreorderTicket } from '@/domain/entities';
 import { QrPanel, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { MoneySplit, StubArt, LotPill } from './MarketUi';
+import { PayoutPicker, payoutAccountsOf, payoutLabel } from './PayoutPicker';
 
-const inputCls = 'w-full rounded-xl border border-subtle bg-surface-3 px-3 py-2.5 text-[14px] text-ink outline-none focus:border-accent';
+export type SellMode = 'market' | 'direct';
 
 /**
- * ลงขายใบพรี (เปิดจากหน้าใบพรีในกระเป๋า) — ข้อ 1-11 ที่เจ้าของตอบ:
- *   ① มัดจำไม่เต็ม (Gold/Diamond) → เติมก่อน (สลิปเข้าร้าน · purpose topup · หักจากส่วนต่าง)
- *   ② ขายไม่ได้ด้วยเหตุผลอื่น → บอกตรงๆ   ③ บัญชีรับเงิน (ครั้งแรกครั้งเดียว)
- *   ④ จำนวนชิ้น (แตกขายได้) + ราคา (อิสระ) → ⑤ ดูตัวเลข 2 ก้อนแบบที่ผู้ซื้อจะเห็น → ลงประกาศ
- * ด่านจริงอยู่ที่ ryuma_market_list (server) — หน้านี้แค่บอกเหตุผลก่อนกด
+ * แผงจากหน้าใบพรีในกระเป๋า — 2 โหมดใช้ร่างเดียวกัน (เจ้าของ 2026-10-02 ข้อ 3.3: บัญชีชุดเดียวกัน):
+ *   'market' = ลงขายขึ้นกระดาน (ข้อ 1-11 ของ ryuma-p2p-spec)
+ *   'direct' = "เปลี่ยนใบพรี" ให้คนที่รู้จักด้วยเลขกระเป๋า 4 หลัก (ryuma-direct-transfer-spec)
+ * ลำดับ: ① เติมมัดจำถ้าไม่เต็ม (สลิปเข้าร้าน · แยกหัวข้อ "เติมมัดจำ" ให้แอดมิน) ② ขายไม่ได้ด้วยเหตุผลอื่น → บอกตรงๆ
+ *        ③ เลือกบัญชีรับเงิน (ลงทะเบียนไว้/สร้างใหม่) ④ จำนวนชิ้น + ยอด ⑤ (direct) เลขกระเป๋าผู้รับ → ยืนยันคน → ส่ง
+ * ด่านจริงอยู่ที่ RPC (ryuma_market_list / ryuma_market_offer) — หน้านี้แค่บอกเหตุผลก่อนกด
  */
-export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose: () => void }) {
+export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: PreorderTicket; mode?: SellMode; onClose: () => void }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const router = useRouter();
@@ -38,13 +39,21 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
   const uid = useCurrentUserId();
   const t = db.tickets.find((x) => x.id === ticket.id) ?? ticket;
   const me = db.users.find((u) => u.id === uid);
+  const direct = mode === 'direct';
   const [qty, setQty] = useState(1);
   const pv0 = listingPreview(t, t.qty, 0);
   const [priceStr, setPriceStr] = useState(String(Math.round(pv0.paid)));
-  const [pp, setPp] = useState({ promptpay: me?.payout_info?.promptpay ?? '', account_name: me?.payout_info?.account_name ?? '', bank: me?.payout_info?.bank ?? '', account_no: me?.payout_info?.account_no ?? '' });
-  const [editPayout, setEditPayout] = useState(!me?.payout_info);
+  const [payoutId, setPayoutId] = useState<string | undefined>(() => {
+    // บัญชีหลัก = ตัวที่ตรงกับ payout_info (เลือกล่าสุด) ไม่งั้นตัวแรก
+    const list = payoutAccountsOf(me);
+    const p = me?.payout_info;
+    return list.find((a) => p && a.account_name === p.account_name && (a.promptpay ?? '') === (p.promptpay ?? '') && (a.account_no ?? '') === (p.account_no ?? ''))?.id ?? list[0]?.id;
+  });
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // direct: เลขกระเป๋าผู้รับ + ผลค้น
+  const [code, setCode] = useState('');
+  const [target, setTarget] = useState<mk.WalletLookupRes | null>(null);
 
   const gap = depositGap(db, t);
   const pendingTopup = db.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending' && r.purpose === 'topup');
@@ -55,6 +64,8 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
   const blocked = !!reason && !(gap > 0 && reason.startsWith('ต้องเติมมัดจำ')) && !(pendingTopup && reason === 'มีสลิปส่วนต่างรอตรวจ');
   const pv = listingPreview(t, q, price);
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
+  const payout: PayoutAccount | undefined = payoutAccountsOf(me).find((a) => a.id === payoutId);
+  const verb = direct ? 'เปลี่ยนใบ' : 'ลงขาย';
 
   const saveTopup = async () => {
     if (!slip || busy) return;
@@ -67,33 +78,41 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
     const failed = await store.flush();
     setBusy(false);
     if (failed) { flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่ (สลิปยังอยู่)'); return; }
-    notifyAdminLine(`💸 สลิปเติมมัดจำ (เพื่อลงขายตลาดใบพรี): ${t.ticket_no} · ${baht(gap)}`);
-    flash('ส่งสลิปเติมมัดจำแล้ว · รอแอดมินตรวจ แล้วค่อยลงขาย');
+    // เจ้าของ 2026-10-02 ข้อ 2.2: ส่งแอดมิน "แยกหัวข้อว่าเป็นการเติมมัดจำ" (คิว /admin/market หัวข้อ 💰 + LINE บอกชัด)
+    notifyAdminLine(`💰 [เติมมัดจำ] ${t.ticket_no} · ${baht(gap)} — ${me?.display_name ?? ''} เติมมัดจำให้ครบก่อน${verb} (ตรวจที่ แอดมิน › ตลาดใบพรี › เติมมัดจำ)`);
+    flash('ส่งสลิปเติมมัดจำแล้ว · รอแอดมินตรวจ แล้วค่อยกลับมา' + verb);
     setSlip(null);
   };
 
-  const savePayout = async () => {
-    const okTarget = pp.promptpay ? !!promptPayTarget(pp.promptpay) : false;
-    if (!pp.account_name.trim()) return flash('ใส่ชื่อบัญชีรับเงิน');
-    if (!okTarget && !digitsOnly(pp.account_no)) return flash('ใส่เบอร์/เลขบัตรพร้อมเพย์ หรือเลขบัญชีธนาคาร');
-    if (pp.promptpay && !okTarget) return flash('เบอร์พร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตร 13 หลัก');
-    dispatch(setPayoutInfo(uid, pp));
-    const failed = await store.flush();
-    if (failed) return flash('บันทึกบัญชีไม่สำเร็จ — ลองใหม่');
-    setEditPayout(false);
-    flash('บันทึกบัญชีรับเงินแล้ว ✓');
+  const lookup = async () => {
+    const c = digitsOnly(code);
+    if (c.length !== 4) return flash('ใส่เลขกระเป๋า 4 หลักของผู้รับ');
+    setBusy(true);
+    const r = await mk.walletLookup(c);
+    setBusy(false);
+    setTarget(r);
+    if (!r.ok) flash(mk.marketErrText(r));
   };
 
-  const list = async () => {
+  const submit = async () => {
     if (busy || reason) return;
-    if (!me?.payout_info || editPayout) return flash('บันทึกบัญชีรับเงินก่อน');
+    if (!payout) return flash('เลือกหรือเพิ่มบัญชีรับเงินก่อน');
+    if (direct && !target?.ok) return flash('ค้นเลขกระเป๋าผู้รับก่อน');
     setBusy(true);
-    const r = await mk.marketList(t.id, q, price);
+    const r = direct
+      ? await mk.marketOffer(t.id, q, price, digitsOnly(code), payoutInfoOf(payout))
+      : await mk.marketList(t.id, q, price);
     setBusy(false);
-    if (!r.ok || !r.id) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok || !r.id) { flash(mk.marketErrText(r)); if (direct && (r.error === 'not_found' || r.error === 'self' || r.error === 'not_ready' || r.error === 'no_address')) setTarget(null); return; }
     await store.reload();
-    void mk.marketPush(r.id, 'listed');
-    flash('ลงประกาศแล้ว 🎉 ใบนี้ขึ้นกระดานแล้ว');
+    if (direct) {
+      void mk.marketPush(r.id, 'offer');
+      notifyAdminLine(`🎁 [เปลี่ยนใบพรี] ${t.ticket_no} → ${target?.name ?? (r as { to_mask?: string }).to_mask ?? ''} · ${price > 0 ? baht(price) : 'ยกให้ฟรี'} — รอผู้รับโอนภายใน 24 ชม. · ดีล ${r.id}`);
+      flash(`ส่งข้อเสนอให้ ${target?.name ?? 'ผู้รับ'} แล้ว 🎁 · เขามีเวลา ${MARKET.offerHours} ชม.`);
+    } else {
+      void mk.marketPush(r.id, 'listed');
+      flash('ลงประกาศแล้ว 🎉 ใบนี้ขึ้นกระดานแล้ว');
+    }
     onClose();
     router.push(`/market/${r.id}`);
   };
@@ -104,6 +123,7 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
         <div className="mb-3 flex items-center gap-3">
           <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl"><StubArt db={db} productId={t.product_id} variantId={t.variant_id} /></div>
           <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-primary-soft">{direct ? '🔁 เปลี่ยนใบพรีให้คนที่รู้จัก' : '🏷️ ลงขายขึ้นกระดาน'}</div>
             <div className="truncate text-[15px] font-extrabold">{productLabel(db, t.product_id, t.variant_id)}</div>
             <div className="mt-0.5 flex items-center gap-1.5"><span className="font-mono text-[11px] text-primary-soft">{t.ticket_no}</span><LotPill status={t.product_status} /></div>
           </div>
@@ -115,20 +135,20 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
           <div className="mb-1 font-bold text-[#4ade80]">✓ ระบบอ่านตั๋วให้แล้ว</div>
           <Row k="ราคาเต็มของใบ" v={baht(pv0.total)} />
           <Row k="จ่ายร้านไปแล้ว (มัดจำ + ส่วนต่างที่จ่าย)" v={baht(pv0.paid)} />
-          <Row k="ค้างจ่ายร้าน → ผู้ซื้อรับต่อ" v={baht(pv0.due)} hl />
+          <Row k="ค้างจ่ายร้าน → ผู้รับรับต่อ" v={baht(pv0.due)} hl />
         </div>
 
         {blocked ? (
-          <div className="rounded-2xl border border-subtle bg-surface-3 px-4 py-4 text-center text-[13px] text-ink-muted2">ลงขายใบนี้ไม่ได้ตอนนี้ — <b className="text-ink">{reason}</b></div>
+          <div className="rounded-2xl border border-subtle bg-surface-3 px-4 py-4 text-center text-[13px] text-ink-muted2">{verb}ใบนี้ไม่ได้ตอนนี้ — <b className="text-ink">{reason}</b></div>
         ) : gap > 0 ? (
-          // ① เติมมัดจำก่อน (ข้อ 9)
+          // ① เติมมัดจำก่อน (ข้อ 9 / เจ้าของ 2026-10-02 ข้อ 2.1)
           <div className="rounded-2xl border border-[#d4af37]/40 bg-[#d4af37]/[0.07] p-3.5">
-            <div className="text-[14px] font-bold text-[#f1d27a]">ต้องเติมมัดจำอีก {baht(gap)} ก่อนลงขาย</div>
+            <div className="text-[14px] font-bold text-[#f1d27a]">ต้องเติมมัดจำอีก {baht(gap)} ก่อน{verb}</div>
             <div className="mt-1 text-[12px] leading-relaxed text-ink-muted2">
-              ใบนี้จ่ายมัดจำไม่เต็ม (ส่วนลดยศ) · มัดจำปกติ {baht(standardDepositPerUnit(db, t))}/ชิ้น — เงินที่เติมเข้าร้าน และ<b className="text-ink">หักออกจากส่วนต่าง</b> ราคารวมของใบเท่าเดิม
+              ใบนี้จ่ายมัดจำไม่เต็ม (ส่วนลดยศ) · มัดจำปกติ {baht(standardDepositPerUnit(db, t))}/ชิ้น — เงินที่เติมเข้าร้าน และ<b className="text-ink">หักออกจากส่วนต่าง</b> ราคารวมของใบเท่าเดิม · แอดมินตรวจสลิปแล้วค่อยกลับมา{verb}
             </div>
             {pendingTopup ? (
-              <div className="mt-3 rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-2.5 text-[12.5px] text-[#fbbf24]">ส่งสลิปเติม {baht(pendingTopup.amount)} แล้ว · รอแอดมินตรวจ แล้วกลับมาลงขายได้เลย</div>
+              <div className="mt-3 rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.12] px-3 py-2.5 text-[12.5px] text-[#fbbf24]">ส่งสลิปเติม {baht(pendingTopup.amount)} แล้ว · รอแอดมินตรวจ แล้วกลับมา{verb}ได้เลย</div>
             ) : (
               <>
                 <div className="mt-3 flex justify-center">{account?.qr_url ? <img src={account.qr_url} alt="QR ร้าน" className="h-[150px] w-[150px] rounded-2xl bg-white object-contain p-2" /> : <QrPanel size={150} />}</div>
@@ -147,33 +167,13 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {/* ③ บัญชีรับเงิน */}
-            {editPayout ? (
-              <div className="rounded-2xl border border-subtle bg-surface-3 p-3.5">
-                <div className="text-[13.5px] font-bold">บัญชีรับเงินของคุณ <span className="font-normal text-ink-faint">(ใส่ครั้งเดียว)</span></div>
-                <div className="mt-0.5 text-[11.5px] text-ink-faint">ผู้ซื้อจะเห็นเฉพาะตอนจองใบของคุณอยู่ · ระบบทำ QR พร้อมเพย์ใส่ยอดให้เอง</div>
-                <div className="mt-2.5 grid gap-2">
-                  <input id="pp-promptpay" inputMode="numeric" value={pp.promptpay} onChange={(e) => setPp({ ...pp, promptpay: e.target.value })} placeholder="เบอร์พร้อมเพย์ / เลขบัตรประชาชน" className={inputCls} />
-                  <input id="pp-name" value={pp.account_name} onChange={(e) => setPp({ ...pp, account_name: e.target.value })} placeholder="ชื่อบัญชี (ตามแอปธนาคาร)" className={inputCls} />
-                  <div className="grid grid-cols-[1fr_1.4fr] gap-2">
-                    <input id="pp-bank" value={pp.bank} onChange={(e) => setPp({ ...pp, bank: e.target.value })} placeholder="ธนาคาร (สำรอง)" className={inputCls} />
-                    <input id="pp-acct" inputMode="numeric" value={pp.account_no} onChange={(e) => setPp({ ...pp, account_no: e.target.value })} placeholder="เลขบัญชี (สำรอง)" className={inputCls} />
-                  </div>
-                </div>
-                <button type="button" onClick={() => void savePayout()} className="mt-3 w-full rounded-btn border-[1.5px] border-accent py-2.5 text-[13.5px] font-bold text-primary-soft">บันทึกบัญชีรับเงิน</button>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setEditPayout(true)} className="flex items-center gap-2 rounded-xl border border-subtle bg-surface-3 px-3 py-2.5 text-left text-[12.5px]">
-                <Icon name="payments" size={16} className="text-primary-soft" />
-                <span className="flex-1 truncate">รับเงินเข้า {me?.payout_info?.promptpay ? `พร้อมเพย์ ${me.payout_info.promptpay.slice(0, 3)}••••${me.payout_info.promptpay.slice(-2)}` : `${me?.payout_info?.bank ?? 'บัญชี'} ••${(me?.payout_info?.account_no ?? '').slice(-4)}`} · {me?.payout_info?.account_name}</span>
-                <span className="text-[11.5px] text-ink-faint underline">เปลี่ยน</span>
-              </button>
-            )}
+            {/* ③ บัญชีรับเงิน — เลือกจากที่ลงทะเบียน / เพิ่มใหม่ (ใช้ร่วมทั้งสองโหมด) */}
+            <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} />
 
-            {/* ④ จำนวนชิ้น + ราคา */}
+            {/* ④ จำนวนชิ้น + ยอด */}
             {t.qty > 1 && (
               <div className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3 py-2.5">
-                <span className="text-[13px]">ขายกี่ชิ้น <span className="text-ink-faint">(ใบนี้มี {t.qty})</span></span>
+                <span className="text-[13px]">{verb}กี่ชิ้น <span className="text-ink-faint">(ใบนี้มี {t.qty})</span></span>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => setQty(Math.max(1, q - 1))} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle"><Icon name="minus" size={14} /></button>
                   <b className="w-6 text-center font-mono">{q}</b>
@@ -182,7 +182,7 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
               </div>
             )}
             <div>
-              <div className="mb-1.5 text-[12px] font-semibold text-ink-muted">ราคาขาย · ผู้ซื้อโอนให้คุณ</div>
+              <div className="mb-1.5 text-[12px] font-semibold text-ink-muted">{direct ? 'ยอดที่ให้ผู้รับโอนให้คุณ' : 'ราคาขาย · ผู้ซื้อโอนให้คุณ'}</div>
               <div className="flex items-baseline gap-1.5 rounded-2xl border border-accent bg-surface-3 px-4 py-2.5">
                 <span className="font-mono text-[20px] font-bold text-ink-faint">฿</span>
                 <input id="mk-price" inputMode="numeric" value={priceStr} onChange={(e) => setPriceStr(e.target.value.replace(/[^\d]/g, '').slice(0, 7))}
@@ -190,23 +190,54 @@ export function SellSheet({ ticket, onClose }: { ticket: PreorderTicket; onClose
                 <span className={cx('shrink-0 font-mono text-[13px] font-bold', pv.profit >= 0 ? 'text-[#4ade80]' : 'text-[#f87171]')}>{pv.profit >= 0 ? '+' : '−'}{baht(Math.abs(pv.profit))}</span>
               </div>
               <div className="mt-2 flex gap-1.5">
-                {[{ l: 'เท่าทุน', v: pv.paid }, { l: '+100', v: price + 100 }, { l: '+300', v: price + 300 }, { l: '+500', v: price + 500 }].map((c) => (
+                {[{ l: 'เท่าทุน', v: pv.paid }, ...(direct ? [{ l: 'ยกให้ฟรี', v: 0 }] : []), { l: '+100', v: price + 100 }, { l: '+300', v: price + 300 }, ...(direct ? [] : [{ l: '+500', v: price + 500 }])].map((c) => (
                   <button type="button" key={c.l} onClick={() => setPriceStr(String(Math.round(c.v)))} className="flex-1 rounded-lg border border-subtle bg-surface-3 py-1.5 font-mono text-[12px] font-semibold text-ink-muted2">{c.l}</button>
                 ))}
               </div>
-              <div className="mt-1.5 text-[11.5px] text-ink-faint">ตั้งราคาได้อิสระ · ตัวเลขเขียว = กำไรจากที่คุณจ่ายร้านไปแล้ว {baht(pv.paid)}</div>
+              <div className="mt-1.5 text-[11.5px] text-ink-faint">ตั้งยอดได้อิสระ · ตัวเลขเขียว = กำไรจากที่คุณจ่ายร้านไปแล้ว {baht(pv.paid)}{direct && price === 0 ? ' · ยอด 0 = ยกให้ ผู้รับแค่กดรับ' : ''}</div>
             </div>
 
-            {/* ⑤ ผู้ซื้อจะเห็นแบบนี้ */}
-            <div className="text-[12px] font-semibold text-ink-muted">ผู้ซื้อจะเห็นแบบนี้</div>
+            {/* ⑤ ผู้รับจะเห็นแบบนี้ */}
+            <div className="text-[12px] font-semibold text-ink-muted">{direct ? 'ผู้รับจะเห็นแบบนี้' : 'ผู้ซื้อจะเห็นแบบนี้'}</div>
             <MoneySplit price={price} due={pv.due} />
+
+            {direct && (
+              // เลขกระเป๋าผู้รับ → ค้น → ยืนยัน "ใช่คนนี้ไหม" (เจ้าของ: ไม่ต้องสนชื่อ ขอแค่ยอด+ใบตรง — ชื่อโชว์แค่กันส่งผิดคน)
+              <div className="rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.06] p-3.5">
+                <div className="text-[13.5px] font-bold">เลขกระเป๋าของผู้รับ <span className="font-normal text-ink-faint">(4 หลัก · เขาเห็นที่หัวหน้ากระเป๋าพรี เปลี่ยนทุกวัน)</span></div>
+                <div className="mt-2 flex gap-2">
+                  <input id="mk-code" inputMode="numeric" maxLength={4} value={code} onChange={(e) => { setCode(e.target.value.replace(/\D/g, '').slice(0, 4)); setTarget(null); }}
+                    placeholder="0000" className="w-[120px] rounded-xl border border-subtle bg-surface-3 px-3 py-2 text-center font-mono text-[24px] font-bold tracking-[0.3em] text-ink outline-none focus:border-accent" />
+                  <button type="button" disabled={busy || digitsOnly(code).length !== 4} onClick={() => void lookup()} className="flex-1 rounded-xl border-[1.5px] border-accent text-[13.5px] font-bold text-primary-soft disabled:opacity-50">{busy ? 'กำลังค้น…' : 'ค้นหาผู้รับ'}</button>
+                </div>
+                {target?.ok && (
+                  <div className="mt-3 flex items-center gap-3 rounded-xl border border-[#16a34a]/40 bg-[#16a34a]/[0.08] px-3 py-2.5">
+                    {target.avatar_url ? <img src={target.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : <span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#f1d27a] to-[#b45309] font-mono text-[11px] font-bold text-[#0a0809]">{(target.mask ?? '').slice(-2)}</span>}
+                    <div className="min-w-0 flex-1 text-[12.5px]">
+                      <div className="truncate font-bold">{target.name} <span className="font-mono text-[11px] text-ink-faint">{target.mask}</span></div>
+                      <div className="text-[11.5px] text-[#4ade80]">พร้อมรับใบพรี ✓ · ใช่คนนี้ไหม? ถ้าใช่กดส่งข้อเสนอด้านล่าง</div>
+                    </div>
+                  </div>
+                )}
+                {target && !target.ok && <div className="mt-2 text-[12px] text-[#f87171]">{mk.marketErrText(target)}</div>}
+                <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ส่งผิดคนไม่เป็นไร ผู้รับต้องกดรับเองและคุณถอนข้อเสนอได้ก่อนเขาโอน</div>
+              </div>
+            )}
+
             <ul className="space-y-1 text-[11.5px] leading-relaxed text-ink-faint">
-              <li>🔒 ลงแล้วใบนี้ล็อก — จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะขายหรือถอนประกาศ</li>
-              <li>⏳ ประกาศอยู่ {MARKET.listingDays} วัน · มีคนจอง {MARKET.holdMin} นาที · ผู้ซื้อโอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม.</li>
-              {heldByPayer(t) && <li>🏆 ขายแล้วใบนี้ไม่นับยศรายเดือน/Event ของคุณ</li>}
+              <li>🔒 ส่งแล้วใบนี้ล็อก — จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะจบดีลหรือถอน</li>
+              {direct
+                ? <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. โอน+แนบสลิป · โอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม. · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>
+                : <li>⏳ ประกาศอยู่ {MARKET.listingDays} วัน · มีคนจอง {MARKET.holdMin} นาที · ผู้ซื้อโอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม.</li>}
+              {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ · โบนัสยศที่ได้จากใบนี้จะถูกเรียกคืน</li>}
+              {payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
             </ul>
-            <button type="button" disabled={busy || editPayout} onClick={() => void list()}
-              className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">{busy ? 'กำลังลงประกาศ…' : `ลงประกาศ ${q < t.qty ? `${q} ชิ้น ` : ''}· ${baht(price)}`}</button>
+            <button type="button" disabled={busy || !payout || (direct && !target?.ok)} onClick={() => void submit()}
+              className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">
+              {busy ? 'กำลังส่ง…' : direct
+                ? `ส่งข้อเสนอให้ ${target?.ok ? target.name : 'ผู้รับ'} ${q < t.qty ? `· ${q} ชิ้น ` : ''}· ${price > 0 ? baht(price) : 'ยกให้ฟรี'}`
+                : `ลงประกาศ ${q < t.qty ? `${q} ชิ้น ` : ''}· ${baht(price)}`}
+            </button>
           </div>
         )}
       </div>

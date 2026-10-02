@@ -1,0 +1,42 @@
+/**
+ * ธนาคารไทยสำหรับ "บัญชีรับเงิน" (เปลี่ยนใบพรี / ลงขายกระดาน · v73)
+ * ตอนนี้วาดโลโก้เป็นวงกลมสีประจำธนาคาร + ตัวย่อ (ไม่ต้องโหลดไฟล์นอก) — เฟส 3 ค่อยสลับเป็น SVG จริง
+ * (ชุด open source omise/banks-logo, MIT) โดยไม่ต้องแก้ที่อื่น: ทุกหน้าจอเรียก BankLogo ตัวเดียว
+ */
+export interface ThaiBank {
+  code: string;   // รหัสที่เก็บลง payout_accounts.bank
+  name: string;   // ชื่อเต็มไทย
+  short: string;  // ตัวย่อบนโลโก้
+  color: string;  // สีประจำธนาคาร (พื้นวงกลม)
+  ink?: string;   // สีตัวอักษรบนโลโก้ (ค่าเริ่มต้นขาว)
+}
+
+export const THAI_BANKS: ThaiBank[] = [
+  { code: 'promptpay', name: 'พร้อมเพย์ (เบอร์/บัตรประชาชน)', short: 'PP', color: '#1a3d8f' },
+  { code: 'kbank', name: 'กสิกรไทย', short: 'KBANK', color: '#138f2d' },
+  { code: 'scb', name: 'ไทยพาณิชย์', short: 'SCB', color: '#4e2e7f' },
+  { code: 'bbl', name: 'กรุงเทพ', short: 'BBL', color: '#1e4598' },
+  { code: 'ktb', name: 'กรุงไทย', short: 'KTB', color: '#1ba5e1' },
+  { code: 'bay', name: 'กรุงศรีอยุธยา', short: 'BAY', color: '#fec43b', ink: '#3b2a00' },
+  { code: 'ttb', name: 'ทหารไทยธนชาต', short: 'ttb', color: '#0050f0' },
+  { code: 'gsb', name: 'ออมสิน', short: 'GSB', color: '#eb198d' },
+  { code: 'baac', name: 'ธ.ก.ส.', short: 'BAAC', color: '#4b9b1d' },
+  { code: 'kkp', name: 'เกียรตินาคินภัทร', short: 'KKP', color: '#199cc5' },
+  { code: 'cimb', name: 'ซีไอเอ็มบี ไทย', short: 'CIMB', color: '#7e2f36' },
+  { code: 'uob', name: 'ยูโอบี', short: 'UOB', color: '#0b3979' },
+  { code: 'lhb', name: 'แลนด์ แอนด์ เฮ้าส์', short: 'LHB', color: '#6d6e71' },
+  { code: 'tisco', name: 'ทิสโก้', short: 'TISCO', color: '#12549f' },
+  { code: 'ghb', name: 'ธอส.', short: 'GHB', color: '#f57d23' },
+  { code: 'icbc', name: 'ไอซีบีซี (ไทย)', short: 'ICBC', color: '#c50f1c' },
+  { code: 'other', name: 'ธนาคารอื่น', short: '฿', color: '#444' },
+];
+
+export const bankOf = (code?: string | null): ThaiBank =>
+  THAI_BANKS.find((b) => b.code === code) ?? THAI_BANKS.find((b) => b.code === 'other')!;
+
+/** เลขบัญชีแบบปิดบางส่วน (โชว์ในรายการ/ดีล): 1234567890 → 123-4-••••-890 */
+export const maskAccount = (no?: string | null): string => {
+  const d = (no ?? '').replace(/\D/g, '');
+  if (d.length < 6) return d ? '••••' : '';
+  return `${d.slice(0, 3)}•••${d.slice(-3)}`;
+};

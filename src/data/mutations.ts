@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS, orderTicketId, isVoidedItem, ticketForItem, pairItemsWithTickets } from '../domain/services/tickets';
@@ -2440,6 +2440,41 @@ export const setPayoutInfo = (userId: string, info: { promptpay?: string; bank?:
   if (!clean.account_name || (!clean.promptpay && !clean.account_no)) return db;
   return { ...db, users: db.users.map((u) => (u.id === userId ? { ...u, payout_info: clean } : u)) };
 };
+
+/** บัญชีรับเงินหลายบัญชี (v73 · users.payout_accounts) — เจ้าของแถวเขียนเองได้ (guard ไม่ล็อก)
+ *  ล้างข้อมูล: เลขเก็บเฉพาะตัวเลข · ชื่อตัดช่องว่าง · บัญชีที่ไม่มีชื่อหรือไม่มีเลขเลยถูกตัดทิ้ง · สูงสุด 6 บัญชี
+ *  `selectId` = บัญชีที่เลือกใช้ → ก๊อปปี้ลง payout_info (ช่องเดิมที่ RPC ตลาด/กระดานอ่าน) */
+export const setPayoutAccounts = (userId: string, accounts: PayoutAccount[], selectId?: string) => (db: Database): Database => {
+  const clean: PayoutAccount[] = [];
+  for (const a of accounts) {
+    const account_name = (a.account_name ?? '').trim();
+    const promptpay = (a.promptpay ?? '').replace(/\D/g, '');
+    const account_no = (a.account_no ?? '').replace(/\D/g, '');
+    if (!account_name || (!promptpay && !account_no)) continue;
+    if (clean.some((x) => x.id === a.id)) continue;
+    clean.push({ id: a.id, bank: a.bank || (promptpay ? 'promptpay' : 'other'), account_name, ...(promptpay ? { promptpay } : {}), ...(account_no ? { account_no } : {}), created_at: a.created_at ?? new Date().toISOString() });
+    if (clean.length >= 6) break;
+  }
+  const sel = clean.find((x) => x.id === selectId) ?? clean[0];
+  return {
+    ...db,
+    users: db.users.map((u) => (u.id === userId
+      ? { ...u, payout_accounts: clean, ...(sel ? { payout_info: payoutInfoOf(sel) } : {}) }
+      : u)),
+  };
+};
+/** บัญชีที่ลงทะเบียน → รูปแบบ payout_info ที่ RPC ตลาดอ่าน (บัญชีธนาคารใส่รหัสธนาคารในช่อง bank) */
+export const payoutInfoOf = (a: PayoutAccount): PayoutInfo => ({
+  account_name: a.account_name,
+  ...(a.promptpay ? { promptpay: a.promptpay } : {}),
+  ...(a.account_no ? { account_no: a.account_no, bank: a.bank } : {}),
+});
+
+/** สวิตช์ "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า · v73) แยกจากกระดาน — server อ่านแถวเดียวกันผ่าน ryuma_direct_open */
+export const setMarketDirect = (enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: 'market_direct', value: { enabled, changed_at: new Date().toISOString() } }, ...db.appConfig.filter((c) => c.key !== 'market_direct')],
+});
 
 // ── โหมดทดลอง (ยังไม่รัน v60) ───────────────────────────────────────────────
 /** บิดแบบ local — ใช้ตอนยังไม่มี RPC เท่านั้น (สูตรต้องตรงกับ migration v60). */

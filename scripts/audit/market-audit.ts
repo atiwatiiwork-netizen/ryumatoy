@@ -13,10 +13,11 @@ import { unmatchedApprovedItems, hasPreorderTicket, ticketPayer } from '../../sr
 import { userTakenInBatch } from '../../src/domain/services/reservations';
 import { qualifyingCount } from '../../src/domain/services/campaigns';
 import { missionStateFor } from '../../src/domain/services/missions';
-import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket } from '../../src/domain/services/market';
+import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket, dealStatusLabel, directEnabled, directVisibleTo, anyMarketVisibleTo, marketVisibleTo } from '../../src/domain/services/market';
 import { crc16ccitt, promptPayPayload, promptPayTarget } from '../../src/lib/promptpay';
 import { ticketSelectable } from '../../src/domain/services/payments';
-import { setMarketPublic, setPayoutInfo } from '../../src/data/mutations';
+import { setMarketPublic, setPayoutInfo, setMarketDirect, setPayoutAccounts, payoutInfoOf } from '../../src/data/mutations';
+import { THAI_BANKS, bankOf, maskAccount } from '../../src/lib/thaiBanks';
 import type { Database, PreorderTicket, Order, TicketTransfer, Campaign } from '../../src/domain/entities';
 
 let pass = 0, fail = 0;
@@ -320,6 +321,77 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const pay = setPayoutInfo(S, { promptpay: '081-234-5678', account_name: '  สมชาย ใจดี ' })(base);
   ok('M12 บัญชีรับเงิน: เก็บเฉพาะตัวเลข + ตัดช่องว่าง · ไม่มีชื่อ = ไม่บันทึก', pay.users.find((u) => u.id === S)?.payout_info?.promptpay === '0812345678' && pay.users.find((u) => u.id === S)?.payout_info?.account_name === 'สมชาย ใจดี'
     && setPayoutInfo(S, { promptpay: '0812345678', account_name: ' ' })(base) === base);
+}
+
+// ── N) v73 "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า) — สถานะ · ป้าย · คิวเติมมัดจำ · บัญชีหลายบัญชี · สวิตช์ ──────
+{
+  const db = structuredClone(base);
+  const a = orderTicket(db, S), b = orderTicket(db, S), c = orderTicket(db, S);
+  const offer = (t: PreorderTicket, over: Partial<TicketTransfer> = {}): TicketTransfer =>
+    listing(t, { kind: 'direct', status: 'reserved', to_user_id: B, hold_until: iso(24 * H), expires_at: iso(24 * H), payout_snap: { promptpay: '0800000000', account_name: 'S' }, ...over });
+  const live = offer(a);
+  const stale = offer(b, { listed_at: iso(-25 * H), hold_until: iso(-H), expires_at: iso(-H) });          // เกิน 24 ชม. + ผ่อนผัน 10 นาที
+  const grace = offer(c, { hold_until: iso(-5 * 60_000), expires_at: iso(-5 * 60_000) });                 // เกิน 5 นาที ยังอยู่ในผ่อนผัน
+  ok('N1 ข้อเสนอตรงที่ยังไม่หมดเวลา = reserved · หมดเวลา = expired (ไม่กลับเป็น listed เหมือนกระดาน)',
+    effectiveStatus(live) === 'reserved' && effectiveStatus(stale) === 'expired' && effectiveStatus(grace) === 'reserved'
+    && effectiveStatus({ ...stale, kind: undefined }) === 'expired' && effectiveStatus({ ...stale, kind: undefined, expires_at: iso(10 * D) }) === 'listed');
+  db.transfers.push(live, stale);
+  ok('N2 ตั๋วที่มีข้อเสนอค้าง = ล็อก · หมดเวลาแล้ว = ปลดล็อก (จ่ายส่วนต่าง/ลงขายใหม่ได้)', marketLocked(db, a.id) && !marketLocked(db, b.id)
+    && sellBlockReason(db, a, S) === 'ลงขายอยู่แล้ว' && sellBlockReason(db, b, S) === null);
+  ok('N3 ป้ายสถานะดีลตรง: รอผู้รับโอน / ยกให้ = รอผู้รับกดรับ / ผู้รับไม่รับ / ถอนข้อเสนอ / หมดเวลา · กระดานป้ายเดิม',
+    dealStatusLabel(live) === 'รอผู้รับโอนเงิน' && dealStatusLabel({ ...live, asking_price: 0 }) === 'รอผู้รับกดรับ'
+    && dealStatusLabel({ ...live, status: 'cancelled', cancel_reason: 'buyer_declined' }) === 'ผู้รับไม่รับ'
+    && dealStatusLabel({ ...live, status: 'cancelled', cancel_reason: 'seller' }) === 'ถอนข้อเสนอแล้ว'
+    && dealStatusLabel(stale) === 'ข้อเสนอหมดเวลา' && dealStatusLabel({ ...live, kind: undefined }) === 'มีคนจอง');
+  const dS = myDeals(db, S), dB = myDeals(db, B);
+  ok('N4 ดีลของฉัน: ผู้รับเห็นข้อเสนอใน "ต้องทำ" · คนส่งเห็นใน "ลงขายอยู่" · ข้อเสนอหมดเวลาไม่โผล่ฝั่งผู้รับ',
+    dB.todo.length === 1 && dB.todo[0].id === live.id && dS.selling.length === 1 && dS.selling[0].id === live.id
+    && !dB.history.some((x) => x.id === stale.id) && dS.history.some((x) => x.id === stale.id), { todo: dB.todo.length, selling: dS.selling.length });
+  const q0 = marketQueue(db);
+  ok('N5 คิวแอดมิน: ข้อเสนอรอผู้รับโผล่ใน offers (ไม่นับเป็นงาน) · ยังไม่มีสลิปเติมมัดจำ', q0.offers.length === 1 && q0.topups.length === 0 && q0.jobs === 0);
+  // เติมมัดจำ (Diamond มัดจำ 0) → สลิป purpose=topup เข้าคิวแยกหัวข้อ + นับเป็นงาน
+  const d = orderTicket(db, S, { dep: 0 });
+  const db2 = submitRemainingPayment(d.id, S, 0, 'https://x/topup.jpg', undefined, { purpose: 'topup' })(db);
+  const q1 = marketQueue(db2);
+  ok('N6 สลิปเติมมัดจำ: ยอด = ส่วนที่ขาดพอดี (300) · เข้า topupQueue · นับเป็นงานแอดมิน · ไม่ปนกับคิวดีล',
+    q1.topups.length === 1 && q1.topups[0].amount === 300 && q1.topups[0].purpose === 'topup' && q1.jobs === 1 && q1.ready.length === 0, q1.topups[0]);
+  const db3 = approveRemainingPayment(q1.topups[0].id)(db2);
+  ok('N7 อนุมัติเติมมัดจำ → ออกจากคิว · ใบนี้เปลี่ยนใบได้แล้ว (ไม่ติด "ต้องเติมมัดจำ")', marketQueue(db3).topups.length === 0 && sellBlockReason(db3, db3.tickets.find((x) => x.id === d.id)!, S) === null);
+  // บัญชีรับเงินหลายบัญชี
+  const accs = setPayoutAccounts(S, [
+    { id: 'a1', bank: 'kbank', account_no: '123-4-56789-0', promptpay: '', account_name: ' สมชาย ' },
+    { id: 'a2', bank: 'promptpay', promptpay: '081-234-5678', account_name: 'สมชาย' },
+    { id: 'a3', bank: 'scb', account_no: '', account_name: 'ไม่มีเลข' },          // ตัดทิ้ง
+    { id: 'a2', bank: 'promptpay', promptpay: '0812345678', account_name: 'ซ้ำ id' }, // ตัดทิ้ง
+    { id: 'a4', bank: '', promptpay: '0899999999', account_name: 'ไม่ระบุธนาคาร' },    // bank เดา = promptpay
+  ], 'a2')(base).users.find((u) => u.id === S)!;
+  ok('N8 บัญชีรับเงิน: เก็บเฉพาะเลข · ตัดบัญชีไม่มีเลข/ซ้ำ id · เดาธนาคาร · บัญชีที่เลือก → payout_info (ช่องที่ RPC อ่าน)',
+    accs.payout_accounts?.length === 3 && accs.payout_accounts[0].account_no === '1234567890' && accs.payout_accounts[0].account_name === 'สมชาย'
+    && accs.payout_accounts[2].bank === 'promptpay' && accs.payout_info?.promptpay === '0812345678' && accs.payout_info?.account_no === undefined, accs.payout_accounts);
+  const info = payoutInfoOf({ id: 'x', bank: 'bbl', account_no: '9876543210', promptpay: '0812345678', account_name: 'A' });
+  ok('N9 payoutInfoOf: บัญชีธนาคาร+พร้อมเพย์ → ส่งทั้งคู่ (QR จากพร้อมเพย์ · เลขบัญชีสำรอง) · bank = รหัส', info.promptpay === '0812345678' && info.account_no === '9876543210' && info.bank === 'bbl');
+  const seven = setPayoutAccounts(S, Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, bank: 'promptpay', promptpay: `08000000${String(i).padStart(2, '0')}`, account_name: 'x' })))(base).users.find((u) => u.id === S)!;
+  ok('N10 เพดาน 6 บัญชี/คน', seven.payout_accounts?.length === 6);
+  ok('N11 ธนาคารไทย: รหัสไม่รู้จัก → "ธนาคารอื่น" · maskAccount ปิดกลาง · มีพร้อมเพย์เป็นตัวเลือกแรก',
+    bankOf('zzz').code === 'other' && bankOf('kbank').name === 'กสิกรไทย' && maskAccount('1234567890') === '123•••890' && maskAccount('') === '' && THAI_BANKS[0].code === 'promptpay');
+  // สวิตช์แยกจากกระดาน — จำลอง "มี backend" ชั่วคราว (โหมด seed ไม่มี env = isAdminUser เปิดให้ทุกคน)
+  const on = setMarketDirect(true)(base), both = setMarketPublic(true)(on);
+  const env0 = { u: process.env.NEXT_PUBLIC_SUPABASE_URL, k: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY };
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://x.supabase.co'; process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'k';
+  const n12 = !directEnabled(base) && !directVisibleTo(base, S) && directVisibleTo(base, 'u-admin')
+    && directEnabled(on) && directVisibleTo(on, S) && !marketPublicEnabled(on) && anyMarketVisibleTo(on, S) && !marketVisibleTo(on, S)
+    && marketVisibleTo(both, S) && !directEnabled(setMarketDirect(false)(both));
+  if (env0.u === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = env0.u;
+  if (env0.k === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY; else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = env0.k;
+  ok('N12 สวิตช์เปลี่ยนใบ: ไม่มีแถว = ปิด (แอดมินเห็น) · เปิดแล้วทุกคนเห็น · ไม่ไปเปิดกระดาน · anyMarketVisibleTo รวมสองสวิตช์', n12);
+  ok('N13 ค่าคงที่ตามที่เจ้าของเคาะ: ข้อเสนอ 24 ชม. · ค้นเลขวันละ 20 · กระดานยังจอง 15 นาที', MARKET.offerHours === 24 && MARKET.lookupPerDay === 20 && MARKET.holdMin === 15);
+  // ไฟนอลดีลตรง = ใช้ตัวเดิม (ย้ายเจ้าของ + -T1) ไม่มีอะไรต่าง
+  const db4 = structuredClone(db);
+  db4.transfers = [offer(a, { status: 'seller_ok', paid_at: iso(-2 * H), seller_confirmed_at: iso(-H), slip_url: 'https://x/s.jpg' })];
+  const db5 = simulateFinalize(db4, db4.transfers[0].id);
+  const moved = db5.tickets.find((x) => x.id === a.id)!;
+  ok('N14 ไฟนอลดีลตรง: ตั๋วย้ายไปผู้รับ · เลข -T1 · เงินร้านไม่ขยับ · ผู้รับติดถือ 3 วัน', moved.owner_id === B && moved.ticket_no.endsWith('-T1')
+    && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 3 วัน'));
 }
 
 console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);

@@ -101,11 +101,25 @@ export const marketEscalate = (id: string, note?: string) => call('ryuma_market_
 export const marketFinalize = (id: string, orderItemId?: string) => call('ryuma_market_finalize', { p_id: id, p_order_item_id: orderItemId ?? null });
 export const marketAdminCancel = (id: string, reason: string) => call('ryuma_market_admin_cancel', { p_id: id, p_reason: reason });
 
+// ── v73 "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า 4 หลักรายวัน) ─────────────────────────────
+export type WalletCodeRes = MarketRes & { code?: string; day?: string; resets_at?: string };
+export type WalletLookupRes = MarketRes & { user_id?: string; name?: string; avatar_url?: string | null; mask?: string };
+/** เลขกระเป๋าของฉันวันนี้ (server สุ่ม+กันชน · รีเซ็ตเที่ยงคืนไทย) */
+export const walletCode = () => call<WalletCodeRes>('ryuma_wallet_code');
+/** เลขกระเป๋า → ผู้รับ (ชื่อ+รูป เพื่อยืนยัน "ใช่คนนี้ไหม") · จำกัด 20 ครั้ง/วัน */
+export const walletLookup = (code: string) => call<WalletLookupRes>('ryuma_wallet_lookup', { p_code: code });
+/** ส่งข้อเสนอเปลี่ยนใบให้เลขกระเป๋านี้ — บัญชีรับเงินถูกล็อกกับดีล (payout_snap) · ผู้รับมี 24 ชม. */
+export const marketOffer = (ticketId: string, qty: number, price: number, code: string, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }) =>
+  call<MarketRes & { to_mask?: string }>('ryuma_market_offer', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_code: code, p_payout: payout });
+/** ผู้รับไม่รับข้อเสนอ (ยังไม่โอน) → ดีลปิด ตั๋วปลดล็อก */
+export const marketDecline = (id: string) => call('ryuma_market_decline', { p_id: id });
+
 /**
  * push ของตลาด — ฝั่งนี้ส่งแค่ (id ดีล, ชนิด) · ปลายทาง+ข้อความตัดสินที่ server (ryuma_market_push_targets v72)
  * เพราะลูกค้าไม่เห็นเครื่องของคนอื่น (RLS) และตลาดยังปิด = ส่งถึงแอดมินเท่านั้น · best-effort ห้ามทำให้ดีลพัง
  */
-export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'reviewing' | 'remind' | 'done' | 'sold' | 'cancelled';
+export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'reviewing' | 'remind' | 'done' | 'sold' | 'cancelled'
+  | 'offer' | 'declined' | 'withdrawn'; // v73 เปลี่ยนใบพรี
 export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
   if (!supabase) return;
   try {
@@ -124,7 +138,13 @@ export async function marketPush(id: string, kind: MarketPushKind): Promise<void
 
 /** ข้อความไทยของรหัส error — ใช้ร่วมทุกหน้า (ลูกค้า + แอดมิน) */
 export const MARKET_ERR_TH: Record<string, string> = {
-  closed: 'ตลาดใบพรียังไม่เปิด — เร็วๆ นี้',
+  closed: 'ยังไม่เปิดให้ใช้งาน — เร็วๆ นี้',
+  // v73 เปลี่ยนใบพรี
+  bad_code: 'เลขกระเป๋าต้องเป็นตัวเลข 4 หลัก',
+  too_many: 'ค้นเลขกระเป๋าครบโควตาวันนี้แล้ว (20 ครั้ง) — ลองใหม่พรุ่งนี้',
+  self: 'นี่คือเลขกระเป๋าของคุณเอง',
+  not_ready: 'ผู้รับยังรับใบพรีไม่ได้ (บัญชียังไม่พร้อม) — ให้เขาติดต่อร้าน',
+  busy: 'ระบบยุ่งอยู่ — ลองใหม่อีกครั้ง',
   no_server: 'ยังไม่ได้ต่อฐานข้อมูล (โหมดพรีวิว)',
   no_rpc: 'ระบบตลาดยังไม่เปิดในฐานข้อมูล — แอดมินต้องรัน migration v71 ก่อน',
   no_session: 'กรุณาเข้าสู่ระบบก่อน',
@@ -135,7 +155,7 @@ export const MARKET_ERR_TH: Record<string, string> = {
   bad_qty: 'จำนวนชิ้นไม่ถูกต้อง',
   bad_slip: 'แนบรูปสลิปก่อน',
   no_payout: 'ใส่บัญชีรับเงิน (พร้อมเพย์) ก่อนลงขาย',
-  no_address: 'ใส่ที่อยู่จัดส่งในโปรไฟล์ก่อนซื้อ',
+  no_address: 'ผู้รับต้องมีที่อยู่จัดส่งในโปรไฟล์ก่อน',
   own_listing: 'ซื้อประกาศของตัวเองไม่ได้',
   reserved: 'มีคนกำลังจองใบนี้อยู่',
   gone: 'ใบนี้ไม่ได้ลงขายแล้ว',

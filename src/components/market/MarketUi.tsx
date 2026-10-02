@@ -269,8 +269,8 @@ export function PromptPayCard({ amount, promptpay, accountNo, bank, accountName,
 }
 
 // ── ขั้นของดีล (ผู้ซื้อเห็น) ──────────────────────────────────────────────────────
-export function DealSteps({ at }: { at: 0 | 1 | 2 | 3 | 4 }) {
-  const steps = ['จอง', 'โอน + สลิป', 'คนขายเช็ค', 'ร้านโอนสิทธิ์'];
+export function DealSteps({ at, labels }: { at: 0 | 1 | 2 | 3 | 4; labels?: string[] }) {
+  const steps = labels ?? ['จอง', 'โอน + สลิป', 'คนขายเช็ค', 'ร้านโอนสิทธิ์'];
   return (
     <div className="relative flex justify-between px-1">
       <div className="absolute left-4 right-4 top-[10px] h-0.5 bg-white/10" />

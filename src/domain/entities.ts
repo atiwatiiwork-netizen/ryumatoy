@@ -320,6 +320,21 @@ export interface TicketTransfer {
   /** ยอดเงินของชิ้นที่ขาย ณ ตอนลงประกาศ (v72) — ผู้ซื้อมองไม่เห็นตั๋วคนขายตาม RLS จึงอ่านจากตรงนี้ */
   snap?: { paid: number; due: number; total: number; product_status?: string; ticket_hint?: string } | null;
   pushed?: Record<string, string>; // ชนิด push ที่ยิงแล้ว (v72 · กันยิงซ้ำ)
+  /** v73 "เปลี่ยนใบพรี": 'direct' = ส่งให้คนที่ระบุด้วยเลขกระเป๋า (ไม่ขึ้นกระดาน · ผู้รับมี 24 ชม.) · ไม่มี/'market' = กระดาน */
+  kind?: 'market' | 'direct' | null;
+  /** บัญชีรับเงินที่ล็อกกับดีลตอนส่งข้อเสนอ (v73) — ผู้รับโอนเข้าบัญชีนี้เสมอ แม้คนขายแก้บัญชีทีหลัง */
+  payout_snap?: PayoutInfo | null;
+}
+
+/** บัญชีรับเงินที่ลูกค้าลงทะเบียนไว้ (users.payout_accounts jsonb · v73) — เลือกใช้ได้ทั้ง "เปลี่ยนใบพรี" และลงขายกระดาน
+ *  บัญชีที่เลือกล่าสุดถูกก๊อปปี้ลง users.payout_info (ช่องเดิมที่ RPC ตลาดอ่าน) */
+export interface PayoutAccount {
+  id: string;
+  bank: string;             // รหัสธนาคาร (lib/thaiBanks.ts) · 'promptpay' = พร้อมเพย์ล้วน
+  account_no?: string;      // เลขบัญชี (ธนาคาร)
+  promptpay?: string;       // เบอร์/เลขบัตรพร้อมเพย์ (ทำ QR ใส่ยอดได้)
+  account_name: string;
+  created_at?: string;
 }
 
 /** บัญชีรับเงินของคนขายในตลาด (users.payout_info jsonb · v71) — ผู้ซื้อเห็นผ่าน RPC เฉพาะตอนจองอยู่ */
@@ -463,7 +478,8 @@ export interface User {
    *  และ phone ที่เป็นเบอร์ล็อกอิน ซึ่งลูกค้าแก้เองไม่ได้เพราะ guard คุ้มครอง) */
   shipping_info?: ShippingInfo;
   line_id?: string;
-  payout_info?: PayoutInfo; // บัญชีรับเงินตอนขายใบพรีในตลาด (v71)
+  payout_info?: PayoutInfo; // บัญชีรับเงินตอนขายใบพรีในตลาด (v71) = บัญชีที่เลือกล่าสุดจาก payout_accounts
+  payout_accounts?: PayoutAccount[]; // บัญชีรับเงินที่ลงทะเบียนไว้ทั้งหมด (v73 · เลือกได้ตอนเปลี่ยนใบ/ลงขาย)
   created_at?: string; // signup time (from users.created_at, backfilled from the auth account)
   installed_at?: string; // first time this member opened the app installed to the home screen (PWA standalone) — for install-rate analytics
 }

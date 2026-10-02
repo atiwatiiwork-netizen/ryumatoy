@@ -14,6 +14,20 @@ export function marketPublicEnabled(db: Database): boolean {
 /** ใครเห็นตลาด: เปิดแล้ว = ทุกคน · ยังปิด = แอดมินเท่านั้น (ลองเล่นก่อน) */
 export const marketVisibleTo = (db: Database, userId: string) => marketPublicEnabled(db) || isAdminUser(db, userId);
 
+/** สวิตช์ "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า · v73 · app_config 'market_direct') แยกจากกระดาน —
+ *  เจ้าของ 2026-10-02: "อย่าเพิ่งเปิดให้ลูกค้าเห็น ทำพรีวิวให้เล่นก่อน" · ด่านจริง = ryuma_direct_open (server) */
+export const MARKET_DIRECT_KEY = 'market_direct';
+export function directEnabled(db: Database): boolean {
+  const row = db.appConfig.find((c) => c.key === MARKET_DIRECT_KEY);
+  return (row?.value as { enabled?: boolean } | undefined)?.enabled === true;
+}
+/** ใครเห็นปุ่ม "เปลี่ยนใบพรี" + เลขกระเป๋า: เปิดแล้ว = ทุกคน · ยังปิด = แอดมิน (ลอง 2 บัญชี) */
+export const directVisibleTo = (db: Database, userId: string) => directEnabled(db) || isAdminUser(db, userId);
+/** เห็นหน้าดีล/ซื้อขายของฉัน ถ้าเปิดอย่างใดอย่างหนึ่ง (ดีลตรงใช้หน้า /market/[id] เดียวกับกระดาน) */
+export const anyMarketVisibleTo = (db: Database, userId: string) => marketVisibleTo(db, userId) || directVisibleTo(db, userId);
+/** ดีลนี้เป็น "เปลี่ยนใบพรี" (โอนตรง) ไม่ใช่กระดาน */
+export const isDirect = (tr: Pick<TicketTransfer, 'kind'>) => tr.kind === 'direct';
+
 /**
  * ตลาดใบพรี (P2P) — กติกาที่เจ้าของเคาะแล้วทั้ง 30 ข้อ (2026-09-23 · memory ryuma-p2p-spec) อยู่ที่นี่ที่เดียว.
  *
@@ -31,6 +45,8 @@ export const MARKET = {
   listingDays: 14,      // ข้อ 17 — ประกาศหมดอายุ (ต่ออายุได้)
   maxActive: 5,         // ข้อ 4 — ประกาศค้างพร้อมกันต่อคน
   resellDays: 3,        // ข้อ 5 — ซื้อจากตลาดแล้วต้องถือ 3 วันก่อนขายต่อ
+  offerHours: 24,       // v73 เปลี่ยนใบพรี — ผู้รับมี 24 ชม. โอน+แนบสลิป (ไม่มีใครรอแย่ง จึงไม่ใช่ 15 นาที)
+  lookupPerDay: 20,     // v73 — ค้นเลขกระเป๋าได้วันละ 20 ครั้ง (กันไล่เดา 4 หลัก)
 } as const;
 
 /** ข้อ 1A: ขายได้หลังปิดรอบเท่านั้น — ช่วงเปิดจองร้านยังขายตัวเดียวกันอยู่ */
@@ -58,9 +74,28 @@ const ms = (iso?: string) => (iso ? new Date(iso).getTime() : NaN);
  *  ประกาศเกินอายุ = expired (RPC ทุกตัวใช้กติกาเดียวกันตอนถูกเรียก) */
 export function effectiveStatus(tr: TicketTransfer, now: Date = new Date()): TicketTransfer['status'] {
   const t = now.getTime();
+  // ดีลตรง (v73): ข้อเสนอหมดเวลา = จบเลย ไม่กลับขึ้นกระดาน
+  if (isDirect(tr) && tr.status === 'reserved' && ms(tr.hold_until) + MARKET.holdGraceMin * 60_000 <= t) return 'expired';
   if (tr.status === 'reserved' && ms(tr.hold_until) + MARKET.holdGraceMin * 60_000 <= t) return ms(tr.expires_at) <= t ? 'expired' : 'listed';
   if (tr.status === 'listed' && ms(tr.expires_at) <= t) return 'expired';
   return tr.status;
+}
+
+/** ป้ายสถานะที่อ่านรู้เรื่องทั้งสองแบบ — ดีลตรงไม่มี "ลงขาย/จอง" มีแต่ "ข้อเสนอ/รอผู้รับโอน" */
+export function dealStatusLabel(tr: TicketTransfer, st: TicketTransfer['status'] = effectiveStatus(tr)): string {
+  if (!isDirect(tr)) return TRANSFER_STATUS_LABEL[st];
+  if (st === 'reserved') return (tr.asking_price ?? 0) > 0 ? 'รอผู้รับโอนเงิน' : 'รอผู้รับกดรับ';
+  if (st === 'paid') return (tr.asking_price ?? 0) > 0 ? 'รอคนส่งเช็คเงิน' : 'รอคนส่งยืนยัน';
+  if (st === 'expired') return 'ข้อเสนอหมดเวลา';
+  if (st === 'cancelled') return tr.cancel_reason === 'buyer_declined' ? 'ผู้รับไม่รับ' : tr.cancel_reason === 'seller' ? 'ถอนข้อเสนอแล้ว' : 'ยกเลิกแล้ว';
+  return TRANSFER_STATUS_LABEL[st];
+}
+
+/** สลิป "เติมมัดจำก่อนเปลี่ยนใบ/ลงขาย" ที่รอแอดมินตรวจ (เจ้าของ 2026-10-02: ส่งแอดมิน "แยกหัวข้อว่าเป็นการเติมมัดจำ") */
+export function topupQueue(db: Database) {
+  return db.remainingPayments
+    .filter((r) => r.status === 'pending' && r.purpose === 'topup')
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
 }
 
 export const isActiveTransfer = (tr: TicketTransfer, now: Date = new Date()) => ACTIVE.has(effectiveStatus(tr, now));
@@ -239,5 +274,8 @@ export function marketQueue(db: Database, now: Date = new Date()) {
   const reviewing = live.filter((x) => x.st === 'reviewing').map((x) => x.tr);
   const overdue = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) <= 0).map((x) => x.tr);
   const waiting = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) > 0).map((x) => x.tr);
-  return { ready, reviewing, overdue, waiting, jobs: ready.length + reviewing.length + overdue.length };
+  // v73: ข้อเสนอเปลี่ยนใบที่รอผู้รับ (ดูเฉยๆ ไม่ใช่งานแอดมิน) + สลิปเติมมัดจำรอตรวจ (งานแอดมิน แยกหัวข้อ)
+  const offers = live.filter((x) => x.st === 'reserved' && isDirect(x.tr)).map((x) => x.tr);
+  const topups = topupQueue(db);
+  return { ready, reviewing, overdue, waiting, offers, topups, jobs: ready.length + reviewing.length + overdue.length + topups.length };
 }

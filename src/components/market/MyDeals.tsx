@@ -5,7 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { productLabel } from '@/domain/services/catalog';
-import { myDeals, dealRole, effectiveStatus, TRANSFER_STATUS_LABEL } from '@/domain/services/market';
+import { myDeals, dealRole, effectiveStatus, isDirect, dealStatusLabel } from '@/domain/services/market';
 import type { TicketTransfer } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { StubArt } from './MarketUi';
@@ -23,9 +23,18 @@ const TONE: Record<string, string> = {
   expired: 'text-ink-faint border-white/10 bg-white/5',
 };
 
-/** งานถัดไปของฉันในดีลนี้ (ข้อความสั้นใต้ชื่อ) */
+/** งานถัดไปของฉันในดีลนี้ (ข้อความสั้นใต้ชื่อ) — ดีลตรง (v73) ใช้คำ "ส่ง/รับ" แทน "ขาย/ซื้อ" */
 function nextStep(tr: TicketTransfer, uid: string, st: string): string {
   const seller = dealRole(tr, uid) === 'seller';
+  if (isDirect(tr)) {
+    const free = (tr.asking_price ?? 0) <= 0;
+    if (st === 'reserved') return seller ? `ส่งข้อเสนอแล้ว · รอผู้รับ${free ? 'กดรับ' : 'โอน'}ใน 24 ชม.` : `🎁 มีคนเปลี่ยนใบให้คุณ · ${free ? 'กดรับ' : 'โอน + แนบสลิป'}ภายใน 24 ชม.`;
+    if (st === 'paid') return seller ? (free ? '🤝 ผู้รับกดรับแล้ว · กดยืนยัน' : '💸 เช็คเงินเข้า แล้วกดยืนยัน') : (free ? 'รอคนส่งยืนยัน' : 'รอคนส่งเช็คเงิน');
+    if (st === 'reviewing') return 'ร้านกำลังตรวจสอบ';
+    if (st === 'seller_ok' || st === 'pending_admin') return 'รอร้านโอนสิทธิ์';
+    if (st === 'done' || st === 'approved') return seller ? 'เปลี่ยนใบสำเร็จ' : `ได้ใบพรี ${tr.new_ticket_no ?? ''}`;
+    return dealStatusLabel(tr, st as TicketTransfer['status']);
+  }
   if (st === 'reserved') return seller ? 'มีคนกำลังจอง · รอเขาโอน' : 'จองอยู่ · โอน + แนบสลิปให้ทันเวลา';
   if (st === 'paid') return seller ? '💸 เช็คเงินเข้า แล้วกดยืนยัน' : 'รอคนขายเช็คเงิน';
   if (st === 'reviewing') return 'ร้านกำลังตรวจสอบ';
@@ -54,7 +63,7 @@ export function MyDeals({ onOpen }: { onOpen?: (id: string) => void }) {
         <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center">
           <div className="text-3xl">🔁</div>
           <div className="mt-2 text-[14px] font-bold">ยังไม่มีรายการซื้อขาย</div>
-          <div className="mt-1 text-[12px] text-ink-faint">ลงขายได้จากหน้าใบพรีในกระเป๋า · ซื้อได้จากกระดานตลาด</div>
+          <div className="mt-1 text-[12px] text-ink-faint">เปลี่ยนใบ/ลงขายได้จากหน้าใบพรีในกระเป๋า · เมื่อมีคนเปลี่ยนใบให้คุณจะเด้งที่นี่</div>
         </div>
       )}
       {sections.filter((s) => s.rows.length > 0).map((s) => (
@@ -71,14 +80,14 @@ export function MyDeals({ onOpen }: { onOpen?: (id: string) => void }) {
                   <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl">{tr.product_id && <StubArt db={db} productId={tr.product_id} variantId={tr.variant_id} />}</div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className={cx('rounded-md px-1.5 text-[10px] font-bold', seller ? 'bg-[#f1d27a]/15 text-[#f1d27a]' : 'bg-[#86c8ff]/15 text-[#86c8ff]')}>{seller ? 'ขาย' : 'ซื้อ'}</span>
+                      <span className={cx('rounded-md px-1.5 text-[10px] font-bold', seller ? 'bg-[#f1d27a]/15 text-[#f1d27a]' : 'bg-[#86c8ff]/15 text-[#86c8ff]')}>{isDirect(tr) ? (seller ? '🔁 ส่งให้' : '🔁 รับ') : seller ? 'ขาย' : 'ซื้อ'}</span>
                       <span className="truncate text-[13.5px] font-bold">{tr.product_id ? productLabel(db, tr.product_id, tr.variant_id) : 'ใบพรี'}</span>
                     </div>
                     <div className={cx('mt-0.5 truncate text-[11.5px]', s.hot ? 'font-bold text-primary-soft' : 'text-ink-faint')}>{nextStep(tr, uid, st)}</div>
                   </div>
                   <div className="shrink-0 text-right">
-                    <div className="font-mono text-[14px] font-bold">{baht(tr.asking_price)}</div>
-                    <span className={cx('mt-0.5 inline-block rounded-full border px-1.5 text-[10px] font-bold', TONE[st] ?? TONE.cancelled)}>{TRANSFER_STATUS_LABEL[st]}</span>
+                    <div className="font-mono text-[14px] font-bold">{isDirect(tr) && (tr.asking_price ?? 0) <= 0 ? 'ฟรี' : baht(tr.asking_price)}</div>
+                    <span className={cx('mt-0.5 inline-block rounded-full border px-1.5 text-[10px] font-bold', TONE[st] ?? TONE.cancelled)}>{dealStatusLabel(tr, st)}</span>
                   </div>
                 </>
               );

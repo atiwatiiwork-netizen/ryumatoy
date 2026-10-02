@@ -5,13 +5,13 @@ import { BackBar } from '@/components/ui';
 import { MyDeals } from '@/components/market/MyDeals';
 import { MarketGate } from '../MarketGate';
 
-/** ซื้อขายของฉัน — ต้องทำ / กำลังดำเนินการ / ลงขายอยู่ / ประวัติ */
+/** ซื้อขาย/เปลี่ยนใบของฉัน — ต้องทำ / กำลังดำเนินการ / ลงขายอยู่ / ประวัติ (รวมดีลตรง v73) */
 export default function MyMarketPage() {
-  const goBack = useSmartBack('/market');
+  const goBack = useSmartBack('/profile');
   return (
-    <MarketGate>
+    <MarketGate allowDirect>
       <div className="mx-auto max-w-[640px]">
-        <BackBar title="ซื้อขายของฉัน" onBack={goBack} />
+        <BackBar title="ซื้อขาย / เปลี่ยนใบของฉัน" onBack={goBack} />
         <MyDeals />
       </div>
     </MarketGate>
