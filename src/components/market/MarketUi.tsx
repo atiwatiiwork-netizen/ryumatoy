@@ -7,6 +7,7 @@ import { productLabel, lineImage, franchiseOf } from '@/domain/services/catalog'
 import { STATUS, baht } from '@/lib/theme';
 import { promptPayPayload, formatPromptPay } from '@/lib/promptpay';
 import { copyText, digitsOnly } from '@/lib/clipboard';
+import { bankDisplayName } from '@/lib/thaiBanks';
 import { marketFeed, type MarketRow } from '@/lib/market';
 import { cx } from '@/components/ui';
 
@@ -261,7 +262,8 @@ export function PromptPayCard({ amount, promptpay, accountNo, bank, accountName,
       <div className="mt-0.5 px-3 text-[12px] text-[#555]">{accountName}</div>
       <div className="flex flex-wrap justify-center gap-1.5 px-3 pb-3 pt-2">
         {promptpay && <button type="button" onClick={() => copy(promptpay, 'เบอร์พร้อมเพย์')} className="rounded-lg border border-[#c9d3e3] px-2.5 py-1 text-[11.5px] font-bold text-[#162b4d]">พร้อมเพย์ {formatPromptPay(promptpay)} · คัดลอก</button>}
-        {accountNo && <button type="button" onClick={() => copy(accountNo, 'เลขบัญชี')} className="rounded-lg border border-[#c9d3e3] px-2.5 py-1 text-[11.5px] font-bold text-[#162b4d]">{bank ? `${bank} ` : ''}{accountNo} · คัดลอก</button>}
+        {/* ชื่อธนาคารจริง ไม่ใช่รหัส 'kbank' (audit รอบ C R1-14) */}
+        {accountNo && <button type="button" onClick={() => copy(accountNo, 'เลขบัญชี')} className="rounded-lg border border-[#c9d3e3] px-2.5 py-1 text-[11.5px] font-bold text-[#162b4d]">{bankDisplayName(bank) ? `${bankDisplayName(bank)} ` : ''}{accountNo} · คัดลอก</button>}
       </div>
       {payload && <div className="pb-2.5 text-[10px] text-[#888]">ยอดถูกใส่ใน QR ให้แล้ว · เช็คชื่อบัญชีให้ตรงก่อนกดโอน</div>}
     </div>

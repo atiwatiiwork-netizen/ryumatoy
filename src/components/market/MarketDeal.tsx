@@ -17,6 +17,7 @@ import type { Database, TicketTransfer } from '@/domain/entities';
 import { BackBar, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { StubArt, LotPill, productSub, MoneySplit, HoldRing, SlideToConfirm, PromptPayCard, DealSteps, useMarketFeed, useNow, mmss } from './MarketUi';
+import { PayoutLine } from './PayoutPicker';
 
 type Flash = (m: string) => void;
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
@@ -391,6 +392,9 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
   const [busy, setBusy] = useState(false);
   const direct = isDirect(tr);
   const free = direct && price <= 0;
+  // บัญชีที่ล็อกกับดีลนี้ = เงินต้องเข้าบัญชีไหน (audit รอบ C R1-49 · v76 คนส่ง/คนขายอ่านของดีลตัวเองได้)
+  const [myPayout, setMyPayout] = useState<mk.MarketRes | null>(null);
+  useEffect(() => { if (!free) void mk.marketPayout(tr.id).then(setMyPayout); }, [tr.id, free]);
   const run = async (fn: () => Promise<mk.MarketRes>, ok: string, after?: () => void) => {
     if (busy) return;
     setBusy(true);
@@ -475,6 +479,12 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
             {tr.slip_url && /^https?:\/\//i.test(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" /></a>}
             <div><div className="text-[11px] text-ink-faint">ยอดที่ต้องเข้าบัญชีคุณ</div><div className="font-mono text-[24px] font-bold">{baht(price)}</div><div className="text-[11px] text-ink-faint">{fmt(tr.paid_at)}</div></div>
           </div>
+          {myPayout?.ok && !myPayout.none && (
+            <div className="mt-2.5 rounded-xl border border-subtle bg-surface-3 px-2.5 py-2 text-[12px]">
+              <div className="mb-1 text-[11px] text-ink-faint">เช็คที่บัญชีนี้ (บัญชีที่ผู้{direct ? 'รับ' : 'ซื้อ'}เห็นตอนโอน)</div>
+              <PayoutLine info={myPayout} full size={22} />
+            </div>
+          )}
           <ol className="mt-3 list-decimal space-y-0.5 pl-5 text-[12px] text-ink-muted2">
             <li>เปิดแอปธนาคารของคุณ</li><li>ดูว่ามีเงินเข้า {baht(price)} จริง</li><li>กดยืนยัน — ร้านจะโอนสิทธิ์ให้{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}ต่อ</li>
           </ol>

@@ -1,7 +1,7 @@
 import type { Database, PreorderTicket, TicketTransfer, User } from '../entities';
 import { depositFor } from './pricing';
 import { isSourcingTicket } from './money';
-import { TRANSFER_DONE } from './tickets';
+import { TRANSFER_DONE, ticketRoot, ticketPayer, orderTicketId } from './tickets';
 import { isAdminUser } from './admins';
 
 /** สวิตช์เปิดตลาดฝั่งลูกค้า (app_config 'market_public') — ไม่มีแถว = ปิด (เจ้าของ 2026-09-23: "รอทุกอย่างพร้อมก่อน")
@@ -126,18 +126,52 @@ export function ticketTransferred(db: Database, t: PreorderTicket): boolean {
     || db.tickets.some((x) => x.split_from === t.id);
 }
 
+/** มัดจำมาตรฐาน "ปัจจุบัน" ของสินค้า/รอบ (สูตรก่อน v76) — ใช้เฉพาะเป็นค่าสำรองของรายการที่ยังไม่มี std_deposit */
+function currentStdDeposit(db: Database, t: PreorderTicket): number {
+  const p = db.products.find((x) => x.id === t.product_id);
+  if (t.batch_id) return db.batches.find((b) => b.id === t.batch_id)?.deposit_amount ?? 0;
+  if (p?.is_stock) return depositFor(db.settings, p.wcf_type); // deposit_amount ของ SKU ที่ convert แล้ว = ราคาเต็ม ใช้ไม่ได้
+  if (t.variant_id) return db.variants.find((v) => v.id === t.variant_id)?.deposit_amount ?? p?.deposit_amount ?? 0;
+  return p?.deposit_amount ?? 0;
+}
+
+/** รายการในออเดอร์ที่ออกตั๋วใบนี้ (ตั๋วลูกใช้ของตั๋วแม่ต้นสาย) — สูตรเดียวกับ ryuma_market_std_deposit (v76):
+ *  1) id ตั๋ว = 't-' + id รายการ · 2) ตั๋วรุ่นเก่า: รายการของคนจ่าย สินค้า/แบบ/รอบเดียวกัน มัดจำต่อชิ้นตรงกับตั๋ว (±1 บาท)
+ *  ไม่เจอ = ตั๋วแอดมินมอบ/ไล่เก็บ/หาของ หรือออเดอร์ของคนอื่นที่เครื่องนี้มองไม่เห็น (ใบที่ซื้อต่อมา — คนแรกเติมไปแล้ว) */
+export function sourceOrderItemOf(db: Database, t: PreorderTicket) {
+  const r = t.split_from ? (ticketRoot(db, t) ?? t) : t;
+  const approved = db.orders.filter((o) => o.status === 'approved');
+  for (const o of approved) {
+    const it = o.items.find((i) => orderTicketId(i.id) === r.id);
+    if (it) return it;
+  }
+  const payer = ticketPayer(r);
+  const unitDep = r.qty > 0 ? (r.deposit_paid ?? 0) / r.qty : 0;
+  const tTime = new Date(r.created_at).getTime();
+  let best: { it: (typeof approved)[number]['items'][number]; d: number } | null = null;
+  for (const o of approved) {
+    if (o.user_id !== payer) continue;
+    for (const i of o.items) {
+      if ((i.qty ?? 0) <= 0 || i.product_id !== r.product_id || (i.variant_id ?? null) !== (r.variant_id ?? null) || (i.batch_id ?? null) !== (r.batch_id ?? null)) continue;
+      const iDep = i.unit_deposit ?? (i.deposit_amount ?? 0) / Math.max(1, i.qty);
+      if (Math.abs(iDep - unitDep) > 1) continue;
+      const d = Math.abs(new Date(o.approved_at ?? o.created_at).getTime() - tTime);
+      if (!best || d < best.d) best = { it: i, d };
+    }
+  }
+  return best?.it;
+}
+
 /**
- * "มัดจำปกติ" ต่อชิ้น (ข้อ 9) = มัดจำของรอบนั้น "ก่อนส่วนลดยศ" — Gold มัดจำครึ่ง / Diamond มัดจำ 0
- * ต้องเติมให้ถึงตัวนี้ก่อนลงขาย. ลำดับ: รอบพิเศษ → (SKU ที่ถูก convert เป็นพร้อมส่งแล้ว = ขั้นมัดจำมาตรฐานร้าน)
- * → แบบย่อย → สินค้า · ไม่เกินราคาเต็มต่อชิ้นของตั๋ว (รอบจ่ายเต็มจึงเท่ากับราคาเต็ม)
+ * "มัดจำปกติ" ต่อชิ้น (ข้อ 9) = มัดจำของรายการ "ตอนซื้อ" ก่อนส่วนลดยศ — Gold มัดจำครึ่ง / Diamond มัดจำ 0
+ * ต้องเติมให้ถึงตัวนี้ก่อนเปลี่ยนใบ/ลงขาย (audit รอบ C R1-22: เดิมใช้มัดจำสินค้าปัจจุบัน → ร้านขึ้นมัดจำทีหลัง ใบมัดจำเต็มก็โดนสั่งเติม)
+ * ตั๋วที่ไม่มีออเดอร์รองรับ (แอดมินมอบ/ไล่เก็บ/หาของ) = ไม่ได้ลดมัดจำด้วยยศ → 0 ไม่ต้องเติม (R2B-05 · เจ้าของ 2026-10-02)
+ * ไม่เกินราคาเต็มต่อชิ้นของตั๋ว · ต้องตรงกับ ryuma_market_std_deposit (SQL v76)
  */
 export function standardDepositPerUnit(db: Database, t: PreorderTicket): number {
-  const p = db.products.find((x) => x.id === t.product_id);
-  let base = 0;
-  if (t.batch_id) base = db.batches.find((b) => b.id === t.batch_id)?.deposit_amount ?? 0;
-  else if (p?.is_stock) base = depositFor(db.settings, p.wcf_type); // deposit_amount ของ SKU ที่ convert แล้ว = ราคาเต็ม ใช้ไม่ได้
-  else if (t.variant_id) base = db.variants.find((v) => v.id === t.variant_id)?.deposit_amount ?? p?.deposit_amount ?? 0;
-  else base = p?.deposit_amount ?? 0;
+  const it = sourceOrderItemOf(db, t);
+  if (!it) return 0;
+  const base = it.std_deposit ?? currentStdDeposit(db, t); // ก่อนรัน v76 รายการยังไม่มี std_deposit
   const unitTotal = t.qty > 0 ? (t.deposit_paid + t.remaining_amount) / t.qty : 0;
   return Math.max(0, Math.min(base, unitTotal));
 }
@@ -148,6 +182,12 @@ export function depositGap(db: Database, t: PreorderTicket): number {
   const need = standardDepositPerUnit(db, t) * t.qty;
   const paid = (t.deposit_paid ?? 0) + (t.remaining_paid ?? 0);
   return Math.max(0, Math.ceil(need - paid));
+}
+
+/** ยอดเติมมัดจำเท่ากับ (หรือเกิน) ยอดค้างทั้งหมด = ต้องจ่ายส่วนต่างปิดใบตามปกติแทน (audit รอบ C R1-44) */
+export function topupIsFullPayment(db: Database, t: PreorderTicket): boolean {
+  const gap = depositGap(db, t);
+  return gap > 0 && gap >= Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
 }
 
 /** ตั๋วลูก qty ชิ้นที่แตกออกจากตั๋ว t (ข้อ 3B) — แบ่งเงินตามสัดส่วน, แม่ได้ส่วนที่เหลือเป๊ะ (ยอดรวมไม่ขยับ)

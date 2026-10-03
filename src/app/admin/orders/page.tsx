@@ -41,14 +41,19 @@ export default function OrdersHubPage() {
   // §1 pending deposit slips
   const pendingOrders = db.orders.filter((o) => o.status === 'pending_approval');
   // §2 pending remaining-balance slips
-  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
+  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending' && r.purpose !== 'topup'); // เติมมัดจำอยู่คิวตลาด (R1-23)
   const rpGroups = pendingRpGroups(db);
 
   /** อนุมัติสลิปส่วนต่าง 1 กลุ่ม (1 ใบหรือหลายใบที่ใช้สลิปเดียวกัน) — เงินเข้า-หนี้ลด ต้องเกิดครั้งเดียวต่อใบ */
-  const approveRps = async (rps: RemainingPayment[]) => {
+  const approveRps = async (rps0: RemainingPayment[]) => {
     if (rpBusy) return; // กันกดรัวระหว่างรอเซฟ
     setRpBusy('group');
     try {
+      // สถานะล่าสุดก่อน (audit รอบ C R1-25): สลิปที่อีกเครื่องปฏิเสธไปแล้ว ห้ามกลับมาเป็นเงินเข้า
+      if (!(await store.reload({ safe: true }))) { flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)'); return; }
+      const fresh = store.getState().remainingPayments;
+      const rps = rps0.filter((r) => fresh.some((x) => x.id === r.id && x.status === 'pending'));
+      if (rps.length === 0) { flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้'); return; }
       const applied: RemainingPayment[] = [];
       let allFull = true;
       for (const r of rps) {
@@ -81,12 +86,17 @@ export default function OrdersHubPage() {
   };
 
   /** ปฏิเสธสลิปส่วนต่าง (ทั้งกลุ่ม หรือบางใบ) — คืนคูปอง ยอดหนี้คงเดิม (audit 2026-07-25: เดิมไม่มีทางนี้ สลิปปลอมค้างคิวถาวร) */
-  const rejectRps = async (rps: RemainingPayment[]) => {
+  const rejectRps = async (rps0: RemainingPayment[]) => {
     if (rpBusy) return;
-    const total = rps.reduce((s, r) => s + r.amount, 0);
-    if (!confirm(`ปฏิเสธสลิปส่วนต่าง${rps.length > 1 ? ` ${rps.length} ใบ` : 'นี้'}? (${baht(total)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
+    const total = rps0.reduce((s, r) => s + r.amount, 0);
+    if (!confirm(`ปฏิเสธสลิปส่วนต่าง${rps0.length > 1 ? ` ${rps0.length} ใบ` : 'นี้'}? (${baht(total)})\nคูปองที่ใช้จะถูกคืนให้ลูกค้า และยอดค้างคงเดิม`)) return;
     setRpBusy('group');
     try {
+      // สถานะล่าสุดก่อน (audit รอบ C R1-25): สลิปที่อีกเครื่องอนุมัติไปแล้ว ห้ามถูกลบทิ้ง (เซิร์ฟเวอร์ v76 ก็ปฏิเสธเช่นกัน)
+      if (!(await store.reload({ safe: true }))) { flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)'); return; }
+      const fresh = store.getState().remainingPayments;
+      const rps = rps0.filter((r) => fresh.some((x) => x.id === r.id && x.status === 'pending'));
+      if (rps.length === 0) { flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้'); return; }
       const applied: RemainingPayment[] = [];
       for (const r of rps) {
         dispatch(rejectRemainingPayment(r.id));

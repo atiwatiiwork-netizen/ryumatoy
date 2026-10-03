@@ -977,8 +977,10 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
   // เติมมัดจำก่อนลงขาย (ข้อ 9): จ่ายได้ตั้งแต่ของยังไม่ออกจากจีน · ยอด = ส่วนที่ขาดพอดี · ไม่มีคูปอง/แต้ม
   //   เงินเข้า remaining_paid ตามปกติตอนอนุมัติ → ส่วนต่างที่ค้างลดลงเท่ากัน ราคารวมของใบเท่าเดิม
   if (opts.purpose === 'topup') {
-    const gap = Math.min(depositGap(db, ticket), due);
-    if (gap <= 0) return db;
+    const gap = depositGap(db, ticket);
+    // ยอดเติม = ยอดค้างทั้งหมด → นี่คือ "งวดปิดใบ" ไม่ใช่เติมมัดจำ (audit รอบ C R1-44: เดิมได้แต้มปิดใบแต่ข้ามโบนัส ทั้งที่ป้ายบอก "ไม่ใช่งวดปิดใบ")
+    //   ให้จ่ายส่วนต่างตามปกติแทน (ได้โบนัส/คูปอง/แต้มครบ)
+    if (gap <= 0 || gap >= due) return db;
     return {
       ...db,
       remainingPayments: [
@@ -2480,29 +2482,42 @@ export const setPayoutInfo = (userId: string, info: { promptpay?: string; bank?:
  *  `selectId` = บัญชีที่เลือกใช้ → ก๊อปปี้ลง payout_info (ช่องเดิมที่ RPC ตลาด/กระดานอ่าน) */
 export const setPayoutAccounts = (userId: string, accounts: PayoutAccount[], selectId?: string) => (db: Database): Database => {
   const clean: PayoutAccount[] = [];
+  // บัญชีรุ่นเก่า (v71 บัญชีเดียว · id 'legacy' ที่ payoutAccountsOf สร้างให้ดู) → id ถาวร ไม่หายเมื่อเพิ่มบัญชีใหม่ (audit รอบ C R1-30)
+  const realId = (x?: string) => (x === 'legacy' ? 'pa-legacy' : x);
   for (const a of accounts) {
     const account_name = (a.account_name ?? '').trim();
+    const bank = a.bank || ((a.promptpay ?? '').replace(/\D/g, '') ? 'promptpay' : 'other');
     const promptpay = (a.promptpay ?? '').replace(/\D/g, '');
-    const account_no = (a.account_no ?? '').replace(/\D/g, '');
+    // พร้อมเพย์ล้วน = ไม่มีเลขบัญชี (R1-19: เดิมเลขที่พิมพ์ค้างก่อนสลับเป็นพร้อมเพย์ ถูกเซฟแฝงไปด้วย)
+    const account_no = bank === 'promptpay' ? '' : (a.account_no ?? '').replace(/\D/g, '');
+    const bank_name = bank === 'other' ? (a.bank_name ?? '').trim().slice(0, 60) : '';
     if (!account_name || (!promptpay && !account_no)) continue;
-    if (clean.some((x) => x.id === a.id)) continue;
-    clean.push({ id: a.id, bank: a.bank || (promptpay ? 'promptpay' : 'other'), account_name, ...(promptpay ? { promptpay } : {}), ...(account_no ? { account_no } : {}), created_at: a.created_at ?? new Date().toISOString() });
+    const id2 = realId(a.id)!;
+    if (clean.some((x) => x.id === id2)) continue;
+    clean.push({ id: id2, bank, account_name, ...(bank_name ? { bank_name } : {}), ...(promptpay ? { promptpay } : {}), ...(account_no ? { account_no } : {}), created_at: a.created_at ?? new Date().toISOString() });
     if (clean.length >= 6) break;
   }
-  const sel = clean.find((x) => x.id === selectId) ?? clean[0];
+  const me = db.users.find((u) => u.id === userId);
+  // บัญชีหลัก (payout_info): ตัวที่เลือก · ไม่ระบุ = คงตัวเดิมถ้ายังอยู่ (R1-05: เดิมลบบัญชีอื่นแล้วบัญชีหลักกระโดดไปตัวแรก)
+  const keep = selectId === undefined && me?.payout_info ? clean.find((x) => samePayout(payoutInfoOf(x), me.payout_info!)) : undefined;
+  const sel = clean.find((x) => x.id === realId(selectId)) ?? keep ?? clean[0];
   return {
     ...db,
     users: db.users.map((u) => (u.id === userId
-      ? { ...u, payout_accounts: clean, ...(sel ? { payout_info: payoutInfoOf(sel) } : {}) }
+      // ลบจนหมด = ไม่มีบัญชีหลักแล้วจริงๆ (R1-20: เดิม payout_info ค้าง ผู้ซื้อกระดานยังเห็น และกลับมาเป็น "รุ่นเก่า")
+      ? { ...u, payout_accounts: clean, payout_info: sel ? payoutInfoOf(sel) : undefined }
       : u)),
   };
 };
-/** บัญชีที่ลงทะเบียน → รูปแบบ payout_info ที่ RPC ตลาดอ่าน (บัญชีธนาคารใส่รหัสธนาคารในช่อง bank) */
+/** บัญชีที่ลงทะเบียน → รูปแบบ payout_info ที่ RPC ตลาดอ่าน (บัญชีธนาคารใส่รหัสธนาคาร · ธนาคารอื่นใส่ชื่อที่พิมพ์) */
 export const payoutInfoOf = (a: PayoutAccount): PayoutInfo => ({
   account_name: a.account_name,
   ...(a.promptpay ? { promptpay: a.promptpay } : {}),
-  ...(a.account_no ? { account_no: a.account_no, bank: a.bank } : {}),
+  ...(a.account_no ? { account_no: a.account_no, bank: a.bank === 'other' ? (a.bank_name || 'other') : a.bank } : {}),
 });
+/** บัญชีเดียวกันไหม (ชื่อ + พร้อมเพย์ + เลขบัญชี) */
+export const samePayout = (a: PayoutInfo, b: PayoutInfo) =>
+  a.account_name === b.account_name && (a.promptpay ?? '') === (b.promptpay ?? '') && (a.account_no ?? '') === (b.account_no ?? '');
 
 /** สวิตช์ "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า · v73) แยกจากกระดาน — server อ่านแถวเดียวกันผ่าน ryuma_direct_open */
 export const setMarketDirect = (enabled: boolean) => (db: Database): Database => ({

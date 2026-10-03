@@ -33,6 +33,8 @@ export type MarketRes = {
   bank?: string | null;
   account_no?: string | null;
   account_name?: string | null;
+  /** v76: ดีลนี้ไม่มีบัญชีรับเงิน (ยกให้ฟรี) */
+  none?: boolean;
   new_ticket_no?: string;
   child_ticket_id?: string | null;
   /** v75: สลิปที่แนบหลังดีลปิด/หมดเวลา ถูกเก็บเป็นหลักฐานให้ร้านแล้ว (ไม่ย้ายตั๋ว) */
@@ -113,7 +115,7 @@ export const walletLookup = (code: string) => call<WalletLookupRes>('ryuma_walle
 /** ส่งข้อเสนอเปลี่ยนใบให้เลขกระเป๋านี้ — บัญชีรับเงินถูกล็อกกับดีล (payout_snap) · ผู้รับมี 24 ชม.
  *  `expectUser` = user_id ที่ได้จากการค้นเลข (คนที่ยืนยัน "ใช่คนนี้") — เซิร์ฟเวอร์ (v75) ส่งให้เฉพาะเมื่อเลขยังเป็นของคนนั้น
  *  (กันข้ามเที่ยงคืนแล้วเลขเดิมเป็นของคนแปลกหน้า · audit รอบ B R1-02) · ส่งซ้ำแบบเดิม = ok again (R1-38) */
-export const marketOffer = (ticketId: string, qty: number, price: number, code: string, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }, expectUser: string) =>
+export const marketOffer = (ticketId: string, qty: number, price: number, code: string, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string } | null, expectUser: string) =>
   call<MarketRes & { to_mask?: string }>('ryuma_market_offer', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_code: code, p_payout: payout, p_expect_user: expectUser });
 /** ผู้รับไม่รับข้อเสนอ (ยังไม่โอน) → ดีลปิด ตั๋วปลดล็อก */
 export const marketDecline = (id: string) => call('ryuma_market_decline', { p_id: id });

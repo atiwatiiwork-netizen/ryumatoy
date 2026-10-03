@@ -194,6 +194,8 @@ export interface OrderItem {
   // product price is edited later. Optional for back-compat with older rows.
   unit_price?: number;
   unit_deposit?: number;
+  /** มัดจำมาตรฐานต่อชิ้น "ตอนซื้อ" ก่อนส่วนลดยศ (v76 · เซิร์ฟเวอร์คำนวณเองตอน insert ไม่ต้องส่ง) — ใช้คิดยอดเติมมัดจำก่อนเปลี่ยนใบ/ลงขาย */
+  std_deposit?: number;
   batch_id?: string; // set when the buy came from a reopened stock batch
   coupon_id?: string;
 }
@@ -339,6 +341,7 @@ export interface PayoutAccount {
   id: string;
   bank: string;             // รหัสธนาคาร (lib/thaiBanks.ts) · 'promptpay' = พร้อมเพย์ล้วน
   account_no?: string;      // เลขบัญชี (ธนาคาร)
+  bank_name?: string;       // ชื่อธนาคารที่พิมพ์เอง เมื่อ bank = 'other' (รวมบัญชีรุ่นเก่าที่เก็บชื่อธนาคารเป็นข้อความ · audit รอบ C R1-14)
   promptpay?: string;       // เบอร์/เลขบัตรพร้อมเพย์ (ทำ QR ใส่ยอดได้)
   account_name: string;
   created_at?: string;

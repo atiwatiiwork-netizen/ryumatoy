@@ -61,7 +61,7 @@ export function worklist(db: Database): WorkItem[] {
   const slips = db.orders.filter((o) => o.status === 'pending_approval');
   add({ key: 'slips', urgency: 'now', icon: '🧾', title: 'สลิปมัดจำรอตรวจ', detail: 'ลูกค้าโอนแล้ว รอออกตั๋ว', count: slips.length, href: '/admin/orders', money: slips.reduce((s, o) => s + (o.total_deposit ?? 0), 0) });
 
-  const rps = db.remainingPayments.filter((r) => r.status === 'pending');
+  const rps = db.remainingPayments.filter((r) => r.status === 'pending' && r.purpose !== 'topup'); // เติมมัดจำนับในงาน "ตลาดใบพรี" (marketQueue)
   add({ key: 'rp', urgency: 'now', icon: '💸', title: 'สลิปส่วนต่างรอตรวจ', detail: 'ตรวจแล้วตั๋วจะพร้อมจัดส่ง', count: rps.length, href: '/admin/orders', money: rps.reduce((s, r) => s + (r.amount ?? 0), 0) });
 
   // ตลาดใบพรี: ผู้ซื้อโอนแล้วรอร้านโอนสิทธิ์ / รอตัดสิน / คนขายเงียบ — ช้า = ผู้ซื้อที่จ่ายเงินแล้วรอเก้อ

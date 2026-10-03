@@ -7,19 +7,22 @@ import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { store } from '@/data/store';
 import { submitRemainingPayment, payoutInfoOf } from '@/data/mutations';
+import { isTransientPersistError, persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
 import { baht } from '@/lib/theme';
 import { productLabel } from '@/domain/services/catalog';
-import { depositGap, listingPreview, sellBlockReason, standardDepositPerUnit, MARKET } from '@/domain/services/market';
+import { depositGap, listingPreview, sellBlockReason, standardDepositPerUnit, topupIsFullPayment, MARKET } from '@/domain/services/market';
 import { heldByPayer } from '@/domain/services/tickets';
 import * as mk from '@/lib/market';
 import type { PayoutAccount, PreorderTicket } from '@/domain/entities';
 import { QrPanel, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { MoneySplit, StubArt, LotPill } from './MarketUi';
-import { PayoutPicker, payoutAccountsOf, payoutLabel } from './PayoutPicker';
+import { PayoutPicker, payoutAccountsOf, payoutLabel, primaryPayoutId } from './PayoutPicker';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export type SellMode = 'market' | 'direct';
 /** ผลค้นเลขกระเป๋า + เลขที่ใช้ค้น (ส่งข้อเสนอด้วยเลขนี้เท่านั้น) */
@@ -42,15 +45,12 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   const t = db.tickets.find((x) => x.id === ticket.id) ?? ticket;
   const me = db.users.find((u) => u.id === uid);
   const direct = mode === 'direct';
-  const [qty, setQty] = useState(1);
+  // หลายชิ้น: ตั้งต้นทั้งใบ (audit รอบ C R2B-06: เดิมตั้งต้น 1 ชิ้นแต่ยอดเท่าทุนของทั้งใบ)
+  const [qty, setQty] = useState(ticket.qty || 1);
   const pv0 = listingPreview(t, t.qty, 0);
   const [priceStr, setPriceStr] = useState(String(Math.round(pv0.paid)));
-  const [payoutId, setPayoutId] = useState<string | undefined>(() => {
-    // บัญชีหลัก = ตัวที่ตรงกับ payout_info (เลือกล่าสุด) ไม่งั้นตัวแรก
-    const list = payoutAccountsOf(me);
-    const p = me?.payout_info;
-    return list.find((a) => p && a.account_name === p.account_name && (a.promptpay ?? '') === (p.promptpay ?? '') && (a.account_no ?? '') === (p.account_no ?? ''))?.id ?? list[0]?.id;
-  });
+  // บัญชีหลัก = ตัวที่ตรงกับ payout_info (เลือกล่าสุด) ไม่งั้นตัวแรก
+  const [payoutId, setPayoutId] = useState<string | undefined>(() => primaryPayoutId(me) ?? payoutAccountsOf(me)[0]?.id);
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // direct: เลขกระเป๋าผู้รับ + ผลค้น (ผูกกับเลขที่ค้น — เปลี่ยนเลขแล้วผลเดิมใช้ไม่ได้)
@@ -63,12 +63,18 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   const pendingTopup = db.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending' && r.purpose === 'topup');
   const q = Math.min(Math.max(1, qty), t.qty);
   const price = Math.max(0, Math.round(Number(priceStr) || 0));
+  // ช่องยอดว่าง ≠ ยกให้ฟรี (audit รอบ C R3-27: เดิมลบตัวเลขหมดแล้วกลายเป็นข้อเสนอยกให้ฟรีเงียบๆ)
+  const priceMissing = priceStr.trim() === '';
   const reason = sellBlockReason(db, t, uid, q);
   // เหตุผล "ต้องเติมมัดจำ" / "มีสลิปเติมมัดจำรอตรวจ" → โชว์แผงเติมมัดจำแทนการบล็อกเฉยๆ (ด่านอื่นมาก่อนเสมอ)
-  const blocked = !!reason && !(gap > 0 && reason.startsWith('ต้องเติมมัดจำ')) && !(pendingTopup && reason === 'มีสลิปส่วนต่างรอตรวจ');
+  //   สลิปเติมมัดจำค้างแต่ไม่ขาดแล้ว → บล็อกพร้อมเหตุผล (R2B-07: เดิมปุ่มกดได้แต่ไม่เกิดอะไร)
+  const blocked = !!reason && !(gap > 0 && reason.startsWith('ต้องเติมมัดจำ')) && !(pendingTopup && gap > 0 && reason === 'มีสลิปส่วนต่างรอตรวจ');
+  const fullPayTopup = gap > 0 && !pendingTopup && topupIsFullPayment(db, t);
   const pv = listingPreview(t, q, price);
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
   const payout: PayoutAccount | undefined = payoutAccountsOf(me).find((a) => a.id === payoutId);
+  // ยกให้ฟรี (ดีลตรง ฿0) ไม่มีเงินให้รับ → ไม่ต้องมีบัญชี (audit รอบ C R1-58)
+  const needPayout = !(direct && !priceMissing && price === 0);
   const verb = direct ? 'เปลี่ยนใบ' : 'ลงขาย';
 
   const saveTopup = async () => {
@@ -81,9 +87,24 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
     if (after === before) { setBusy(false); flash('ส่งไม่สำเร็จ — อาจมีสลิปรอตรวจอยู่แล้ว'); return; }
     const failed = await store.flush();
     setBusy(false);
-    if (failed) { flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่ (สลิปยังอยู่)'); return; }
     // เจ้าของ 2026-10-02 ข้อ 2.2: ส่งแอดมิน "แยกหัวข้อว่าเป็นการเติมมัดจำ" (คิว /admin/market หัวข้อ 💰 + LINE บอกชัด)
-    notifyAdminLine(`💰 [เติมมัดจำ] ${t.ticket_no} · ${baht(gap)} — ${me?.display_name ?? ''} เติมมัดจำให้ครบก่อน${verb} (ตรวจที่ แอดมิน › ตลาดใบพรี › เติมมัดจำ)`);
+    const line = () => notifyAdminLine(`💰 [เติมมัดจำ] ${t.ticket_no} · ${baht(gap)} — ${me?.display_name ?? ''} เติมมัดจำให้ครบก่อน${verb} (ตรวจที่ แอดมิน › ตลาดใบพรี › เติมมัดจำ)`);
+    if (failed) {
+      // audit รอบ C R1-48: เดิมบอก "กดส่งใหม่" แต่แถวในเครื่องซ่อนปุ่มไปแล้ว และพอส่งขึ้นทีหลังแอดมินไม่ได้ LINE
+      if (!isTransientPersistError(failed)) { flash(persistFailText(failed, '')); return; } // ถาวร = แถวถูกถอนออก ปุ่มกลับมาให้ส่งใหม่
+      flash('เน็ตสะดุด — สลิปอยู่ในเครื่องแล้ว ระบบจะส่งให้เองเมื่อเน็ตกลับมา (ไม่ต้องกดซ้ำ)');
+      setSlip(null);
+      void (async () => {
+        for (let i = 0; i < 24; i++) {
+          await sleep(5000);
+          const f = await store.flush();
+          if (!f) { if (store.getState().remainingPayments.some((r) => r.ticket_id === t.id && r.status === 'pending' && r.purpose === 'topup')) line(); return; }
+          if (!isTransientPersistError(f)) return;
+        }
+      })();
+      return;
+    }
+    line();
     flash('ส่งสลิปเติมมัดจำแล้ว · รอแอดมินตรวจ แล้วค่อยกลับมา' + verb);
     setSlip(null);
   };
@@ -102,13 +123,14 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
 
   const submit = async () => {
     if (busy || reason) return;
-    if (!payout) return setErr('เลือกหรือเพิ่มบัญชีรับเงินก่อน');
+    if (priceMissing) return setErr(direct ? 'ใส่ยอดที่ให้ผู้รับโอน (ยกให้ฟรี = กดปุ่ม "ยกให้ฟรี")' : 'ใส่ราคาขาย');
+    if (needPayout && !payout) return setErr('เลือกหรือเพิ่มบัญชีรับเงินก่อน');
     if (direct && (!target?.ok || !target.user_id || target.code !== digitsOnly(code))) return setErr('ค้นเลขกระเป๋าผู้รับก่อน');
     setBusy(true);
     setErr(null);
     const r = direct
       // ส่ง user_id ของคนที่ยืนยันไปด้วย — เซิร์ฟเวอร์ส่งให้เฉพาะเมื่อเลขยังเป็นของคนนั้น (R1-02)
-      ? await mk.marketOffer(t.id, q, price, target!.code, payoutInfoOf(payout), target!.user_id!)
+      ? await mk.marketOffer(t.id, q, price, target!.code, needPayout && payout ? payoutInfoOf(payout) : null, target!.user_id!)
       : await mk.marketList(t.id, q, price);
     setBusy(false);
     if (!r.ok || !r.id) {
@@ -154,6 +176,13 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
 
         {blocked ? (
           <div className="rounded-2xl border border-subtle bg-surface-3 px-4 py-4 text-center text-[13px] text-ink-muted2">{verb}ใบนี้ไม่ได้ตอนนี้ — <b className="text-ink">{reason}</b></div>
+        ) : fullPayTopup ? (
+          // ยอดที่ขาด = ยอดค้างทั้งหมด → เป็นงวดปิดใบ ไม่ใช่เติมมัดจำ (audit รอบ C R1-44)
+          <div className="rounded-2xl border border-[#d4af37]/40 bg-[#d4af37]/[0.07] p-3.5 text-[12.5px] leading-relaxed text-ink-muted2">
+            <div className="text-[14px] font-bold text-[#f1d27a]">ต้องจ่ายส่วนต่างให้ครบก่อน{verb}</div>
+            ใบนี้ยอดที่ขาดเท่ากับยอดค้างทั้งหมด {baht(gap)} — ชำระส่วนต่างตามปกติในหน้าตั๋ว (ได้โบนัส/คูปอง/แต้มครบ) แล้วค่อยกลับมา{verb}
+            <button type="button" onClick={onClose} className="mt-3 w-full rounded-btn border-[1.5px] border-accent py-2.5 text-[13.5px] font-bold text-primary-soft">กลับไปหน้าตั๋ว</button>
+          </div>
         ) : gap > 0 ? (
           // ① เติมมัดจำก่อน (ข้อ 9 / เจ้าของ 2026-10-02 ข้อ 2.1)
           <div className="rounded-2xl border border-[#d4af37]/40 bg-[#d4af37]/[0.07] p-3.5">
@@ -182,7 +211,9 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
         ) : (
           <div className="flex flex-col gap-3">
             {/* ③ บัญชีรับเงิน — เลือกจากที่ลงทะเบียน / เพิ่มใหม่ (ใช้ร่วมทั้งสองโหมด) */}
-            <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} />
+            {needPayout
+              ? <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} />
+              : <div className="rounded-2xl border border-subtle bg-surface-3 px-3.5 py-3 text-[12.5px] text-ink-muted2">🎁 ยกให้ฟรี — ไม่มีเงินโอน จึงไม่ต้องใช้บัญชีรับเงิน</div>}
 
             {/* ④ จำนวนชิ้น + ยอด */}
             {t.qty > 1 && (
@@ -245,10 +276,10 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                 ? <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. โอน+แนบสลิป · โอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม. · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>
                 : <li>⏳ ประกาศอยู่ {MARKET.listingDays} วัน · มีคนจอง {MARKET.holdMin} นาที · ผู้ซื้อโอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม.</li>}
               {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ · โบนัสยศที่ได้จากใบนี้จะถูกเรียกคืน</li>}
-              {payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
+              {needPayout && payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
             </ul>
             {err && <div role="alert" className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] px-3 py-2 text-[12.5px] font-semibold text-[#f87171]">{err}</div>}
-            <button type="button" disabled={busy || !payout || (direct && !target?.ok)} onClick={() => void submit()}
+            <button type="button" disabled={busy || priceMissing || (needPayout && !payout) || (direct && !target?.ok)} onClick={() => void submit()}
               className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">
               {busy ? 'กำลังส่ง…' : direct
                 ? `ส่งข้อเสนอให้ ${target?.ok ? target.name : 'ผู้รับ'} ${q < t.qty ? `· ${q} ชิ้น ` : ''}· ${price > 0 ? baht(price) : 'ยกให้ฟรี'}`

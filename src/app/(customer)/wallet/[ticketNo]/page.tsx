@@ -263,7 +263,8 @@ export default function TicketDetailPage() {
       {/* remaining-payment status / action */}
       {pendingRP ? (
         <div className="mb-4 flex items-center gap-2.5 rounded-card border border-[#d97706]/40 bg-[#d97706]/[0.14] px-4 py-3 text-[13px] text-[#fbbf24]">
-          <Icon name="check" size={17} /> ส่งสลิปส่วนต่าง {baht(pendingRP.amount)} แล้ว · รอ Admin ตรวจสอบ
+          {/* สลิปเติมมัดจำ ≠ สลิปส่วนต่าง (audit รอบ C R1-24) */}
+          <Icon name="check" size={17} /> {pendingRP.purpose === 'topup' ? 'ส่งสลิปเติมมัดจำ' : 'ส่งสลิปส่วนต่าง'} {baht(pendingRP.amount)} แล้ว · รอ Admin ตรวจสอบ
         </div>
       ) : canPay && paying ? (
         <div className="mb-4 rounded-card border border-[#b91c1c]/30 bg-surface-2 p-[18px] text-center">

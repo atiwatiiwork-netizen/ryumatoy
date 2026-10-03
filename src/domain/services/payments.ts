@@ -49,7 +49,8 @@ export interface RpGroup {
 export function pendingRpGroups(db: Database): RpGroup[] {
   const m = new Map<string, RpGroup>();
   for (const r of db.remainingPayments) {
-    if (r.status !== 'pending') continue;
+    // สลิปเติมมัดจำมีคิวของตัวเองที่ /admin/market (เจ้าของ 2026-10-02 "แยกหัวข้อ") — ห้ามโผล่ซ้ำในคิวสลิปส่วนต่าง/badge (audit รอบ C R1-23)
+    if (r.status !== 'pending' || r.purpose === 'topup') continue;
     const key = rpGroupKey(r);
     let g = m.get(key);
     if (!g) { g = { key, userId: r.user_id, slipUrl: r.slip_url, rps: [], total: 0, couponOff: 0, createdAt: r.created_at }; m.set(key, g); }

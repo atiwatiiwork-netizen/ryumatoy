@@ -40,3 +40,25 @@ export const maskAccount = (no?: string | null): string => {
   if (d.length < 6) return d ? '••••' : '';
   return `${d.slice(0, 3)}•••${d.slice(-3)}`;
 };
+
+/** ชื่อธนาคารที่โชว์ได้จากค่าที่เก็บใน payout_info.bank — รหัส ('kbank') → ชื่อเต็ม · ข้อความอิสระ (บัญชีรุ่นเก่า/ธนาคารอื่น) → ตามที่พิมพ์
+ *  (audit รอบ C R1-14: เดิมการ์ดฝั่งผู้โอนโชว์รหัสดิบ 'kbank' / 'other') */
+export const bankDisplayName = (bank?: string | null): string => {
+  const v = (bank ?? '').trim();
+  if (!v) return '';
+  const b = THAI_BANKS.find((x) => x.code === v);
+  if (!b) return v;
+  return b.code === 'other' ? 'ธนาคารอื่น' : b.code === 'promptpay' ? 'พร้อมเพย์' : b.name;
+};
+
+/** ความยาวเลขบัญชีของแต่ละธนาคาร (audit รอบ C R1-51) — ธนาคารที่ไม่แน่ใจรับ 10–15 หลัก */
+const ACCOUNT_LEN: Record<string, number[]> = {
+  kbank: [10], scb: [10], bbl: [10], ktb: [10], bay: [10], ttb: [10],
+  gsb: [12], baac: [12], ghb: [12],
+};
+export function accountNoError(bank: string, no: string): string | null {
+  const d = no.replace(/\D/g, '');
+  const lens = ACCOUNT_LEN[bank];
+  if (lens) return lens.includes(d.length) ? null : `เลขบัญชี${bankOf(bank).name}ต้องมี ${lens.join(' หรือ ')} หลัก (ตอนนี้ ${d.length} หลัก)`;
+  return d.length >= 10 && d.length <= 15 ? null : 'เลขบัญชีต้องมี 10–15 หลัก';
+}

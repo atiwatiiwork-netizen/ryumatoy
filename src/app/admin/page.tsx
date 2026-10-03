@@ -40,7 +40,7 @@ export default function AdminDashboardPage() {
   // (delivery-state anomalies คำนวณด้านล่างหลังคิวจัดส่ง — โชว์รวมในแบนเนอร์เดียวกัน)
 
   const pending = db.orders.filter((o) => o.status === 'pending_approval');
-  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending');
+  const pendingRP = db.remainingPayments.filter((r) => r.status === 'pending' && r.purpose !== 'topup'); // เติมมัดจำอยู่คิวตลาด (R1-23)
   const totalPre = db.tickets.length + pending.reduce((s, o) => s + o.items.length, 0);
   // เงินเข้า — ผ่าน services/money (แหล่งเดียว): มัดจำ + ส่วนต่าง + มัดจำหาของ.
   // เดิมนับเฉพาะ orders.total_deposit → ส่วนต่าง/หาของ หายจากรายงานทั้งหมด (flow review 2026-07-25)

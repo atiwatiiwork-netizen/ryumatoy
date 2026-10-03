@@ -7,13 +7,13 @@ import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
 import { setMarketPublic, setMarketDirect, approveRemainingPayment, rejectRemainingPayment, logActivity, rpOverDue } from '@/data/mutations';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { baht } from '@/lib/theme';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import * as mk from '@/lib/market';
 import { productLabel } from '@/domain/services/catalog';
 import { pairItemsWithTickets, ticketPayer } from '@/domain/services/tickets';
-import { marketPublicEnabled, directEnabled, marketQueue, effectiveStatus, sellerSlaLeft, isDirect, dealStatusLabel, TRANSFER_STATUS_LABEL } from '@/domain/services/market';
-import { bankOf, maskAccount } from '@/lib/thaiBanks';
+import { marketPublicEnabled, directEnabled, marketQueue, effectiveStatus, sellerSlaLeft, isDirect, dealStatusLabel, TRANSFER_STATUS_LABEL, depositGap } from '@/domain/services/market';
 import type { Database, RemainingPayment, TicketTransfer } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
@@ -22,7 +22,7 @@ import { MyDeals } from '@/components/market/MyDeals';
 import { MarketDeal } from '@/components/market/MarketDeal';
 import { WalletCodeChip } from '@/components/market/WalletCodeChip';
 import { HoldButton, StubArt } from '@/components/market/MarketUi';
-import { BankLogo } from '@/components/market/PayoutPicker';
+import { PayoutLine } from '@/components/market/PayoutPicker';
 
 /**
  * แอดมิน › ตลาดใบพรี (เฟส 1 · 2026-09-23) + "เปลี่ยนใบพรี" โอนตรง (v73 · 2026-10-02)
@@ -211,6 +211,7 @@ function LateSlipCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fla
  *  (approveRemainingPayment ข้ามโบนัสยศให้แล้วเพราะ purpose=topup) · ปฏิเสธ = ลบแถว ลูกค้าส่งใหม่ได้ */
 function TopupCard({ db, rp, flash }: { db: Database; rp: RemainingPayment; flash: Flash }) {
   const dispatch = useDispatch();
+  const adminId = useCurrentUserId();
   const [busy, setBusy] = useState(false);
   const t = db.tickets.find((x) => x.id === rp.ticket_id);
   const u = db.users.find((x) => x.id === rp.user_id);
@@ -218,21 +219,40 @@ function TopupCard({ db, rp, flash }: { db: Database; rp: RemainingPayment; flas
     if (busy) return;
     if (!approve && !window.confirm(`ปฏิเสธสลิปเติมมัดจำ ${baht(rp.amount)} ของ ${u?.display_name ?? ''}?\nลูกค้าจะต้องส่งสลิปใหม่`)) return;
     setBusy(true);
-    dispatch(approve ? approveRemainingPayment(rp.id) : rejectRemainingPayment(rp.id));
-    let changed = false;
-    dispatch((d) => { const x = d.remainingPayments.find((r) => r.id === rp.id); changed = approve ? x?.status === 'approved' : !x; return d; });
-    if (!changed) {
-      setBusy(false);
-      const over = approve ? rpOverDue(store.getState(), rp) : 0;
-      return flash(over > 0 ? `อนุมัติไม่ได้ — ยอดสลิปเกินยอดค้างของตั๋ว ${baht(over)} · ปฏิเสธแล้วให้ลูกค้าส่งใหม่ตามยอดจริง` : 'รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
-    }
-    dispatch(logActivity('admin', approve ? 'approve_topup' : 'reject_topup', `${approve ? 'อนุมัติ' : 'ปฏิเสธ'}สลิปเติมมัดจำ ${t?.ticket_no ?? rp.ticket_id} · ${baht(rp.amount)} (${u?.display_name ?? ''})`, { targetId: rp.ticket_id, targetLabel: t?.ticket_no, amount: rp.amount }));
-    const failed = await store.flush();
-    setBusy(false);
-    if (failed) return flash(persistFailText(failed, 'ทำแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ'));
-    if (approve && pushEnabled(db, 'rp_approved'))
-      sendPush(subsForUsers(db, [rp.user_id]), { title: '💚 รับยอดเติมมัดจำแล้ว', body: `${t?.ticket_no ?? ''} มัดจำครบแล้ว — กลับไปเปลี่ยนใบ/ลงขายได้เลย`, url: t ? `/wallet/${encodeURIComponent(t.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
-    flash(approve ? `รับยอดเติมมัดจำ ${baht(rp.amount)} แล้ว ✓` : 'ปฏิเสธสลิปแล้ว');
+    try {
+      // เช็คสถานะล่าสุดจากเซิร์ฟเวอร์ก่อน (audit รอบ C R1-25): เครื่องที่เปิดค้างไว้ อาจยังเห็นสลิปที่อีกเครื่องอนุมัติ/ปฏิเสธไปแล้ว
+      //   เดิมกดปฏิเสธ = ลบแถวที่อนุมัติแล้ว (เงินเข้าตั๋วแล้วแต่หลักฐานหาย) · กดอนุมัติ = สลิปที่ถูกปฏิเสธกลับมาเป็นเงินเข้า
+      if (!(await store.reload({ safe: true }))) return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)');
+      const cur = store.getState().remainingPayments.find((r) => r.id === rp.id);
+      if (!cur || cur.status !== 'pending') return flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้');
+      dispatch(approve ? approveRemainingPayment(rp.id) : rejectRemainingPayment(rp.id));
+      let changed = false;
+      dispatch((d) => { const x = d.remainingPayments.find((r) => r.id === rp.id); changed = approve ? x?.status === 'approved' : !x; return d; });
+      if (!changed) {
+        const over = approve ? rpOverDue(store.getState(), rp) : 0;
+        return flash(over > 0 ? `อนุมัติไม่ได้ — ยอดสลิปเกินยอดค้างของตั๋ว ${baht(over)} · ปฏิเสธแล้วให้ลูกค้าส่งใหม่ตามยอดจริง` : 'รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+      }
+      // ผู้กระทำ = แอดมินที่กดจริง (R1-26: เดิมบันทึก 'admin' ตรงๆ ประวัติขึ้น "ไม่ทราบชื่อ")
+      dispatch(logActivity(adminId, approve ? 'approve_topup' : 'reject_topup', `${approve ? 'อนุมัติ' : 'ปฏิเสธ'}สลิปเติมมัดจำ ${t?.ticket_no ?? rp.ticket_id} · ${baht(rp.amount)} (${u?.display_name ?? ''})`, { targetId: rp.ticket_id, targetLabel: t?.ticket_no, amount: rp.amount }));
+      const failed = await store.flush();
+      if (failed) return flash(persistFailText(failed, 'ทำแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ'));
+      const url = t ? `/wallet/${encodeURIComponent(t.ticket_no)}` : '/wallet';
+      if (approve) {
+        // ครบจริงไหมดูจากตั๋วหลังอนุมัติ (R1-24: เดิมบอก "มัดจำครบแล้ว" เสมอ)
+        const after = store.getState().tickets.find((x) => x.id === rp.ticket_id);
+        const left = after ? depositGap(store.getState(), after) : 0;
+        if (pushEnabled(db, 'rp_approved'))
+          sendPush(subsForUsers(db, [rp.user_id]), left > 0
+            ? { title: '💚 รับยอดเติมมัดจำแล้ว', body: `${t?.ticket_no ?? ''} ยังขาดอีก ${baht(left)} — เปิดตั๋วเพื่อเติมส่วนที่เหลือ`, url }
+            : { title: '💚 รับยอดเติมมัดจำแล้ว', body: `${t?.ticket_no ?? ''} มัดจำครบแล้ว — กลับไปเปลี่ยนใบ/ลงขายได้เลย`, url }, dispatch).catch(() => {});
+        flash(`รับยอดเติมมัดจำ ${baht(rp.amount)} แล้ว ✓${left > 0 ? ` · ยังขาดอีก ${baht(left)}` : ''}`);
+      } else {
+        // ปฏิเสธต้องบอกลูกค้า (R1-24: เดิมเงียบ ลูกค้ารอเก้อ)
+        if (pushEnabled(db, 'order_rejected'))
+          sendPush(subsForUsers(db, [rp.user_id]), { title: '❌ สลิปเติมมัดจำไม่ผ่าน', body: `${t?.ticket_no ?? ''} — ยอด/สลิปไม่ถูกต้อง เปิดตั๋วแล้วส่งสลิปเติมมัดจำใหม่ได้เลย`, url }, dispatch).catch(() => {});
+        flash('ปฏิเสธสลิปแล้ว · แจ้งลูกค้าให้ส่งใหม่');
+      }
+    } finally { setBusy(false); }
   };
   return (
     <div className="rounded-2xl border border-[#8b5cf6]/40 bg-surface-2 p-4">
@@ -310,7 +330,9 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
   const finalize = () => act(() => mk.marketFinalize(tr.id, orderItemIdFor(db, tr.ticket_id)), `โอนสิทธิ์แล้ว ✓ ใบเข้ากระเป๋า${buyerWord}`, () => {
     void mk.marketPush(tr.id, 'done'); void mk.marketPush(tr.id, 'sold');
   });
-  const pay = tr.payout_snap;
+  // บัญชีที่ล็อกกับดีลอยู่ในตารางลับ (v76 · R1-10) — แอดมินอ่านผ่าน RPC เดียวกับลูกค้า
+  const [pay, setPay] = useState<mk.MarketRes | null>(null);
+  useEffect(() => { if (!free) void mk.marketPayout(tr.id).then(setPay); }, [tr.id, free]);
   return (
     <div className={cx('rounded-2xl border bg-surface-2 p-4', st === 'seller_ok' || st === 'pending_admin' ? 'border-[#16a34a]/40' : st === 'reviewing' ? 'border-[#2563eb]/40' : direct ? 'border-[#f1d27a]/30' : 'border-subtle')}>
       <div className="flex gap-3">
@@ -328,7 +350,7 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
       <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
         <span className="text-ink-faint">{direct ? 'คนส่ง' : 'คนขาย'}</span><Link href={`/admin/customers/${tr.from_user_id}`} className="truncate underline decoration-white/20">{who(db, tr.from_user_id)}</Link>
         <span className="text-ink-faint">{buyerWord}</span>{tr.to_user_id ? <Link href={`/admin/customers/${tr.to_user_id}`} className="truncate underline decoration-white/20">{who(db, tr.to_user_id)}</Link> : <span>—</span>}
-        {pay && <><span className="text-ink-faint">บัญชีรับเงิน</span><span className="flex items-center gap-1.5 truncate"><BankLogo code={pay.account_no ? pay.bank : 'promptpay'} size={16} />{pay.promptpay ? `พร้อมเพย์ ${pay.promptpay}` : `${bankOf(pay.bank).name} ${maskAccount(pay.account_no)}`} · {pay.account_name}</span></>}
+        {pay?.ok && !pay.none && <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={pay} full size={16} /></>}
         {direct && st === 'reserved' && tr.hold_until && <><span className="text-ink-faint">ผู้รับต้องตอบใน</span><span>{fmt(tr.hold_until)}</span></>}
         {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลาคนขาย</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}
