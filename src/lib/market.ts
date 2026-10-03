@@ -91,7 +91,9 @@ async function call<T = MarketRes>(fn: string, args: Record<string, unknown> = {
 }
 
 export const marketFeed = () => call<{ rows?: MarketRow[]; closed?: boolean }>('ryuma_market_feed');
-export const marketList = (ticketId: string, qty: number, price: number) => call('ryuma_market_list', { p_ticket_id: ticketId, p_qty: qty, p_price: price });
+/** ลงประกาศ — ส่งบัญชีที่เลือกในหน้าลงขายไปด้วย (v76: เซิร์ฟเวอร์ล็อกบัญชีนี้กับประกาศ ไม่ไปอ่านบัญชีหลักที่อาจยังเซฟไม่ขึ้น) */
+export const marketList = (ticketId: string, qty: number, price: number, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }) =>
+  call('ryuma_market_list', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_payout: payout });
 export const marketCancel = (id: string) => call('ryuma_market_cancel', { p_id: id });
 export const marketReserve = (id: string) => call('ryuma_market_reserve', { p_id: id });
 export const marketRelease = (id: string) => call('ryuma_market_release', { p_id: id });

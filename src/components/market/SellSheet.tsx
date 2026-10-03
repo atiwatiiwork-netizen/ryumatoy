@@ -131,7 +131,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
     const r = direct
       // ส่ง user_id ของคนที่ยืนยันไปด้วย — เซิร์ฟเวอร์ส่งให้เฉพาะเมื่อเลขยังเป็นของคนนั้น (R1-02)
       ? await mk.marketOffer(t.id, q, price, target!.code, needPayout && payout ? payoutInfoOf(payout) : null, target!.user_id!)
-      : await mk.marketList(t.id, q, price);
+      : await mk.marketList(t.id, q, price, payoutInfoOf(payout!)); // บัญชีที่เห็นในแผงนี้ = บัญชีที่ล็อกกับประกาศ (review รอบ C)
     setBusy(false);
     if (!r.ok || !r.id) {
       // ข้อความอยู่ในแผงด้วย (toast อาจโดนบังบนจอเล็ก · R3-08)

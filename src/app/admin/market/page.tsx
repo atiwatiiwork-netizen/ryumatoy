@@ -350,7 +350,10 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
       <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
         <span className="text-ink-faint">{direct ? 'คนส่ง' : 'คนขาย'}</span><Link href={`/admin/customers/${tr.from_user_id}`} className="truncate underline decoration-white/20">{who(db, tr.from_user_id)}</Link>
         <span className="text-ink-faint">{buyerWord}</span>{tr.to_user_id ? <Link href={`/admin/customers/${tr.to_user_id}`} className="truncate underline decoration-white/20">{who(db, tr.to_user_id)}</Link> : <span>—</span>}
-        {pay?.ok && !pay.none && <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={pay} full size={16} /></>}
+        {/* ก่อนรัน v76 RPC ยังไม่ให้แอดมินอ่าน → ใช้ช่องเดิมในตารางดีลแทน */}
+        {pay?.ok && !pay.none
+          ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={pay} full size={16} /></>
+          : tr.payout_snap ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={tr.payout_snap} full size={16} /></> : null}
         {direct && st === 'reserved' && tr.hold_until && <><span className="text-ink-faint">ผู้รับต้องตอบใน</span><span>{fmt(tr.hold_until)}</span></>}
         {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลาคนขาย</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}

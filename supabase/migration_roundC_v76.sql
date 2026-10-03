@@ -21,6 +21,8 @@
 alter table order_items add column if not exists std_deposit numeric;
 
 -- มัดจำมาตรฐานของรายการ ณ ตอนนี้ (สูตรเดียวกับ livePrice + lineDepositForRank ก่อนลดยศ): จ่ายเต็ม = ราคาเต็ม
+--   SKU ที่ถูก convert เป็นของพร้อมส่ง (is_stock, ไม่มีรอบ): deposit_amount ของ SKU = ราคาเต็ม ใช้ไม่ได้ → ขั้นมัดจำมาตรฐานร้าน
+--   (wcf 300 / mega 500 ตาม shop_settings — เหมือน v71) · รายการพร้อมส่งจ่ายเต็มจริงได้ราคาเต็มจาก greatest(มัดจำที่จ่าย, …) อยู่แล้ว
 create or replace function ryuma_item_std_deposit_calc(p_product text, p_variant text, p_batch text, p_unit_price numeric, p_unit_dep numeric)
 returns numeric language sql stable security definer set search_path = public as $$
   select greatest(coalesce(p_unit_dep, 0), coalesce((
@@ -28,7 +30,9 @@ returns numeric language sql stable security definer set search_path = public as
       when p_batch is not null then
         (select case when b.deposit_amount >= b.price_total then b.price_total else b.deposit_amount end
            from product_batches b where b.id = p_batch)
-      when coalesce(p.is_stock, false) then coalesce(p_unit_price, p.price_total)
+      when coalesce(p.is_stock, false) then
+        (select case when p.wcf_type = 'mega_wcf' then coalesce(s.deposit_mega, 500) else coalesce(s.deposit_wcf, 300) end
+           from (select 1) one left join shop_settings s on s.id = 'default')
       when p_variant is not null then
         coalesce((select v.deposit_amount from product_variants v where v.id = p_variant), p.deposit_amount)
       else p.deposit_amount
@@ -37,38 +41,62 @@ returns numeric language sql stable security definer set search_path = public as
 $$;
 revoke all on function ryuma_item_std_deposit_calc(text, text, text, numeric, numeric) from public, anon, authenticated;
 
--- เติมค่าให้รายการเก่า (ก่อน v76 ไม่ได้เก็บ) — ทำครั้งเดียว:
---   จ่ายเต็ม → มัดจำที่จ่าย · คนสั่งยศ bronze/silver (จ่ายมัดจำเต็มเสมอ) → มัดจำที่จ่าย ·
---   ยศ gold/diamond → มัดจำมาตรฐานปัจจุบัน (ไม่ต่ำกว่าที่จ่าย)
-update order_items i set std_deposit = case
-    when coalesce(i.unit_deposit, i.deposit_amount / greatest(i.qty, 1)) >= coalesce(i.unit_price, 1e12)
-      then coalesce(i.unit_deposit, i.deposit_amount / greatest(i.qty, 1))
-    when coalesce((select u.rank from orders o join users u on u.id = o.user_id where o.id = i.order_id), 'bronze') in ('bronze', 'silver')
-      then coalesce(i.unit_deposit, i.deposit_amount / greatest(i.qty, 1))
-    else ryuma_item_std_deposit_calc(i.product_id, i.variant_id, i.batch_id, i.unit_price,
-                                     coalesce(i.unit_deposit, i.deposit_amount / greatest(i.qty, 1)))
-  end
- where i.std_deposit is null;
-
 -- รายการใหม่: เซิร์ฟเวอร์คำนวณเองเสมอ (ลูกค้าตั้งค่าเองไม่ได้) · แก้ทีหลังไม่ได้
+--   ข้อยกเว้นเดียว: ryuma.trusted = 'on' (เจ้าของแก้ค่าที่ผิดจาก SQL Editor ได้ — ดูวิธีท้ายไฟล์)
+--   แถวที่ยังไม่มีค่า (null) → คำนวณจากเซิร์ฟเวอร์ ไม่รับค่าจากเครื่องลูกค้า
 create or replace function ryuma_order_items_std_deposit()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare v_trusted boolean := coalesce(current_setting('ryuma.trusted', true) = 'on', false);
 begin
   if TG_OP = 'INSERT' then
     if exists (select 1 from order_items i where i.id = new.id) then return new; end if; -- upsert แถวเดิม → ด่าน UPDATE
     -- ⚠ current_setting คืน null ถ้าไม่ได้ตั้ง → ต้อง coalesce ไม่งั้น not(null) = null แล้วข้ามการคำนวณ
-    if new.std_deposit is null or not (is_app_admin() or coalesce(current_setting('ryuma.trusted', true) = 'on', false)) then
+    if new.std_deposit is null or not (is_app_admin() or v_trusted) then
       new.std_deposit := ryuma_item_std_deposit_calc(new.product_id, new.variant_id, new.batch_id, new.unit_price,
                            coalesce(new.unit_deposit, new.deposit_amount / greatest(new.qty, 1)));
     end if;
     return new;
   end if;
-  new.std_deposit := coalesce(old.std_deposit, new.std_deposit);
+  if v_trusted and new.std_deposit is not null then return new; end if;
+  if old.std_deposit is not null then
+    new.std_deposit := old.std_deposit;
+  else
+    new.std_deposit := ryuma_item_std_deposit_calc(new.product_id, new.variant_id, new.batch_id, new.unit_price,
+                         coalesce(new.unit_deposit, new.deposit_amount / greatest(new.qty, 1)));
+  end if;
   return new;
 end $$;
 drop trigger if exists ryuma_order_items_std_deposit on order_items;
 create trigger ryuma_order_items_std_deposit before insert or update on order_items
   for each row execute function ryuma_order_items_std_deposit();
+
+-- เติมค่าให้รายการเก่า (ก่อน v76 ไม่ได้เก็บ) — ตัดสินจาก "ยอดที่จ่ายจริง" ไม่ใช่ยศวันนี้ (ยศเปลี่ยนได้หลังซื้อ):
+--   จ่ายเต็มราคา → มัดจำที่จ่าย
+--   จ่าย 0 แต่สินค้ามีมัดจำ → ได้ส่วนลด Diamond → มัดจำมาตรฐานปัจจุบัน
+--   ยอดที่จ่าย = มัดจำฐาน × % Gold ของฐานที่ไม่เกินมัดจำปัจจุบัน → ได้ส่วนลด Gold → มัดจำฐานนั้น (= ยอดจ่าย ÷ % Gold)
+--   นอกนั้น → มัดจำที่จ่าย (จ่ายเต็มตามยศ bronze/silver แม้ร้านขึ้นมัดจำทีหลัง)
+-- ทำหลังสร้าง trigger แล้ว (รายการที่เข้ามาระหว่างรันได้ค่าจากเซิร์ฟเวอร์) และตั้ง ryuma.trusted ให้เขียนค่าได้
+select set_config('ryuma.trusted', 'on', false);
+with base as (
+  select i.id,
+         coalesce(i.unit_deposit, i.deposit_amount / greatest(i.qty, 1)) as paid,
+         i.unit_price,
+         ryuma_item_std_deposit_calc(i.product_id, i.variant_id, i.batch_id, i.unit_price, 0) as cur,
+         coalesce((select s.rank_gold_deposit_pct from shop_settings s where s.id = 'default'), 50) as gpct
+    from order_items i
+   where i.std_deposit is null
+)
+update order_items i set std_deposit = case
+    when b.paid is null then b.cur
+    when b.paid >= coalesce(b.unit_price, 1e12) then b.paid
+    when b.paid = 0 and b.cur > 0 then b.cur
+    when b.gpct > 0 and b.gpct < 100 and b.paid > 0
+         and round(b.paid * 100 / b.gpct) <= b.cur + 1 then least(round(b.paid * 100 / b.gpct), b.cur)
+    else b.paid
+  end
+  from base b
+ where i.id = b.id;
+select set_config('ryuma.trusted', 'off', false);
 
 -- "มัดจำปกติ" ต่อชิ้นที่ต้องเติมให้ถึงก่อนเปลี่ยนใบ/ลงขาย (ทับ v71) — ต้องตรงกับ standardDepositPerUnit ในแอป
 --   หา "รายการในออเดอร์ต้นทาง" ของตั๋ว (ตั๋วลูกใช้ของตั๋วแม่ต้นสาย):
@@ -223,7 +251,10 @@ grant execute on function ryuma_market_offer(text, int, numeric, text, jsonb, te
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4) ลงประกาศกระดาน (ทับ v72) — ล็อกบัญชีรับเงินตอนลงประกาศ (R1-07)
 -- ─────────────────────────────────────────────────────────────────────────────
-create or replace function ryuma_market_list(p_ticket_id text, p_qty int, p_price numeric)
+--    + p_payout = บัญชีที่คนขายเลือกในหน้าลงขาย (ส่งมากับคำขอ) — เดิมอ่าน payout_info ตอนนั้น ซึ่งอาจยังเป็นบัญชีเก่า
+--      ถ้าการบันทึก "บัญชีหลัก" ยังไม่ขึ้น → ผู้ซื้อโอนเข้าบัญชีที่คนขายไม่ได้เลือก 14 วัน (review รอบ C) · ไม่ส่ง = ใช้บัญชีหลัก
+drop function if exists ryuma_market_list(text, int, numeric);
+create or replace function ryuma_market_list(p_ticket_id text, p_qty int, p_price numeric, p_payout jsonb default null)
 returns json language plpgsql security definer set search_path = public, extensions as $$
 declare
   v_uid text := app_user_id(); t preorder_tickets%rowtype; v_reason text; v_id text; v_pay jsonb; s record;
@@ -232,7 +263,14 @@ begin
   if not ryuma_market_open() and not is_app_admin() then return json_build_object('error', 'closed'); end if;
   if p_price is null or p_price < 0 or p_price > 1000000 or p_price <> round(p_price) then
     return json_build_object('error', 'bad_price'); end if;
-  select payout_info into v_pay from users where id = v_uid;
+  if p_payout is not null then
+    v_pay := jsonb_build_object('promptpay', nullif(regexp_replace(coalesce(p_payout->>'promptpay', ''), '[^0-9]', '', 'g'), ''),
+                                'bank', nullif(left(trim(coalesce(p_payout->>'bank', '')), 60), ''),
+                                'account_no', nullif(regexp_replace(coalesce(p_payout->>'account_no', ''), '[^0-9]', '', 'g'), ''),
+                                'account_name', left(trim(coalesce(p_payout->>'account_name', '')), 120));
+  else
+    select payout_info into v_pay from users where id = v_uid;
+  end if;
   if v_pay is null or coalesce(v_pay->>'account_name', '') = ''
      or (coalesce(v_pay->>'promptpay', '') = '' and coalesce(v_pay->>'account_no', '') = '') then
     return json_build_object('error', 'no_payout'); end if;
@@ -258,6 +296,8 @@ begin
     on conflict (transfer_id) do update set payout = excluded.payout;
   return json_build_object('ok', true, 'id', v_id, 'expires_at', now() + interval '14 days');
 end $$;
+revoke all on function ryuma_market_list(text, int, numeric, jsonb) from public, anon;
+grant execute on function ryuma_market_list(text, int, numeric, jsonb) to authenticated;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5) อ่านบัญชีรับเงินของดีล (ทับ v75)
@@ -273,10 +313,11 @@ begin
   select * into tr from ticket_transfers where id = p_id for update;
   if not found then return json_build_object('error', 'not_found'); end if;
   v_direct := coalesce(tr.kind, 'market') = 'direct';
-  v_live := tr.status = 'reserved' and case when v_direct then ryuma_market_live(tr.status, tr.hold_until, tr.expires_at)
-                                            else tr.hold_until + interval '10 minutes' > now() end;
-  v_buyer := tr.to_user_id = v_uid and (tr.status in ('paid', 'reviewing', 'seller_ok') or v_live);
-  if not (v_buyer or tr.from_user_id = v_uid or is_app_admin()) then return json_build_object('error', 'not_found'); end if;
+  -- coalesce ทุกตัว: ค่า null (เช่น hold_until ว่าง / ผู้รับว่าง) ต้องแปลว่า "ไม่มีสิทธิ์" ไม่ใช่หลุดด่าน
+  v_live := coalesce(tr.status = 'reserved' and case when v_direct then ryuma_market_live(tr.status, tr.hold_until, tr.expires_at)
+                                                     else tr.hold_until + interval '10 minutes' > now() end, false);
+  v_buyer := coalesce(tr.to_user_id = v_uid, false) and (tr.status in ('paid', 'reviewing', 'seller_ok') or v_live);
+  if not (v_buyer or coalesce(tr.from_user_id = v_uid, false) or is_app_admin()) then return json_build_object('error', 'not_found'); end if;
   if v_buyer and v_live and v_direct and tr.payout_viewed_at is null and coalesce(tr.asking_price, 0) > 0 then
     update ticket_transfers set payout_viewed_at = now(), updated_at = now() where id = p_id;
   end if;
@@ -351,3 +392,8 @@ grant execute on function ryuma_admin_purge_user(text) to authenticated;
 -- select count(*) filter (where std_deposit is null) as missing from order_items;        -- 0
 -- select count(*) from ticket_transfers where payout_snap is not null;                   -- 0 (ย้ายเข้าตารางลับแล้ว)
 -- select count(*) from ticket_transfer_payouts;                                           -- เท่าจำนวนดีลที่เคยมีบัญชี
+--
+-- ถ้าต้องแก้ std_deposit ของรายการไหนเอง (ปกติไม่ต้อง) — ต้องตั้ง ryuma.trusted ก่อน ไม่งั้น trigger คงค่าเดิม:
+--   select set_config('ryuma.trusted', 'on', false);
+--   update order_items set std_deposit = 300 where id = '<id รายการ>';
+--   select set_config('ryuma.trusted', 'off', false);

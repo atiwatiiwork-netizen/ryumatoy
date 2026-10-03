@@ -38,6 +38,10 @@ async function boot() {
   await u('uA', 'Alice', AUTH.A, 'bronze', false, 'RYU-0011'); await u('uB', 'Bob', AUTH.B, 'bronze', false, 'RYU-0022');
   await u('uC', 'Carl', AUTH.C, 'bronze', false, 'RYU-0033'); await u('uG', 'Gina', AUTH.G, 'gold', false, 'RYU-0044');
   await u('uX', 'Admin', AUTH.X, 'bronze', true, 'RYU-0001');
+  await u('uH', 'Hana', null as unknown as string, 'gold', false, 'RYU-0055'); // จ่ายมัดจำเต็มตอนยัง bronze แล้วเพิ่งขึ้น gold (review รอบ C ข้อ 2)
+  await db.query(`insert into products (id, series_name, price_total, deposit_amount, status, is_stock) values ('P2','Converted',2500,2500,'arrived',true)`); // SKU ที่ convert เป็นพร้อมส่งแล้ว (ข้อ 1)
+  await db.query(`insert into orders (id, user_id, status, approved_at, total_deposit) values ('oH','uH','approved',now(),300), ('oS','uG','approved',now(),150)`);
+  await db.query(`insert into order_items (id, order_id, product_id, qty, deposit_amount, unit_price, unit_deposit) values ('oiH','oH','P1',1,300,1690,300), ('oiS','oS','P2',1,150,2500,150)`);
   await db.query(`insert into products (id, series_name, price_total, deposit_amount, status) values ('P1','Series One',1690,300,'production')`);
   // A (bronze) มัดจำเต็ม 300 · G (gold) มัดจำครึ่ง 150 — ก่อน v76 ยังไม่มี std_deposit (null)
   await db.query(`insert into orders (id, user_id, status, approved_at, total_deposit) values ('oA','uA','approved',now(),3000), ('oG','uG','approved',now(),300)`);
@@ -67,20 +71,22 @@ async function boot() {
   {
     const items = Object.fromEntries((await q(db, `select id, std_deposit from order_items`)).map((r) => [r.id, Number(r.std_deposit)]));
     ok('C1 รายการเก่าของคน bronze: std = มัดจำที่จ่าย 300 (ไม่ใช่ 400 ที่ขึ้นทีหลัง)', items.oi1 === 300, items);
-    ok('C2 รายการเก่าของคน gold: std = มัดจำมาตรฐานปัจจุบัน 400', items.oiG1 === 400, items);
+    ok('C2 รายการเก่าที่จ่ายครึ่ง (Gold 50%): std = มัดจำฐานตอนซื้อ 300 (= 150 ÷ 50%) ไม่ใช่ 400 ที่ขึ้นทีหลัง', items.oiG1 === 300, items);
+    ok('C2b จ่ายมัดจำเต็มตอนยัง bronze แล้วเพิ่งขึ้น gold → std = ที่จ่าย 300 (ไม่ดูยศวันนี้)', items.oiH === 300, items);
+    ok('C2c SKU ที่ convert เป็นพร้อมส่ง: std = ขั้นมัดจำร้าน 300 ไม่ใช่ราคาเต็ม 2,500', items.oiS === 300, items);
     ok('C3 ตั๋ว bronze มัดจำเต็ม หลังร้านขึ้นมัดจำ → ไม่ต้องเติม (std 300)', (await std(db, 't-oi1')) === 300);
     const br = await call(db, 'A', 'ryuma_market_offer', ['t-oi1', 1, 500, '0000', PAY, 'uB']);
     ok('C4 ตั๋ว bronze ไม่ติด topup_needed', br.error !== 'topup_needed', br);
-    ok('C5 ตั๋ว gold (มัดจำครึ่ง) ต้องเติม: std 400', (await std(db, 't-oiG1')) === 400);
+    ok('C5 ตั๋ว gold (มัดจำครึ่ง) ต้องเติม: std 300', (await std(db, 't-oiG1')) === 300);
     const gr = (await q(db, `select ryuma_market_block_reason('t-oiG1','uG',1) as r`))[0].r; // ฟังก์ชันภายใน (เรียกตรงในฐานะเจ้าของ DB)
     ok('C6 ตั๋ว gold → topup_needed', gr === 'topup_needed', gr);
-    ok('C7 ตั๋วรุ่นเก่า (id ไม่ผูกรายการ) จับคู่รายการด้วยมัดจำต่อชิ้น → std 400', (await std(db, 'legacy-g')) === 400);
+    ok('C7 ตั๋วรุ่นเก่า (id ไม่ผูกรายการ) จับคู่รายการด้วยมัดจำต่อชิ้น → std 300', (await std(db, 'legacy-g')) === 300);
     ok('C8 ตั๋วแอดมินมอบ (ไม่มีออเดอร์) → std 0 ไม่ต้องเติม (R2B-05)', (await std(db, 'tg-gift-1')) === 0);
     await db.exec('set session_replication_role = replica;');
     await db.query(`insert into preorder_tickets (id, ticket_no, product_id, owner_id, original_buyer_id, qty, deposit_paid, remaining_amount, remaining_paid, status, product_status, split_from, created_at)
                     values ('tc-child','NR-2026-10-201-T1','P1','uB','uG',1,150,1540,0,'active','production','t-oiG1',now())`);
     await db.exec('set session_replication_role = origin;');
-    ok('C9 ตั๋วลูกใช้รายการของตั๋วแม่ต้นสาย → std 400', (await std(db, 'tc-child')) === 400);
+    ok('C9 ตั๋วลูกใช้รายการของตั๋วแม่ต้นสาย → std 300', (await std(db, 'tc-child')) === 300);
 
     // รายการใหม่: เซิร์ฟเวอร์คำนวณเอง ลูกค้าตั้งเองไม่ได้ / แก้ทีหลังไม่ได้
     await run(db, 'A', `insert into orders (id, user_id, status, total_deposit) values ('oNew','uA','pending_approval',400)`);
@@ -90,6 +96,13 @@ async function boot() {
     await run(db, 'A', `update order_items set std_deposit = 5 where id = 'oiNew'`);
     const v2 = (await q(db, `select std_deposit from order_items where id = 'oiNew'`))[0]?.std_deposit;
     ok('C11 แก้ std_deposit ทีหลังไม่ได้', Number(v2) === 400, v2);
+    // เจ้าของแก้ค่าที่ผิดจาก SQL Editor ได้ เมื่อตั้ง ryuma.trusted (ข้อ 1)
+    await db.exec(`select set_config('ryuma.trusted', 'on', false); update order_items set std_deposit = 250 where id = 'oiNew'; select set_config('ryuma.trusted', 'off', false);`);
+    ok('C12 ตั้ง ryuma.trusted แล้วแก้ค่าได้', Number((await q(db, `select std_deposit from order_items where id = 'oiNew'`))[0]?.std_deposit) === 250);
+    // แถวที่ยังไม่มีค่า: ลูกค้าส่งค่ามาเองไม่ได้ เซิร์ฟเวอร์คำนวณ (ข้อ 6)
+    await db.exec(`set session_replication_role = replica; update order_items set std_deposit = null where id = 'oiNew'; set session_replication_role = origin;`);
+    await run(db, 'A', `update order_items set std_deposit = 1 where id = 'oiNew'`);
+    ok('C13 แถวที่ยังไม่มีค่า + ลูกค้าส่ง 1 → เซิร์ฟเวอร์คำนวณเป็น 400', Number((await q(db, `select std_deposit from order_items where id = 'oiNew'`))[0]?.std_deposit) === 400);
   }
 
   // ── บัญชีรับเงิน: ตารางลับ + สิทธิ์อ่าน (R1-10 / R1-49 / R1-58) ───────────────────────────
@@ -126,8 +139,9 @@ async function boot() {
 
   // ── กระดาน: ล็อกบัญชีตอนลงประกาศ + ผู้ซื้อเห็นเฉพาะช่วงจอง (R1-07 / R1-08) ───────────────────
   {
-    await asUser(db, AUTH.X, () => db.query(`update users set payout_info = '{"account_name":"Alice","promptpay":"0811111111"}' where id = 'uA'`));
-    const l = await call(db, 'A', 'ryuma_market_list', ['t-oi5', 1, 600]);
+    await asUser(db, AUTH.X, () => db.query(`update users set payout_info = '{"account_name":"Alice","promptpay":"0899999999"}' where id = 'uA'`));
+    // ส่งบัญชีที่เลือกในหน้าลงขายมาด้วย — ล็อกตัวนี้ ไม่ใช่บัญชีหลักที่อาจยังเซฟไม่ขึ้น (review รอบ C ข้อ 3)
+    const l = await call(db, 'A', 'ryuma_market_list', ['t-oi5', 1, 600, { account_name: 'Alice', promptpay: '0811111111' }]);
     ok('B1 ลงประกาศสำเร็จ', !!l.ok, l);
     await asUser(db, AUTH.X, () => db.query(`update users set payout_info = '{"account_name":"Alice","promptpay":"0822222222"}' where id = 'uA'`));
     const rs = await call(db, 'B', 'ryuma_market_reserve', [l.id]);
@@ -138,6 +152,15 @@ async function boot() {
     await db.exec('set session_replication_role = origin;');
     const p2 = await call(db, 'B', 'ryuma_market_payout', [l.id]);
     ok('B3 หมดเวลาจองแล้ว ผู้ซื้อกระดานอ่านบัญชีไม่ได้ (R1-08)', p2.error === 'not_found', p2);
+    await db.exec('set session_replication_role = replica;');
+    await db.query(`update ticket_transfers set hold_until = null, status = 'reserved', to_user_id = 'uB' where id = $1`, [l.id]);
+    await db.exec('set session_replication_role = origin;');
+    const p3 = await call(db, 'B', 'ryuma_market_payout', [l.id]);
+    ok('B4 แถวที่ hold_until ว่าง → ไม่หลุดด่าน (null ไม่ถือว่ามีสิทธิ์ · ข้อ 5)', p3.error === 'not_found', p3);
+    const l2 = await call(db, 'A', 'ryuma_market_list', ['t-oi6', 1, 600]);
+    const pv = (await q(db, `select payout from ticket_transfer_payouts where transfer_id = $1`, [l2.id]))[0]?.payout;
+    ok('B5 ไม่ส่งบัญชีมา = ใช้บัญชีหลัก (เข้ากันกับแอปรุ่นเก่า)', !!l2.ok && pv?.promptpay === '0822222222', { l2, pv }); // บัญชีหลักล่าสุด (เปลี่ยนในขั้น B2)
+    await call(db, 'A', 'ryuma_market_cancel', [l2.id]);
   }
 
   // ── สลิปที่อนุมัติแล้วลบไม่ได้ (R1-25) + ลบสมาชิกยังทำงาน ──────────────────────────────────
