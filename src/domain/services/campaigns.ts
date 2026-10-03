@@ -60,6 +60,8 @@ export function qualifyingCount(db: Database, c: Campaign, userId: string, now: 
   return db.tickets.filter((t) => {
     // ตลาดใบพรีข้อ 26A: ใบที่เปลี่ยนมือไม่นับให้ใคร — ต้องเป็นทั้ง "คนถือ" และ "คนสั่ง" (ไม่เคยขาย/ไม่ได้ซื้อต่อ)
     if (t.owner_id !== userId || (t.original_buyer_id || t.owner_id) !== userId) return false;
+    // ตั๋วลูกที่แตกขาย ไม่ใช่การพรีใหม่ (audit รอบ D R1-27: เดิมแตกขายแล้วรับตั๋วลูกคืน = ได้ใบใหม่ วันที่ = วันไฟนอล → ปั๊ม Event ได้)
+    if (t.split_from) return false;
     if (t.batch_id) return false; // stock round → not a fresh pre-order
     if (t.remaining_amount === 0) return false; // full-pay = in-stock line → doesn't count
     const at = new Date(t.created_at).getTime();

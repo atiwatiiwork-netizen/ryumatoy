@@ -1,5 +1,6 @@
 import type { Database, PreorderTicket } from '../entities';
 import { franchiseOf, manufacturerOf } from './catalog';
+import { ticketRoot } from './tickets';
 
 /**
  * วิเคราะห์รายเดือน — pre-order demand + bell adoption, sliced by month.
@@ -24,7 +25,9 @@ export function currentYm(): string {
 
 /** Tickets issued within a YYYY-MM month. */
 export function ticketsInMonth(db: Database, ym: string): PreorderTicket[] {
-  return db.tickets.filter((t) => ymOf(t.created_at) === ym);
+  // ตั๋วลูกที่แตกขาย = ชิ้นที่สั่งไว้ในเดือนของตั๋วแม่ ไม่ใช่ใบพรีใหม่ของเดือนที่ไฟนอล (audit รอบ D R3-23)
+  //   ตั๋วแม่เหลือ qty น้อยลง + ตั๋วลูกนับในเดือนเดียวกัน = ยอดชิ้นของเดือนนั้นเท่าเดิม
+  return db.tickets.filter((t) => ymOf((t.split_from ? (ticketRoot(db, t) ?? t) : t).created_at) === ym);
 }
 
 function rankBy(db: Database, tickets: PreorderTicket[], keyOf: (t: PreorderTicket) => string): RankRow[] {

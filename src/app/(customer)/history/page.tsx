@@ -9,7 +9,7 @@ import { Icon } from '@/components/Icon';
 import { BackBar, cx } from '@/components/ui';
 import { useSmartBack } from '@/lib/nav';
 import { productLabel, lineImage } from '@/domain/services/catalog';
-import { ticketPaid, ticketDue } from '@/domain/services/money';
+import { ticketDue, paidByUser } from '@/domain/services/money';
 import { orderOfTicket } from '@/domain/services/journey';
 import { ticketsBySource } from '@/domain/services/ticketSource';
 
@@ -32,7 +32,8 @@ export default function HistoryPage() {
   const plans = myPlans.filter((p) => p.status === 'open').sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
 
   // ยอดสะสมที่จ่ายไปแล้วจริง (มัดจำ + ส่วนต่างที่อนุมัติแล้ว) + ยอดค้างทั้งหมด
-  const paidTotal = myTickets.reduce((s, t) => s + ticketPaid(t), 0);
+  // เงินที่คนนี้จ่ายร้านเอง — ไม่ตามคนถือตั๋ว (audit รอบ D R2B-04)
+  const paidTotal = paidByUser(db, uid);
   const dueTotal = myTickets.reduce((s, t) => s + ticketDue(t), 0);
   const approvedCount = orders.filter((o) => o.status === 'approved').length;
   const sourceGroups = ticketsBySource(db, uid);

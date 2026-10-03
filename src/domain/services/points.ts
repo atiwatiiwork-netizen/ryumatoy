@@ -41,13 +41,46 @@ export const earnFixIdFor = (ticketId: string) => `pl-fix-${ticketId}`;
  *   · ห้ามดู product.is_stock: SKU พรีที่ถูก convert เป็นพร้อมส่งทีหลัง จะทำให้ตั๋วพรีเก่าถูกตีเป็นพร้อมส่ง
  *  ตั๋วมอบ/legacy (ไม่มีรายการออเดอร์คู่): จ่ายเต็ม = ไม่มีส่วนต่างตั้งแต่เกิด และไม่เคยมีสลิปส่วนต่านอนุมัติ */
 export function ticketIsFullPay(db: Database, t: PreorderTicket): boolean {
+  // ตั๋วลูกที่แตกขาย = ชนิดเดียวกับตั๋วแม่ต้นสาย (audit รอบ D R1-29: เดิมตั๋วลูกของใบพรีที่ยอดค้าง 0 ถูกตีเป็นพร้อมส่ง)
+  if (t.split_from) {
+    let root: PreorderTicket | undefined = t;
+    for (let i = 0; root?.split_from && i < 20; i++) root = ticketById(db).get(root.split_from);
+    if (root && !root.split_from) return ticketIsFullPay(db, root);
+    return false; // มองไม่เห็นตั๋วแม่ (เครื่องผู้รับ) — ของพร้อมส่งลงตลาดไม่ได้ ตั๋วที่ผ่านตลาดจึงเป็นใบพรี
+  }
   if (t.id.startsWith('t-')) {
     const it = orderItemById(db).get(t.id.slice(2))?.item;
     if (it && it.unit_price != null && it.unit_deposit != null) return it.unit_deposit >= it.unit_price;
     // แถวรุ่นเก่าไม่มี snapshot → ใช้ fallback ด้านล่าง
   }
+  // ตั๋วที่เปลี่ยนมือ (เครื่องผู้รับมองไม่เห็นออเดอร์/สลิปของคนสั่ง) — ของพร้อมส่งที่ไม่มีรอบลงตลาดไม่ได้ (ด่าน 'instock')
+  //   ตั๋วที่ผ่านตลาดมาจึงเป็นใบพรีเสมอ (R2B-16: เดิมยอดค้าง 0 = ถูกตีเป็นพร้อมส่ง ได้แต้มอัตราผิด อยู่ผิดแท็บ)
+  if (t.owner_id !== (t.original_buyer_id || t.owner_id)) return false;
   return (t.remaining_amount ?? 0) === 0 && (t.remaining_paid ?? 0) === 0
     && !approvedRpTicketIds(db).has(t.id);
+}
+
+/** คนที่ "ปิดยอด" ตั๋วใบนี้ = เจ้าของสลิปส่วนต่างที่อนุมัติล่าสุด · ไม่มีสลิป (จ่ายเต็มตั้งแต่เกิด/มอบ) = คนสั่ง
+ *  แต้มปิดใบเป็นของคนนี้ ไม่ใช่คนถือตอนนี้ (เจ้าของ 2026-10-02 "คะแนนที่ได้ มาจากคนที่ปิด" · audit รอบ D R1-28:
+ *  เดิมแต้มที่ออกทีหลัง (เปิดตัว/ให้ย้อนหลัง) ไปเข้าคนถือปัจจุบัน ทั้งที่คนขายเป็นคนจ่ายปิด) */
+export function closerOf(db: Database, t: PreorderTicket): string {
+  let last: { at: string; user: string } | null = null;
+  for (const r of db.remainingPayments) {
+    if (r.ticket_id !== t.id || r.status !== 'approved') continue;
+    const at = r.approved_at ?? r.created_at;
+    if (!last || at > last.at) last = { at, user: r.user_id };
+  }
+  return last?.user ?? (t.original_buyer_id || t.owner_id);
+}
+
+/** ตั๋วลูกที่ตั๋วแม่ (สายใดก็ได้) ได้แต้มปิดยอดไปแล้ว — แต้มนั้นคิดเต็มจำนวนชิ้นตอนปิด ตั๋วลูกห้ามได้ซ้ำ (เฟส 2) */
+function ancestorEarned(db: Database, t: PreorderTicket): boolean {
+  let cur: PreorderTicket | undefined = t;
+  for (let i = 0; cur?.split_from && i < 20; i++) {
+    if (ledgerById(db).has(earnIdFor(cur.split_from))) return true;
+    cur = ticketById(db).get(cur.split_from);
+  }
+  return false;
 }
 
 
@@ -107,6 +140,7 @@ export function ticketEarnBlock(db: Database, t: PreorderTicket): string | null 
   if (t.status === 'pending_approval' || t.status === 'transferred') return 'สถานะตั๋วไม่เข้าเกณฑ์';
   // บัญชีทีมงาน/แอดมิน — ตั๋วทดสอบไม่ควรพองหนี้คะแนนร้าน
   if (isStaffAccount(db, t.owner_id)) return 'บัญชีแอดมิน/ทีมงาน';
+  if (ancestorEarned(db, t)) return 'แต้มได้ไปแล้วตอนปิดยอดใบแม่ (ก่อนแตกขาย)';
   if (isSourcingTicket(db, t)) return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
   // ตั๋วในรอบ "หาของ" แต่เรื่องหาของถูกลบไปแล้ว → isSourcingTicket จับไม่ได้ → เดิมจะกลายเป็นรอบพิเศษ +40 (audit 2026-09-23)
   if (t.batch_id && db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ') return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
@@ -142,7 +176,7 @@ export function earnRowForTicket(db: Database, t: PreorderTicket, opts: { actorI
   const kindLabel = t.batch_id ? 'รอบพิเศษ' : ticketIsPre(db, t) ? 'ใบพรี' : 'พร้อมส่ง';
   return {
     id: earnIdFor(t.id),
-    user_id: t.owner_id,
+    user_id: closerOf(db, t), // คนปิดยอด ไม่ใช่คนถือตอนนี้ (R1-28)
     delta: pts,
     kind: 'earn_ticket',
     ref_type: 'ticket',

@@ -14,6 +14,7 @@ import { approveRemainingPayment, rejectRemainingPayment, logActivity, rpOverDue
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
 import { ticketSourceOf } from '@/domain/services/ticketSource';
+import { ticketRoot, ticketPayer } from '@/domain/services/tickets';
 import { cx } from '@/components/ui';
 import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
@@ -221,7 +222,10 @@ function MoneyHistory() {
   // มอบตั๋ว — เงินมัดจำที่เก็บนอกระบบ (ticketSourceOf granted)
   for (const t of db.tickets) {
     if (ticketSourceOf(db, t) !== 'granted' || (t.deposit_paid ?? 0) <= 0) continue;
-    events.push({ at: t.approved_at ?? t.created_at, kind: 'มอบตั๋ว', who: un(t.owner_id), item: nm(t.product_id), amount: t.deposit_paid ?? 0, ref: t.ticket_no });
+    // คนจ่าย = คนที่ถูกมอบตั๋ว (ticketPayer) ไม่ใช่คนถือตอนนี้ · ตั๋วลูกที่แตกขาย = ส่วนแบ่งของเงินก้อนเดิม (ใบแม่ลดลงเท่ากัน)
+    //   วันที่ = วันมอบของตั๋วแม่ (audit รอบ D R3-22: เดิมผู้รับโผล่เป็นคนจ่ายรายที่สอง วันที่ = วันไฟนอล)
+    const root = t.split_from ? (ticketRoot(db, t) ?? t) : t;
+    events.push({ at: root.approved_at ?? root.created_at, kind: 'มอบตั๋ว', who: un(ticketPayer(t)), item: nm(t.product_id), amount: t.deposit_paid ?? 0, ref: t.ticket_no });
   }
   events.sort((a, b) => (a.at < b.at ? 1 : -1));
 

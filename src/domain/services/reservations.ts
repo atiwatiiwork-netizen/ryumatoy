@@ -88,6 +88,8 @@ export function userTakenInBatch(db: Database, userId: string, batchId: string, 
     + db.transfers
       .filter((tr) => TRANSFER_DONE.has(tr.status) && tr.from_user_id === userId && tr.batch_id === batchId)
       .filter((tr) => !db.tickets.some((t) => t.id === (tr.child_ticket_id || tr.ticket_id)))
+      // ใบที่ "ได้รับมา" แล้วส่งต่อ ไม่ใช่ใบที่คนนี้ซื้อจากร้าน → ไม่กินเพดานของเขา (audit รอบ D R3-10)
+      .filter((tr) => !db.transfers.some((x) => TRANSFER_DONE.has(x.status) && x.to_user_id === userId && (x.child_ticket_id || x.ticket_id) === tr.ticket_id))
       .reduce((s, tr) => s + (tr.qty ?? 1), 0);
   const fromHolds = db.stockReservations
     .filter((r) => r.batch_id === batchId && r.user_id === userId && !excludeResIds?.includes(r.id))

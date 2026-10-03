@@ -76,6 +76,9 @@ export const ymShort = (ym: string) => {
 
 /** ตั๋วใบนี้นับเข้า "ใบพรี" ของเดือนไหม */
 export function countsForMonthly(db: Database, cfg: MonthlyConfig, t: PreorderTicket): boolean {
+  // ใบที่ขาย/เปลี่ยนมือออกไปแล้ว (รวมตั๋วลูกที่แตกขาย) ไม่นับยศให้ใคร — ไม่กินที่รางวัลด้วย (audit รอบ D R1-06 ·
+  // ตรงกับข้อความในหน้าขาย "ขายแล้วใบนี้ไม่นับยศรายเดือน") · เดือนที่ปิดแล้วใช้ snapshot ตามเดิม (ไม่ย้อนแก้)
+  if (t.owner_id !== ticketBuyer(t)) return false;
   if (isSourcingTicket(db, t)) return false;
   if (isStaffAccount(db, ticketBuyer(t))) return false; // บัญชีแอดมิน/ทีมงานไม่ติดยศ (กติกาเดียวกับคะแนน)
   if (cfg.count === 'pre' && !ticketIsPre(db, t)) return false; // ใบพรี = พรีปกติ + รอบพิเศษ (points.ts ตัวเดียว)

@@ -149,7 +149,8 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   const db = structuredClone(base);
   const t = preTicket(db, U, 4);
   t.owner_id = U2;
-  ok('G1 นับให้ original_buyer (U) ไม่ใช่ owner (U2)', monthlyPieces(db, U, YM) === 1 && monthlyPieces(db, U2, YM) === 0);
+  // ตลาดข้อ 26A + audit รอบ D R1-06: ใบที่เปลี่ยนมือไม่นับยศให้ใคร (คนสั่งขายไปแล้ว · คนรับไม่ได้สั่งเอง)
+  ok('G1 ใบที่เปลี่ยนมือแล้ว ไม่นับให้ทั้งคนสั่ง (U) และคนถือ (U2)', monthlyPieces(db, U, YM) === 0 && monthlyPieces(db, U2, YM) === 0);
   const d2 = setMonthlyConfig({ enabled: true, count: 'pre', tiers: [
     { pieces: 10, label: 'S', emoji: '🥈', points: 250, perks: [] }, { pieces: 5, label: 'B', emoji: '🥉', points: 100, perks: [] }, { pieces: 5, label: 'B-dup', emoji: '💥', points: 999, perks: [] },
   ] })(structuredClone(base));

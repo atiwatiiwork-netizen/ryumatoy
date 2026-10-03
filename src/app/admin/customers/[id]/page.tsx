@@ -15,6 +15,7 @@ import { setSuspended } from '@/data/mutations';
 import { CouponTierPill } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
 import { ticketsBySource } from '@/domain/services/ticketSource';
+import { paidByUser } from '@/domain/services/money';
 import { balanceOf, lifetimeOf } from '@/domain/services/points';
 import { monthlyConfig, monthlyPieces, tierFor, currentYm } from '@/domain/services/monthly';
 
@@ -41,7 +42,7 @@ export default function CustomerPage() {
   const rps = db.remainingPayments.filter((r) => r.user_id === u.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
   const totalDue = tickets.reduce((s, t) => s + Math.max(0, t.remaining_amount - t.remaining_paid), 0);
-  const totalPaid = tickets.reduce((s, t) => s + t.deposit_paid + t.remaining_paid, 0);
+  const totalPaid = paidByUser(db, u.id); // เงินที่คนนี้จ่ายร้านเอง ไม่ตามคนถือตั๋ว (audit รอบ D R2B-04)
   const usableCoupons = usableGrantsFor(db, u.id).length;
   const pieces = rankPiecesOf(db, u.id);
   // คะแนนสะสม (v66) — สูตรกลาง points.ts

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag, batchPoints, SPECIAL_ROUND_POINTS_DEFAULT } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag, batchPoints, SPECIAL_ROUND_POINTS_DEFAULT, closerOf } from '@/domain/services/points';
 import type { Database } from '@/domain/entities';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
 import { isStaffAccount } from '@/domain/services/admins';
@@ -82,7 +82,8 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
     .filter((x) => x.pts > 0)
     .sort((a, b) => a.due - b.due);
   const pendingPts = pending.reduce((a, x) => a + x.pts, 0);
-  const awaiting = db.tickets.filter((t) => t.owner_id === uid && ticketEarnEligible(db, t).ok && !hasEarned(db, t.id) && rawPointsForTicket(db, t) > 0);
+  // ใบที่คนอื่นปิดยอดไว้ก่อนส่งต่อมา (แต้มเป็นของคนปิด) ไม่ใช่แต้มที่รอเข้าคนนี้ (audit รอบ D R1-43)
+  const awaiting = db.tickets.filter((t) => t.owner_id === uid && closerOf(db, t) === uid && ticketEarnEligible(db, t).ok && !hasEarned(db, t.id) && rawPointsForTicket(db, t) > 0);
 
   if (!visible) {
     return (

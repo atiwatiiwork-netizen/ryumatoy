@@ -179,6 +179,7 @@ export function unmatchedApprovedItems(db: Database, userId?: string, settledMs:
   const used = new Set<string>();
   const now = Date.now();
   const sold = soldAwayItemIds(db); // ขายออกไปในตลาดแล้ว — ไม่ใช่ตั๋วหาย (ดู soldAwayItemIds)
+  const usedSold = new Set<string>();
   const out: { order: Database['orders'][number]; item: Database['orders'][number]['items'][number] }[] = [];
   for (const order of db.orders) {
     if (order.status !== 'approved') continue;
@@ -195,7 +196,14 @@ export function unmatchedApprovedItems(db: Database, userId?: string, settledMs:
     // แอดมินลบตั๋วของรายการไหน = ตั้งใจให้รายการนั้นไม่มีตั๋ว (qty 0) — ห้ามมินต์คืน
     const live = order.items.filter((i) => !isVoidedItem(i) && !sold.has(i.id));
     for (const { item, ticket } of pairItemsWithTickets(db.tickets, order.user_id, live, used)) {
-      if (!ticket) out.push({ order, item });
+      if (ticket) continue;
+      // ตั๋วรุ่นเก่า (id ไม่ผูกรายการ) ที่ขายออกไปทั้งใบ และดีลไม่ได้บันทึกรายการต้นทาง — เครื่องคนขายมองไม่เห็นตั๋วแล้ว (v77)
+      //   ใช้ดีลที่ปิดแล้วของสินค้า/แบบ/รอบเดียวกันมาหักทีละใบ ไม่งั้นจะขึ้น "กู้คืนใบพรี" ผิดๆ (audit รอบ D)
+      const legacySold = db.transfers.find((tr) => !usedSold.has(tr.id) && TRANSFER_DONE.has(tr.status) && !tr.child_ticket_id && !tr.order_item_id
+        && tr.from_user_id === order.user_id && !tr.ticket_id?.startsWith('t-') && tr.product_id === item.product_id
+        && (tr.variant_id ?? null) === (item.variant_id ?? null) && (tr.batch_id ?? null) === (item.batch_id ?? null));
+      if (legacySold) { usedSold.add(legacySold.id); continue; }
+      out.push({ order, item });
     }
   }
   return out;

@@ -1,7 +1,7 @@
 import type { Database, PreorderTicket } from '../entities';
 import { ticketDue, ticketPaid, ticketTotal } from './money';
 import { DELIVERY_METHOD_LABEL, resolveShipTo, ticketPaidFull } from './delivery';
-import { ticketPayer } from './tickets';
+import { ticketPayer, ticketRoot, orderTicketId } from './tickets';
 
 /**
  * "เส้นทางของตั๋ว" — ร้อยเรียงทุกฟีเจอร์ให้เห็นเป็นเส้นเดียว (flow review 2026-07-25).
@@ -35,7 +35,12 @@ export interface Journey {
 
 /** หา order ที่ออกตั๋วใบนี้ (จับคู่ด้วย product+variant+batch ของ "คนสั่ง" ใกล้เวลาออกตั๋วที่สุด).
  *  ใบที่เปลี่ยนมือในตลาด/ตั๋วลูกที่แตกขาย → ออเดอร์เดิมของคนสั่ง (ticketPayer) ไม่ใช่ของคนถือ */
-export function orderOfTicket(db: Database, t: PreorderTicket) {
+export function orderOfTicket(db: Database, t0: PreorderTicket) {
+  // ตั๋วลูกที่แตกขาย → ออเดอร์ของตั๋วแม่ต้นสาย (audit รอบ D R3-21: เดิมเทียบเวลาไฟนอล ได้ออเดอร์/สลิปมัดจำผิดใบ)
+  const t = t0.split_from ? (ticketRoot(db, t0) ?? t0) : t0;
+  // ตั๋วผูกรายการ (t-<item>) → ออเดอร์ของรายการนั้นตรงๆ
+  const exact = db.orders.find((o) => o.items.some((i) => orderTicketId(i.id) === t.id));
+  if (exact) return exact;
   const tTime = new Date(t.created_at).getTime();
   const payer = ticketPayer(t);
   return db.orders
