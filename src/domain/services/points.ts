@@ -73,11 +73,14 @@ export function closerOf(db: Database, t: PreorderTicket): string {
   return last?.user ?? (t.original_buyer_id || t.owner_id);
 }
 
-/** ตั๋วลูกที่ตั๋วแม่ (สายใดก็ได้) ได้แต้มปิดยอดไปแล้ว — แต้มนั้นคิดเต็มจำนวนชิ้นตอนปิด ตั๋วลูกห้ามได้ซ้ำ (เฟส 2) */
+/** ตั๋วลูกที่ตั๋วแม่ได้แต้มปิดยอด "ก่อนแตกขาย" — ตอนนั้นแต้มคิดเต็มจำนวนชิ้นรวมชิ้นที่ขายไป ตั๋วลูกห้ามได้ซ้ำ (เฟส 2)
+ *  ตั๋วแม่ที่ปิดยอด "หลังแตกขาย" ได้แต้มเฉพาะชิ้นที่เหลือ → ตั๋วลูกยังได้ของตัวเอง (review รอบ D: เดิมบล็อกทุกกรณี
+ *  ผู้รับเสียแต้มถ้าคนขายบังเอิญปิดใบแม่ก่อน) · ตั๋วลูกเกิดตอนไฟนอล (created_at) = เวลาแตกขาย */
 function ancestorEarned(db: Database, t: PreorderTicket): boolean {
   let cur: PreorderTicket | undefined = t;
   for (let i = 0; cur?.split_from && i < 20; i++) {
-    if (ledgerById(db).has(earnIdFor(cur.split_from))) return true;
+    const e = ledgerById(db).get(earnIdFor(cur.split_from));
+    if (e && e.created_at <= cur.created_at) return true;
     cur = ticketById(db).get(cur.split_from);
   }
   return false;
@@ -345,6 +348,12 @@ export function ticketsMissingEarn(db: Database): PreorderTicket[] {
   return db.tickets.filter((t) => pointsForTicket(db, t) > 0 && !hasEarned(db, t.id));
 }
 
+/** แถว "ดึงโบนัสยศคืนเพราะใบเปลี่ยนมือ" (ryuma_market_finalize v77 · ref_id '<ตั๋ว>|mbonus-claw|<ดีล>') */
+export const isBonusClaw = (e: Pick<PointLedgerEntry, 'kind' | 'ref_id'>) => e.kind === 'reverse_ticket' && !!e.ref_id?.includes('|mbonus-claw|');
+/** ป้ายของแถวในสมุด — แยกแถวดึงโบนัสคืนออกจาก "ตั๋วถูกลบ" */
+export const ledgerLabel = (e: Pick<PointLedgerEntry, 'kind' | 'ref_id'>) =>
+  isBonusClaw(e) ? { label: 'ดึงคืน · โบนัสยศ (ใบเปลี่ยนมือ)', emoji: '↩️' } : KIND_LABEL[e.kind];
+
 export const KIND_LABEL: Record<PointLedgerEntry['kind'], { label: string; emoji: string }> = {
   earn_ticket: { label: 'ได้คะแนน · ปิดยอด', emoji: '✨' },
   reverse_ticket: { label: 'ดึงคืน · ตั๋วถูกลบ', emoji: '↩️' },
@@ -402,7 +411,8 @@ export function pointsLaunchInfo(db: Database): { at: string; by?: string } | nu
 /** ใบที่ได้คะแนนแล้ว (หักใบที่ถูกลบ) — ใช้ในข้อความ "จากใบพรีที่ปิดแล้ว n ใบ" */
 export function earnedTicketCount(db: Database, userId: string): number {
   const mine = db.pointLedger.filter((e) => e.user_id === userId);
-  return Math.max(0, mine.filter((e) => e.kind === 'earn_ticket').length - mine.filter((e) => e.kind === 'reverse_ticket').length);
+  // แถวดึงโบนัสยศคืน (v77) ใช้ kind reverse_ticket แต่ไม่ใช่ "ตั๋วถูกลบ" — ไม่หักจำนวนใบ
+  return Math.max(0, mine.filter((e) => e.kind === 'earn_ticket').length - mine.filter((e) => e.kind === 'reverse_ticket' && !isBonusClaw(e)).length);
 }
 /** ข้อความประกาศเปิดระบบ — ตัวเดียวที่ป๊อปอัปลูกค้า / push / พรีวิวแอดมินใช้ (ห้ามเขียนข้อความซ้ำที่อื่น) */
 export function launchNotice(db: Database, userId: string): { balance: number; tickets: number; rate: number; canRedeem: boolean; title: string; body: string; url: string } {

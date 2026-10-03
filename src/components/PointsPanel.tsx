@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag, batchPoints, SPECIAL_ROUND_POINTS_DEFAULT, closerOf } from '@/domain/services/points';
+import { balanceOf, lifetimeOf, ledgerOf, KIND_LABEL, ledgerLabel, rawPointsForTicket, pointsRates, pointsVisibleTo, ticketEarnEligible, hasEarned, redeemRules, redeemEnabled, redeemFlag, batchPoints, SPECIAL_ROUND_POINTS_DEFAULT, closerOf } from '@/domain/services/points';
 import type { Database } from '@/domain/entities';
 import { monthlyConfig, currentYm, ymLabel, ymShort, monthlyStatus, latestRankOf, monthlyBonusForTicket, sharePerPiece } from '@/domain/services/monthly';
 import { isStaffAccount } from '@/domain/services/admins';
@@ -279,7 +279,7 @@ export function PointsPanel({ userId, mode = 'live', simulateEnabled, dbOverride
         ) : (
           <div className="flex flex-col divide-y divide-hair">
             {rows.map((e) => {
-              const k = KIND_LABEL[e.kind] ?? { label: e.kind, emoji: '•' };
+              const k = ledgerLabel(e) ?? { label: e.kind, emoji: '•' };
               return (
                 <div key={e.id} className="flex items-start gap-3 py-2 text-[12.5px]">
                   <span className="w-[74px] shrink-0 text-[11px] text-ink-faint">{fmtDate(e.created_at)}</span>

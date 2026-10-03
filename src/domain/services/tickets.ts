@@ -58,7 +58,32 @@ export function padTicketSeq(n: number): string {
  * ตั๋วรอบพิเศษ/หาของ/ที่แอดมินมอบ นับหมด (= ลูกค้าพรีตัวจริง ทั้งในระบบและไล่เก็บนอกระบบ);
  * ตั๋วพรีเก่าบน SKU ที่ถูก convert เป็น in-stock ทีหลังก็ยังนับ (มีส่วนต่างเป็นหลักฐานว่าเป็นพรี).
  */
+/**
+ * ใบที่ "คนนี้สั่งเองจากร้าน" แล้วขาย/ส่งต่อออกไปในตลาด — key = ตั๋วที่ออกไป (ตั๋วลูก หรือทั้งใบ) → ดีลล่าสุด
+ * ใบที่ได้รับมาแล้วส่งต่อ ไม่นับ: ดูว่าการเกี่ยวข้องครั้งแรกของคนนี้กับตั๋วใบนั้นเป็น "ส่งออก" (เป็นคนสั่ง) หรือ "รับเข้า"
+ * นับครั้งเดียวต่อใบ แม้ขาย-รับคืน-ขายใหม่ (audit รอบ D review) · ใช้กับเพดานรอบพิเศษ + ด่าน "เคยพรี" หลัง v77 (มองไม่เห็นใบที่ขายแล้ว)
+ */
+export function soldOwnTickets(db: Database, userId: string): Map<string, TicketTransferLike> {
+  const done = db.transfers
+    .filter((tr) => TRANSFER_DONE.has(tr.status) && (tr.from_user_id === userId || tr.to_user_id === userId))
+    .sort((a, b) => ((a.approved_at ?? a.listed_at ?? '') < (b.approved_at ?? b.listed_at ?? '') ? -1 : 1));
+  const first = new Map<string, 'out' | 'in'>();
+  const last = new Map<string, TicketTransferLike>();
+  for (const tr of done) {
+    const key = tr.child_ticket_id || tr.ticket_id;
+    // ตั๋วลูก: ก่อนเกิดเป็นส่วนของใบแม่ → ถ้าคนนี้รับใบแม่มา (ไม่ได้สั่งเอง) ตั๋วลูกก็ไม่ใช่ของที่สั่งเอง
+    if (!first.has(key)) first.set(key, tr.from_user_id === userId ? (tr.child_ticket_id && first.get(tr.ticket_id) === 'in' ? 'in' : 'out') : 'in');
+    if (tr.from_user_id === userId) last.set(key, tr);
+  }
+  const out = new Map<string, TicketTransferLike>();
+  for (const [key, tr] of last) if (first.get(key) === 'out') out.set(key, tr);
+  return out;
+}
+type TicketTransferLike = Database['transfers'][number];
+
 export function hasPreorderTicket(db: Database, userId: string): boolean {
+  // ใบที่สั่งเองแล้วขายออกไป (เครื่องคนขายมองไม่เห็นตั๋วแล้วหลัง v77) ยังนับว่าเคยพรี (audit รอบ D review)
+  if (soldOwnTickets(db, userId).size > 0) return true;
   return db.tickets.some((t) => {
     // "เคยพรี" = คนสั่งเอง (ticketPayer) — ใบที่ซื้อต่อจากตลาดไม่ปลดด่าน, ใบที่ขายออกไปแล้วยังนับว่าเคยพรี
     if (ticketPayer(t) !== userId) return false;
@@ -201,6 +226,7 @@ export function unmatchedApprovedItems(db: Database, userId?: string, settledMs:
       //   ใช้ดีลที่ปิดแล้วของสินค้า/แบบ/รอบเดียวกันมาหักทีละใบ ไม่งั้นจะขึ้น "กู้คืนใบพรี" ผิดๆ (audit รอบ D)
       const legacySold = db.transfers.find((tr) => !usedSold.has(tr.id) && TRANSFER_DONE.has(tr.status) && !tr.child_ticket_id && !tr.order_item_id
         && tr.from_user_id === order.user_id && !tr.ticket_id?.startsWith('t-') && tr.product_id === item.product_id
+        && !db.tickets.some((t) => t.id === tr.ticket_id) // ยังมองเห็นอยู่ = ถูกจับคู่กับรายการอื่นไปแล้ว ไม่ใช่ตัวแทนของรายการนี้
         && (tr.variant_id ?? null) === (item.variant_id ?? null) && (tr.batch_id ?? null) === (item.batch_id ?? null));
       if (legacySold) { usedSold.add(legacySold.id); continue; }
       out.push({ order, item });

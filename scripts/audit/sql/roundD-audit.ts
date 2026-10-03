@@ -39,12 +39,13 @@ async function boot() {
     await db.query(`insert into preorder_tickets (id, ticket_no, product_id, owner_id, original_buyer_id, qty, deposit_paid, remaining_amount, remaining_paid, status, product_status, approved_at)
                     values ($1,$2,'P1','uA','uA',$3,$4,$5,0,'active','production',now())`, [`t-oi${n}`, `NR-2026-10-30${n}`, qty, 300 * qty, 1390 * qty]);
   };
-  await tk(1, 1); await tk(2, 2); await tk(3, 1); await tk(4, 1);
+  await tk(1, 1); await tk(2, 2); await tk(3, 1); await tk(4, 1); await tk(5, 4);
   // โบนัสยศที่ผูกกับใบ (ใช้เป็นส่วนลดไปแล้ว: +share / −share คู่กัน) — สูตรเดียวกับ bonusRows ในแอป
   await db.query(`insert into point_ledger (id, user_id, delta, kind, ref_type, ref_id, note, created_by, created_at) values
     ('pl-mbonus-2026-09-t-oi2','uA',100,'monthly_reward','ticket','t-oi2','โบนัสยศ','uX',now()),
     ('pl-mbonus-use-2026-09-t-oi2','uA',-100,'redeem_remaining','ticket','t-oi2|mbonus','หัก','uX',now()),
-    ('pl-mbonus-2026-09-t-oi3','uA',25,'monthly_reward','ticket','t-oi3','โบนัสยศ','uX',now())`);
+    ('pl-mbonus-2026-09-t-oi3','uA',25,'monthly_reward','ticket','t-oi3','โบนัสยศ','uX',now()),
+    ('pl-mbonus-2026-09-t-oi5','uA',100,'monthly_reward','ticket','t-oi5','โบนัสยศ','uX',now())`);
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}')`);
   await db.exec('set session_replication_role = origin;');
   return db;
@@ -78,7 +79,7 @@ const claws = async (db: PGlite, ticket: string) =>
     const ad = await run(db, 'X', `select id from preorder_tickets where id = 't-oi1'`);
     ok('S4 แอดมินยังเห็นทุกใบ', (ad.rows ?? []).length === 1, ad);
     const own = await run(db, 'A', `select id from preorder_tickets where owner_id = 'uA' order by id`);
-    ok('S5 คนขายยังเห็นใบของตัวเองครบ', (own.rows ?? []).map((r: any) => r.id).join(',') === 't-oi2,t-oi3,t-oi4', own);
+    ok('S5 คนขายยังเห็นใบของตัวเองครบ', (own.rows ?? []).map((r: any) => r.id).join(',') === 't-oi2,t-oi3,t-oi4,t-oi5', own);
   }
 
   // ── ดึงโบนัสยศคืนตอนไฟนอล ─────────────────────────────────────────────────────────
@@ -97,6 +98,14 @@ const claws = async (db: PGlite, ticket: string) =>
     ok('B5 ขายทั้งใบ → ดึงโบนัสคืนเต็ม (−25)', !!d3.f?.ok && JSON.stringify(await claws(db, 't-oi3')) === '[-25]', await claws(db, 't-oi3'));
     const d4 = await deal(db, 't-oi4', 1);
     ok('B6 ใบที่ไม่มีโบนัส → ไม่มีแถวดึงคืน', !!d4.f?.ok && (await claws(db, 't-oi4')).length === 0);
+    // ขายทีละชิ้นจาก 4 ชิ้น (review รอบ D: เดิมดึงเกิน −25 −33 −42 = ครบ 100 ทั้งที่ยังถือ 1 ชิ้น)
+    for (let i = 0; i < 3; i++) await deal(db, 't-oi5', 1);
+    const c5 = await claws(db, 't-oi5');
+    ok('B8 ขาย 3 ใน 4 ชิ้นทีละชิ้น → ดึงคืน −25 ×3 = −75 (ยังถือ 1 ชิ้น)', JSON.stringify(c5) === '[-25,-25,-25]', c5);
+    await deal(db, 't-oi5', 1);
+    const c5b = await claws(db, 't-oi5');
+    ok('B9 ขายชิ้นสุดท้าย → ดึงส่วนที่เหลือ รวม −100 พอดี', c5b.reduce((s, x) => s + x, 0) === -100 && c5b.length === 4, c5b);
+    await db.exec(`delete from point_ledger where ref_id like 't-oi5%'`);
     const bal = Number((await q(db, `select coalesce(sum(delta),0) as s from point_ledger where user_id = 'uA'`))[0].s);
     ok('B7 ยอดแต้มคนขาย = −100 (โบนัส 100 ที่ใช้เป็นส่วนลดไปแล้วถูกดึงคืน · โบนัส 25 ได้มาแล้วดึงคืน)', bal === -100, bal);
   }

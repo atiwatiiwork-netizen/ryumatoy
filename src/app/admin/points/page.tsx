@@ -9,7 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { cx } from '@/components/ui';
 import { updateSettings, adjustPoints, backfillPoints, setPointsRedeem, simulateAfterLaunch, preparePointsLaunch, enablePointsLaunch, setBatchPoints } from '@/data/mutations';
-import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows, SPECIAL_ROUND_POINTS_DEFAULT, SPECIAL_ROUND_POINT_CHOICES } from '@/domain/services/points';
+import { simulateAll, ticketsMissingEarn, pointsLiability, KIND_LABEL, ledgerLabel, rawPointsForTicket, pointsRates, redeemEnabled, redeemFlag, launchNotice, pointsLaunchInfo, launchCorrectionRows, SPECIAL_ROUND_POINTS_DEFAULT, SPECIAL_ROUND_POINT_CHOICES } from '@/domain/services/points';
 import { launchBreakdown } from '@/domain/services/pointsReport';
 import type { Database, ShopSettings } from '@/domain/entities';
 import { PointsPanel } from '@/components/PointsPanel';
@@ -303,7 +303,7 @@ function LedgerPanel() {
       {rows.length === 0 ? <div className="py-6 text-center text-[13px] text-ink-faint">ยังไม่มีแถวในสมุด — เปิดระบบหรือกดให้คะแนนย้อนหลังก่อน</div> : (
         <div className="max-h-[420px] overflow-auto divide-y divide-hair">
           {rows.map((e) => {
-            const k = KIND_LABEL[e.kind] ?? { label: e.kind, emoji: '•' };
+            const k = ledgerLabel(e) ?? { label: e.kind, emoji: '•' };
             return (
               <div key={e.id} className="flex items-start gap-2.5 py-2 text-[12.5px]">
                 <span className="w-[92px] shrink-0 text-[11px] text-ink-faint">{fmtDT(e.created_at)}</span>

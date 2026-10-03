@@ -1,5 +1,5 @@
 import type { Database, Product, ProductBatch, StockReservation } from '../entities';
-import { ticketPayer, TRANSFER_DONE } from './tickets';
+import { ticketPayer, soldOwnTickets } from './tickets';
 
 /**
  * บัญชีสต๊อกเดียว (audit 2026-07-23 — เดิมมี "2 เล่ม" ตั๋ว vs ใบจอง แล้วมองไม่เห็นกัน):
@@ -85,12 +85,10 @@ export function userTakenInBatch(db: Database, userId: string, batchId: string, 
   // และใบที่ขายออกไปแล้ว (รวมตั๋วลูกที่แตกขาย) ยังนับให้คนสั่ง — กันซื้อครบเพดาน → ขาย → ซื้อใหม่วนไป
   const fromTickets = db.tickets.filter((t) => t.batch_id === batchId && ticketPayer(t) === userId).reduce((s, t) => s + t.qty, 0)
     // เซสชันคนขาย: RLS ซ่อนใบที่ขายออกไปแล้ว → นับจากประกาศที่ปิดการขายแทน (เฉพาะใบที่มองไม่เห็น กันนับซ้ำฝั่งแอดมิน)
-    + db.transfers
-      .filter((tr) => TRANSFER_DONE.has(tr.status) && tr.from_user_id === userId && tr.batch_id === batchId)
-      .filter((tr) => !db.tickets.some((t) => t.id === (tr.child_ticket_id || tr.ticket_id)))
-      // ใบที่ "ได้รับมา" แล้วส่งต่อ ไม่ใช่ใบที่คนนี้ซื้อจากร้าน → ไม่กินเพดานของเขา (audit รอบ D R3-10)
-      .filter((tr) => !db.transfers.some((x) => TRANSFER_DONE.has(x.status) && x.to_user_id === userId && (x.child_ticket_id || x.ticket_id) === tr.ticket_id))
-      .reduce((s, tr) => s + (tr.qty ?? 1), 0);
+    // ใบที่สั่งเองแล้วขายออกไป นับครั้งเดียวต่อใบ · ใบที่ "ได้รับมา" แล้วส่งต่อ ไม่กินเพดานของเขา (audit รอบ D R3-10 + review)
+    + [...soldOwnTickets(db, userId).entries()]
+      .filter(([key, tr]) => tr.batch_id === batchId && !db.tickets.some((t) => t.id === key))
+      .reduce((s, [, tr]) => s + (tr.qty ?? 1), 0);
   const fromHolds = db.stockReservations
     .filter((r) => r.batch_id === batchId && r.user_id === userId && !excludeResIds?.includes(r.id))
     .filter(isPendingHold)

@@ -89,7 +89,8 @@ begin
   for b in select * from point_ledger where kind = 'monthly_reward' and ref_type = 'ticket' and ref_id = t.id and delta > 0 loop
     select coalesce(-sum(delta), 0) into v_clawed from point_ledger
      where kind = 'reverse_ticket' and user_id = b.user_id and ref_id like t.id || '|mbonus-claw|%';
-    v_claw := least(round(b.delta * v_qty::numeric / greatest(t.qty, 1)), b.delta - v_clawed);
+    -- สัดส่วนของ "ที่ยังไม่ถูกดึง" ต่อชิ้นที่เหลือในใบตอนนี้ (ขายทีละชิ้นหลายรอบ ดึงรวมไม่เกินสัดส่วนที่ขายจริง · review รอบ D)
+    v_claw := round((b.delta - v_clawed) * v_qty::numeric / greatest(t.qty, 1));
     if v_claw > 0 then
       insert into point_ledger (id, user_id, delta, kind, ref_type, ref_id, note, created_by, created_at)
       values ('pl-mclaw-' || p_id || '-' || b.id, b.user_id, -v_claw, 'reverse_ticket', 'ticket', t.id || '|mbonus-claw|' || p_id,

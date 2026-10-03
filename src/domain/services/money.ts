@@ -1,7 +1,7 @@
 import type { Database, PreorderTicket } from '../entities';
 import { ymOf } from './analytics';
 import { sourcingKeys } from './indexes';
-import { ticketPayer, ticketRoot, TRANSFER_DONE, soldAwayItemIds, orderTicketId } from './tickets';
+import { ticketPayer, ticketRoot, TRANSFER_DONE } from './tickets';
 
 /**
  * เส้นเงิน — แหล่งความจริงเดียวของ "เงินเข้า/เงินค้าง" ทั้งระบบ (flow review 2026-07-25).
@@ -30,19 +30,36 @@ export function paidByUser(db: Database, uid: string): number {
   const traded = (t: PreorderTicket) => !!t.split_from || t.owner_id !== ticketPayer(t) || parents.has(t.id)
     || done.some((tr) => tr.ticket_id === t.id || tr.child_ticket_id === t.id);
   const visible = new Set(db.tickets.map((t) => t.id));
+  // มัดจำของตั๋วจากออเดอร์ = มัดจำของรายการในออเดอร์ของคนนี้ นับครั้งเดียวต่อรายการ ไม่ว่าตั๋วจะแตก/ขายไปกี่ทอด
+  //   (review รอบ D: เดิมนับซ้ำเมื่อตั๋วรุ่นเก่าขายทั้งใบ · และเครื่องคนขายหายส่วนของตั๋วลูกที่มองไม่เห็น)
+  const myItems = new Map<string, number>();
+  for (const o of db.orders) if (o.user_id === uid && o.status === 'approved') for (const i of o.items) myItems.set(i.id, i.deposit_amount ?? 0);
+  const counted = new Set<string>();
+  const addItem = (itemId?: string) => {
+    if (!itemId || counted.has(itemId) || !myItems.has(itemId)) return false;
+    counted.add(itemId); return true;
+  };
+  const rootItem = (t: PreorderTicket): string | undefined => {
+    const r = t.split_from ? ticketRoot(db, t) : t;
+    return r?.id.startsWith('t-') ? r.id.slice(2) : undefined;
+  };
   const tradedIds = new Set<string>();
   let sum = 0;
   for (const t of db.tickets) {
-    if (traded(t)) { tradedIds.add(t.id); if (ticketPayer(t) === uid) sum += t.deposit_paid ?? 0; continue; }
-    if (t.owner_id === uid) sum += ticketPaid(t);
+    if (!traded(t)) { if (t.owner_id === uid) sum += ticketPaid(t); continue; }
+    tradedIds.add(t.id);
+    const item = rootItem(t);
+    if (item && myItems.has(item)) { if (addItem(item)) sum += myItems.get(item)!; continue; }
+    if (ticketPayer(t) === uid) sum += t.deposit_paid ?? 0; // ตั๋วรุ่นเก่า/มอบ (ไม่ผูกรายการ) → มัดจำบนตั๋วที่มองเห็น
+  }
+  // ตั๋วที่ขายออกไปแล้วมองไม่เห็น (เครื่องคนขาย) → มัดจำจากรายการในออเดอร์ (ดีลบันทึกรายการต้นทางไว้)
+  for (const tr of done) {
+    if (tr.from_user_id !== uid || visible.has(tr.ticket_id)) continue;
+    const item = tr.order_item_id ?? (tr.ticket_id?.startsWith('t-') ? tr.ticket_id.slice(2) : undefined);
+    if (addItem(item)) sum += myItems.get(item!)!;
   }
   for (const r of db.remainingPayments) {
     if (r.status === 'approved' && r.user_id === uid && (tradedIds.has(r.ticket_id) || !visible.has(r.ticket_id))) sum += r.amount ?? 0;
-  }
-  const sold = soldAwayItemIds(db);
-  for (const o of db.orders) {
-    if (o.user_id !== uid || o.status !== 'approved') continue;
-    for (const i of o.items) if (sold.has(i.id) && !visible.has(orderTicketId(i.id))) sum += i.deposit_amount ?? 0;
   }
   return sum;
 }

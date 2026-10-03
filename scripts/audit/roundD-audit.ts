@@ -4,7 +4,8 @@ process.env.TZ = 'Asia/Bangkok';
 import { SEED_DATABASE } from '../../src/data/seed';
 import { countsForMonthly, monthlyConfig, DEFAULT_MONTHLY } from '../../src/domain/services/monthly';
 import { qualifyingCount } from '../../src/domain/services/campaigns';
-import { closerOf, earnRowForTicket, ticketEarnBlock, ticketIsFullPay, earnIdFor } from '../../src/domain/services/points';
+import { closerOf, earnRowForTicket, ticketEarnBlock, ticketIsFullPay, earnIdFor, earnedTicketCount, ledgerLabel } from '../../src/domain/services/points';
+import { hasPreorderTicket } from '../../src/domain/services/tickets';
 import { userTakenInBatch } from '../../src/domain/services/reservations';
 import { ticketsInMonth } from '../../src/domain/services/analytics';
 import { orderOfTicket } from '../../src/domain/services/journey';
@@ -47,11 +48,17 @@ const base = (over: Partial<Database>): Database => ({ ...structuredClone(SEED_D
   const dbR = { ...db, remainingPayments: [...db.remainingPayments, { id: 'rp2', ticket_id: 't-oiA', user_id: 'uB', amount: 0, slip_url: 'https://y', status: 'approved' as const, created_at: ago(1), approved_at: ago(1) }] };
   ok('P3 ผู้รับจ่ายปิดเองทีหลัง → แต้มเป็นของผู้รับ', closerOf(dbR, closed) === 'uB');
   const parent = tk({ id: 't-oiP', qty: 1, remaining_paid: 1390 });
-  const kid = tk({ id: 'tc-k', split_from: 't-oiP', owner_id: 'uB', original_buyer_id: 'uA', deposit_paid: 300, remaining_amount: 1390, remaining_paid: 1390 });
+  const kid = tk({ id: 'tc-k', split_from: 't-oiP', owner_id: 'uB', original_buyer_id: 'uA', deposit_paid: 300, remaining_amount: 1390, remaining_paid: 1390, created_at: ago(1) }); // แตกขายหลังใบแม่ปิดยอด
   const dbS = base({ tickets: [parent, kid], pointLedger: [{ id: earnIdFor('t-oiP'), user_id: 'uA', delta: 40, kind: 'earn_ticket', ref_type: 'ticket', ref_id: 't-oiP', created_at: ago(3) }], settings: { ...SEED_DATABASE.settings, points_enabled: true } });
   ok('P4 ตั๋วลูกของใบที่ได้แต้มปิดยอดไปแล้ว ไม่ได้แต้มซ้ำ (เฟส 2)', !!ticketEarnBlock(dbS, kid) && earnRowForTicket(dbS, kid) === null, ticketEarnBlock(dbS, kid));
   const dbS2 = { ...dbS, pointLedger: [] };
   ok('P5 ตั๋วแม่ยังไม่ปิดตอนแตกขาย → ตั๋วลูกที่ผู้รับจ่ายปิดได้แต้มปกติ', ticketEarnBlock(dbS2, kid) === null);
+  const kidLate = { ...kid, created_at: ago(5) };
+  const dbS3 = { ...dbS, tickets: [parent, kidLate], pointLedger: [{ ...dbS.pointLedger[0], created_at: ago(2) }] };
+  ok('P5b ตั๋วแม่ปิดยอด "หลัง" แตกขาย (ได้แต้มเฉพาะชิ้นที่เหลือ) → ตั๋วลูกยังได้ของตัวเอง (review รอบ D)', ticketEarnBlock(dbS3, kidLate) === null, ticketEarnBlock(dbS3, kidLate));
+  const claw = { id: 'pl-mclaw-x', user_id: 'uA', delta: -25, kind: 'reverse_ticket' as const, ref_type: 'ticket' as const, ref_id: 't-oiP|mbonus-claw|tr-1', created_at: ago(1) };
+  const dbL = { ...dbS, pointLedger: [...dbS.pointLedger, claw] };
+  ok('P5c แถวดึงโบนัสคืนไม่หักจำนวนใบที่ปิด และป้ายไม่ใช่ "ตั๋วถูกลบ"', earnedTicketCount(dbL, 'uA') === 1 && /โบนัส/.test(ledgerLabel(claw).label));
   const preParent = tk({ id: 't-oiQ', remaining_amount: 0 });
   const dbC = base({ orders: [order('oQ', 'uA', [{ id: 'oiQ', order_id: 'oQ', product_id: 'P1', qty: 1, deposit_amount: 300, unit_price: 1690, unit_deposit: 300 }])], tickets: [preParent, tk({ id: 'tc-q', split_from: 't-oiQ', remaining_amount: 0, owner_id: 'uB' })] });
   ok('P6 ตั๋วลูกของใบพรี (ยอดค้าง 0) ยังเป็นใบพรี ไม่ใช่พร้อมส่ง (R1-29)', ticketIsFullPay(dbC, dbC.tickets[1]) === false);
@@ -65,6 +72,13 @@ const base = (over: Partial<Database>): Database => ({ ...structuredClone(SEED_D
     transfers: [tr({ id: 'in', ticket_id: 'tb-1', from_user_id: 'uA', to_user_id: 'uB', batch_id: 'B1' }), tr({ id: 'out', ticket_id: 'tb-1', from_user_id: 'uB', to_user_id: 'uC', batch_id: 'B1' })],
   });
   ok('Q1 ใบรอบพิเศษที่ได้รับมาแล้วส่งต่อ ไม่กินเพดานของคนส่งต่อ (R3-10)', userTakenInBatch(db, 'uB', 'B1') === 0 && userTakenInBatch(db, 'uA', 'B1') === 1, { b: userTakenInBatch(db, 'uB', 'B1'), a: userTakenInBatch(db, 'uA', 'B1') });
+  const trip = base({ transfers: [
+    tr({ id: 'r1', ticket_id: 'tb-2', from_user_id: 'uA', to_user_id: 'uB', batch_id: 'B1', qty: 2, approved_at: ago(5) }),
+    tr({ id: 'r2', ticket_id: 'tb-2', from_user_id: 'uB', to_user_id: 'uA', batch_id: 'B1', qty: 2, approved_at: ago(4) }),
+    tr({ id: 'r3', ticket_id: 'tb-2', from_user_id: 'uA', to_user_id: 'uC', batch_id: 'B1', qty: 2, approved_at: ago(3) }),
+  ] });
+  ok('Q1b ขาย → รับคืน → ขายใหม่: ยังกินเพดานคนสั่ง 2 ชิ้น (ไม่ใช่ 0 หรือ 4)', userTakenInBatch(trip, 'uA', 'B1') === 2, userTakenInBatch(trip, 'uA', 'B1'));
+  ok('Q1c ใบที่สั่งเองแล้วขายไป (มองไม่เห็นตั๋วแล้ว) ยังนับว่า "เคยพรี" · ใบที่รับมาแล้วส่งต่อไม่นับ', hasPreorderTicket(db, 'uA') && !hasPreorderTicket(db, 'uB'));
   const old = new Date(2026, 7, 15).toISOString(), now = new Date(2026, 9, 2).toISOString();
   const dbA = base({ tickets: [tk({ id: 't-r', created_at: old }), tk({ id: 'tc-r', split_from: 't-r', created_at: now })] });
   ok('Q2 รายงานรายเดือน: ตั๋วลูกนับในเดือนของตั๋วแม่ ไม่ใช่เดือนไฟนอล (R3-23)', ticketsInMonth(dbA, '2026-08').length === 2 && ticketsInMonth(dbA, '2026-10').length === 0);
@@ -96,6 +110,24 @@ const base = (over: Partial<Database>): Database => ({ ...structuredClone(SEED_D
     transfers: [tr({ id: 'dL', ticket_id: 'legacy-1', product_id: 'P1', from_user_id: 'uA' })],
   });
   ok('W4 ใบรุ่นเก่าที่ขายไปแล้ว (มองไม่เห็น) ไม่ถูกตีว่า "ตั๋วหาย" ให้กู้คืนผิดๆ', unmatchedApprovedItems(heal, 'uA', 0).length === 0, unmatchedApprovedItems(heal, 'uA', 0).length);
+  const healAdmin = base({
+    orders: [order('oL', 'uA', [{ id: 'oiL', order_id: 'oL', product_id: 'P1', qty: 1, deposit_amount: 300 }, { id: 'oiM', order_id: 'oL', product_id: 'P1', qty: 1, deposit_amount: 300 }])],
+    tickets: [tk({ id: 'legacy-1', owner_id: 'uB', original_buyer_id: 'uA' })],
+    transfers: [tr({ id: 'dL', ticket_id: 'legacy-1', product_id: 'P1', from_user_id: 'uA' })],
+  });
+  ok('W5 แอดมินเห็นใบรุ่นเก่าที่ขายแล้ว + อีกรายการตั๋วหายจริง → ยังรายงานว่าหาย 1 ใบ', unmatchedApprovedItems(healAdmin, 'uA', 0).length === 1, unmatchedApprovedItems(healAdmin, 'uA', 0).length);
+  const legacyWhole = base({
+    orders: [order('oK', 'uA', [{ id: 'oiK', order_id: 'oK', product_id: 'P1', qty: 1, deposit_amount: 300 }])],
+    tickets: [tk({ id: 'legacy-k', owner_id: 'uB', original_buyer_id: 'uA' })],
+    transfers: [tr({ id: 'dK', ticket_id: 'legacy-k', order_item_id: 'oiK' })],
+  });
+  ok('W6 ใบรุ่นเก่าขายทั้งใบ (ดีลบันทึกรายการ): มัดจำนับครั้งเดียว 300 ไม่ใช่ 600', paidByUser(legacyWhole, 'uA') === 300, paidByUser(legacyWhole, 'uA'));
+  const split = base({
+    orders: [order('oS', 'uA', [{ id: 'oiS', order_id: 'oS', product_id: 'P1', qty: 2, deposit_amount: 600 }])],
+    tickets: [tk({ id: 't-oiS', qty: 1, deposit_paid: 300, remaining_amount: 1390 })], // เครื่องคนขาย: ตั๋วลูกมองไม่เห็น
+    transfers: [tr({ id: 'dS', ticket_id: 't-oiS', child_ticket_id: 'tc-s', qty: 1 })],
+  });
+  ok('W7 เครื่องคนขาย แตกขาย 1/2 ชิ้น: มัดจำยังนับเต็ม 600', paidByUser(split, 'uA') === 600, paidByUser(split, 'uA'));
 }
 
 console.log(`\nroundD-audit (app): ${pass} passed, ${fail} failed`);
