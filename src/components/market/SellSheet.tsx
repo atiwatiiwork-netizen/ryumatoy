@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -22,6 +22,8 @@ import { MoneySplit, StubArt, LotPill } from './MarketUi';
 import { PayoutPicker, payoutAccountsOf, payoutLabel } from './PayoutPicker';
 
 export type SellMode = 'market' | 'direct';
+/** ผลค้นเลขกระเป๋า + เลขที่ใช้ค้น (ส่งข้อเสนอด้วยเลขนี้เท่านั้น) */
+type LookedUp = mk.WalletLookupRes & { code: string };
 
 /**
  * แผงจากหน้าใบพรีในกระเป๋า — 2 โหมดใช้ร่างเดียวกัน (เจ้าของ 2026-10-02 ข้อ 3.3: บัญชีชุดเดียวกัน):
@@ -51,9 +53,11 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   });
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // direct: เลขกระเป๋าผู้รับ + ผลค้น
+  // direct: เลขกระเป๋าผู้รับ + ผลค้น (ผูกกับเลขที่ค้น — เปลี่ยนเลขแล้วผลเดิมใช้ไม่ได้)
   const [code, setCode] = useState('');
-  const [target, setTarget] = useState<mk.WalletLookupRes | null>(null);
+  const codeRef = useRef('');
+  const [target, setTarget] = useState<LookedUp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const gap = depositGap(db, t);
   const pendingTopup = db.remainingPayments.find((r) => r.ticket_id === t.id && r.status === 'pending' && r.purpose === 'topup');
@@ -88,22 +92,32 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
     const c = digitsOnly(code);
     if (c.length !== 4) return flash('ใส่เลขกระเป๋า 4 หลักของผู้รับ');
     setBusy(true);
+    setErr(null);
     const r = await mk.walletLookup(c);
     setBusy(false);
-    setTarget(r);
-    if (!r.ok) flash(mk.marketErrText(r));
+    // ผลที่กลับมาช้า (ระหว่างนั้นพิมพ์เลขใหม่ไปแล้ว) ห้ามจับคู่ชื่อคนเก่ากับเลขใหม่ (audit รอบ B R1-02)
+    if (codeRef.current !== c) return;
+    setTarget({ ...r, code: c } as LookedUp); // ค้นไม่เจอ = ข้อความแดงใต้ช่องเลข (target.ok false)
   };
 
   const submit = async () => {
     if (busy || reason) return;
-    if (!payout) return flash('เลือกหรือเพิ่มบัญชีรับเงินก่อน');
-    if (direct && !target?.ok) return flash('ค้นเลขกระเป๋าผู้รับก่อน');
+    if (!payout) return setErr('เลือกหรือเพิ่มบัญชีรับเงินก่อน');
+    if (direct && (!target?.ok || !target.user_id || target.code !== digitsOnly(code))) return setErr('ค้นเลขกระเป๋าผู้รับก่อน');
     setBusy(true);
+    setErr(null);
     const r = direct
-      ? await mk.marketOffer(t.id, q, price, digitsOnly(code), payoutInfoOf(payout))
+      // ส่ง user_id ของคนที่ยืนยันไปด้วย — เซิร์ฟเวอร์ส่งให้เฉพาะเมื่อเลขยังเป็นของคนนั้น (R1-02)
+      ? await mk.marketOffer(t.id, q, price, target!.code, payoutInfoOf(payout), target!.user_id!)
       : await mk.marketList(t.id, q, price);
     setBusy(false);
-    if (!r.ok || !r.id) { flash(mk.marketErrText(r)); if (direct && (r.error === 'not_found' || r.error === 'self' || r.error === 'not_ready' || r.error === 'no_address')) setTarget(null); return; }
+    if (!r.ok || !r.id) {
+      // ข้อความอยู่ในแผงด้วย (toast อาจโดนบังบนจอเล็ก · R3-08)
+      setErr(mk.marketErrText(r));
+      flash(mk.marketErrText(r));
+      if (direct && ['code_changed', 'self', 'not_ready', 'no_address', 'too_many'].includes(r.error ?? '')) setTarget(null);
+      return;
+    }
     await store.reload();
     if (direct) {
       void mk.marketPush(r.id, 'offer');
@@ -206,8 +220,9 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
               <div className="rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.06] p-3.5">
                 <div className="text-[13.5px] font-bold">เลขกระเป๋าของผู้รับ <span className="font-normal text-ink-faint">(4 หลัก · เขาเห็นที่หัวหน้ากระเป๋าพรี เปลี่ยนทุกวัน)</span></div>
                 <div className="mt-2 flex gap-2">
-                  <input id="mk-code" inputMode="numeric" maxLength={4} value={code} onChange={(e) => { setCode(e.target.value.replace(/\D/g, '').slice(0, 4)); setTarget(null); }}
-                    placeholder="0000" className="w-[120px] rounded-xl border border-subtle bg-surface-3 px-3 py-2 text-center font-mono text-[24px] font-bold tracking-[0.3em] text-ink outline-none focus:border-accent" />
+                  <input id="mk-code" inputMode="numeric" value={code} disabled={busy}
+                    onChange={(e) => { const c = e.target.value.replace(/\D/g, '').slice(0, 4); codeRef.current = c; setCode(c); setTarget(null); setErr(null); }}
+                    placeholder="0000" className="w-[120px] rounded-xl border border-subtle bg-surface-3 px-3 py-2 text-center font-mono text-[24px] font-bold tracking-[0.3em] text-ink outline-none focus:border-accent disabled:opacity-60" />
                   <button type="button" disabled={busy || digitsOnly(code).length !== 4} onClick={() => void lookup()} className="flex-1 rounded-xl border-[1.5px] border-accent text-[13.5px] font-bold text-primary-soft disabled:opacity-50">{busy ? 'กำลังค้น…' : 'ค้นหาผู้รับ'}</button>
                 </div>
                 {target?.ok && (
@@ -220,7 +235,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                   </div>
                 )}
                 {target && !target.ok && <div className="mt-2 text-[12px] text-[#f87171]">{mk.marketErrText(target)}</div>}
-                <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ส่งผิดคนไม่เป็นไร ผู้รับต้องกดรับเองและคุณถอนข้อเสนอได้ก่อนเขาโอน</div>
+                <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ผู้รับต้องกดรับเอง · คุณถอนข้อเสนอได้จนกว่าผู้รับจะเปิดหน้าโอนเงิน</div>
               </div>
             )}
 
@@ -232,6 +247,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
               {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ · โบนัสยศที่ได้จากใบนี้จะถูกเรียกคืน</li>}
               {payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
             </ul>
+            {err && <div role="alert" className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] px-3 py-2 text-[12.5px] font-semibold text-[#f87171]">{err}</div>}
             <button type="button" disabled={busy || !payout || (direct && !target?.ok)} onClick={() => void submit()}
               className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">
               {busy ? 'กำลังส่ง…' : direct

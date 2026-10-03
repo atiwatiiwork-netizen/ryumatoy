@@ -3,6 +3,7 @@ import type { PersistenceAdapter } from './persistence';
 import { supabase } from './supabaseClient';
 import { SEED_DATABASE } from './seed';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { rowPatch } from './rowPatch';
 
 /**
  * Supabase persistence adapter — implements the same PersistenceAdapter contract
@@ -44,6 +45,48 @@ async function syncTable(sb: SupabaseClient, table: string, nextRows: Row[], bas
     if (error && !firstError) firstError = error;
   }
 
+  if (firstError) throw firstError;
+}
+
+/**
+ * เหมือน syncTable แต่แถวที่มีอยู่แล้ว "ส่งเฉพาะช่องที่เปลี่ยน" (UPDATE … WHERE key) แทน upsert ทั้งแถว
+ * ใช้กับตารางที่เซิร์ฟเวอร์/อีกเครื่องเขียนคอลัมน์อื่นของแถวเดียวกันได้: preorder_tickets (RPC ไฟนอลย้ายเจ้าของ)
+ * และ users (ลูกค้าแก้บัญชีรับเงิน · แอดมินแก้ยศ/ระงับ) — audit รอบ A R2A-01 / R2A-03 / R3-06 / R3-13
+ * แถวใหม่ (ไม่มีในฐาน) ยัง upsert ทั้งแถวเหมือนเดิม · UPDATE ที่ไม่โดนแถวไหน: ไม่มี session = error ชั่วคราว (ลองใหม่) ·
+ * มี session = upsert ทั้งแถว (แถวที่ insert ไม่ขึ้นรอบก่อน) — ไม่นับว่าเซฟแล้วเงียบๆ (review รอบ A)
+ */
+export async function syncTablePatch(sb: SupabaseClient, table: string, nextRows: Row[], baseRows: Row[], key = 'id', tokens: string[] = []) {
+  const baseMap = new Map(baseRows.map((r) => [String(r[key]), r]));
+  const nextKeys = new Set(nextRows.map((r) => String(r[key])));
+  let firstError: unknown = null;
+  for (const row of nextRows) {
+    const b = baseMap.get(String(row[key]));
+    if (!b) {
+      const { error } = await sb.from(table).upsert(row);
+      if (error && !firstError) firstError = error;
+      continue;
+    }
+    const patch = rowPatch(b, row, key, tokens);
+    if (!patch) continue;
+    const { data, error } = await sb.from(table).update(patch).eq(key, row[key] as string).select(key);
+    if (error) { if (!firstError) firstError = error; continue; }
+    if (Array.isArray(data) && data.length > 0) continue;
+    // UPDATE ไม่โดนแถวไหน (review รอบ A): ห้ามนับว่าเซฟแล้ว
+    //   · ไม่มี session (token กำลังต่ออายุ → คำขอวิ่งแบบ anon, RLS ซ่อนแถว) → error ชั่วคราว ให้ store ลองใหม่
+    //   · มี session แต่ไม่เจอแถว (เช่น flush ก่อนหน้าที่ insert แถวนี้ล้มแล้วย้อนฐาน) → upsert ทั้งแถวแบบเดิม
+    const session = await Promise.race([
+      sb.auth.getSession().then((r) => r.data.session).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+    ]);
+    if (!session) { if (!firstError) firstError = new Error(`${table}: ยังไม่ได้เข้าสู่ระบบ/กำลังต่ออายุการเข้าสู่ระบบ — จะลองใหม่ให้`); continue; }
+    const { error: upErr } = await sb.from(table).upsert(row);
+    if (upErr && !firstError) firstError = upErr;
+  }
+  const removed = baseRows.filter((r) => !nextKeys.has(String(r[key]))).map((r) => r[key] as string);
+  if (removed.length) {
+    const { error } = await sb.from(table).delete().in(key, removed);
+    if (error && !firstError) firstError = error;
+  }
   if (firstError) throw firstError;
 }
 
@@ -261,7 +304,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     const step = async (label: string, run: () => Promise<unknown>) => {
       try { await run(); } catch (e) { errs.push(`${label}: ${(e as { message?: string })?.message ?? String(e)}`); }
     };
-    await step('users', () => syncTable(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]));
+    // users + preorder_tickets: ส่งเฉพาะช่องที่เปลี่ยน (syncTablePatch) — upsert ทั้งแถวจากหน้าจอเก่าเคยทับบัญชีรับเงิน/ผลไฟนอล
+    await step('users', () => syncTablePatch(sb, 'users', next.users as unknown as Row[], base.users as unknown as Row[]));
     await step('categories', () => syncTable(sb, 'categories', next.categories as unknown as Row[], base.categories as unknown as Row[]));
     await step('manufacturers', () => syncTable(sb, 'manufacturers', next.manufacturers as unknown as Row[], base.manufacturers as unknown as Row[]));
     await step('franchises', () => syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]));
@@ -315,7 +359,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     //   เดิมตั๋วลงก่อน → เครื่องอื่น poll เจอช่วงกลางคัน "หนี้ลดแล้วแต่สลิปยัง pending" → อนุมัติซ้ำ
     //   = หนี้ลดสองรอบจากเงินก้อนเดียว (audit ADV-01 2026-08-08)
     await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
-    await step('preorder_tickets', () => syncTable(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[]));
+    // market_rev = เลขรุ่นของตั๋ว (v74) ส่งค่าที่โหลดมาไปด้วยทุกครั้ง — เซิร์ฟเวอร์ปฏิเสธการแก้เงิน/สถานะจากหน้าจอที่เก่ากว่าไฟนอล
+    await step('preorder_tickets', () => syncTablePatch(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[], 'id', ['market_rev']));
 
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
     // ticket_transfers (ตลาดใบพรี v71): **ไม่ sync โดยตั้งใจ** — ทุกการเปลี่ยนสถานะผ่าน RPC ryuma_market_* เท่านั้น

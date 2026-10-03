@@ -11,6 +11,7 @@ import { marketLocked } from '@/domain/services/market';
 import { baht } from '@/lib/theme';
 import { completeTicketOffline, logActivity } from '@/data/mutations';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { Icon } from './Icon';
 
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
@@ -36,8 +37,19 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
   /** "จบงานตั๋วนี้เลย" — เคลียร์กันนอกระบบ (มารับเอง/โอนตรง/ตกลงทางแชท)
    *  ใบที่ยังค้างเงินต้องยืนยันว่ารับเงินแล้ว ไม่งั้นหนี้หายจากบัญชีแต่รายได้ไม่ขึ้น = เงินหายจากสมุด */
   const complete = async () => {
-    if (marketLocked(db, live.id)) { flash('ใบนี้ลงขายอยู่ในตลาดใบพรี — ยกเลิกประกาศก่อนถึงจบงานได้'); return; }
-    const dueNow = Math.max(0, live.remaining_amount - live.remaining_paid);
+    if (busy) return;
+    // โหลดของจริงก่อนตัดสินใจเสมอ (audit รอบ A R2A-02): ป๊อปอัปที่เปิดค้างไว้ก่อนดีลเกิด จะไม่รู้ว่าใบนี้ลงขาย/เปลี่ยนมือไปแล้ว
+    //   แล้วปิดใบ + บันทึกเงินนอกระบบในชื่อคนขาย · เซิร์ฟเวอร์ (v74) ก็ปฏิเสธอีกชั้น
+    setBusy(true);
+    const fresh = await store.reload({ safe: true });
+    setBusy(false);
+    if (!fresh) { flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่'); return; }
+    const nowDb = store.getState();
+    const cur = nowDb.tickets.find((x) => x.id === live.id);
+    if (!cur || cur.owner_id !== t.owner_id) { flash('ตั๋วใบนี้เปลี่ยนเจ้าของไปแล้ว — ปิดหน้าต่างแล้วเปิดใหม่'); return; }
+    if (cur.status === 'shipped') { flash('ใบนี้จบงานไปแล้ว'); return; }
+    if (marketLocked(nowDb, live.id)) { flash('ใบนี้อยู่ระหว่างซื้อขาย/เปลี่ยนใบในตลาด — จบดีลหรือยกเลิกก่อนถึงจบงานได้'); return; }
+    const dueNow = Math.max(0, cur.remaining_amount - cur.remaining_paid);
     const msg = dueNow > 0
       ? `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nใบนี้ยังค้าง ${baht(dueNow)}\n`
         + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่างนอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ ${baht(dueNow)} ให้ด้วย\n`
@@ -52,7 +64,7 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
       dispatch((d) => { ok = d.tickets.find((x) => x.id === live.id)?.status === 'shipped'; return d; });
       if (!ok) { flash('ปิดใบไม่สำเร็จ — รีเฟรชแล้วลองใหม่'); return; }
       // DNA save: ต้องเซฟผ่านก่อนถึงบอกว่าสำเร็จ (ปุ่มนี้ idempotent — กดซ้ำได้ ไม่บวกเงินซ้ำ)
-      if (await store.flush()) { flash('ยังบันทึกขึ้นระบบไม่ได้ — ระบบลองใหม่ให้อัตโนมัติ รอสักครู่แล้วรีเฟรชเช็ค'); return; }
+      { const pf = await store.flush(); if (pf) { flash(persistFailText(pf, 'ยังบันทึกขึ้นระบบไม่ได้ — ระบบลองใหม่ให้อัตโนมัติ รอสักครู่แล้วรีเฟรชเช็ค')); return; } }
       dispatch(logActivity(adminId, 'close_delivery',
         `จบงานนอกระบบ ${live.ticket_no} · ${buyer?.display_name ?? ''}${dueNow > 0 ? ` · รับส่วนต่างนอกระบบ ${baht(dueNow)}` : ''}`,
         { targetId: live.id, targetLabel: live.ticket_no, amount: dueNow }));

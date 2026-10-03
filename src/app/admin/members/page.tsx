@@ -12,11 +12,12 @@ import { cx } from '@/components/ui';
 import { rankPiecesOf } from '@/domain/services/ranks';
 import { dormantNewMembers, suspendedMembers, daysSinceSignup, DORMANT_DAYS } from '@/domain/services/members';
 import { baht } from '@/lib/theme';
-import { updateUser, removeUser, setSuspended, editTicketDeposit, deleteTicket, repairTickets, logActivity } from '@/data/mutations';
+import { updateUser, removeUser, setSuspended, editTicketDeposit, syncOrderDepositDelta, deleteTicket, repairTickets, logActivity } from '@/data/mutations';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { unmatchedApprovedItems } from '@/domain/services/tickets';
-import { marketLocked, hasMarketHistory } from '@/domain/services/market';
+import { unmatchedApprovedItems, ticketPayer, TRANSFER_DONE } from '@/domain/services/tickets';
+import { marketLocked, hasMarketHistory, isActiveTransfer, ticketTransferred } from '@/domain/services/market';
 import { store } from '@/data/store';
+import { persistFailText, isTransientPersistError, friendlyPersistError } from '@/data/persistErrors';
 import { releaseReservation } from '@/lib/reserve';
 import { supabase } from '@/data/supabaseClient';
 import type { User, PreorderTicket } from '@/domain/entities';
@@ -81,18 +82,34 @@ export default function AdminMembersPage() {
   };
 
   const del = async (u: User) => {
+    // ตลาดใบพรี/เปลี่ยนใบ (audit รอบ A R3-01/R3-02/R2B-02): สมาชิกที่มีดีลค้าง หรือมีตั๋วที่ได้มา/ขายไปผ่านตลาด ลบไม่ได้
+    //   ลบผู้รับ = แถวโอนสิทธิ์หาย คนขายเสกตั๋วคืน · ลบคนขาย = ออเดอร์/สลิปที่ค้ำตั๋วผู้รับหาย · ลบกลางดีล = สลิป/บัญชีหาย
+    //   ด่านจริงอยู่ที่ ryuma_admin_purge_user (v74) — ตรงนี้บอกเหตุผลก่อนถาม (ใช้ "ระงับ" แทนได้)
+    const deals = db.transfers.filter((tr) => tr.from_user_id === u.id || tr.to_user_id === u.id);
+    const liveDeals = deals.filter((tr) => isActiveTransfer(tr)).length;
+    const doneDeals = deals.filter((tr) => TRANSFER_DONE.has(tr.status) || !!tr.paid_at).length;
+    const received = db.tickets.filter((t) => t.owner_id === u.id && (ticketPayer(t) !== u.id || !!t.split_from)).length;
+    const sold = db.tickets.filter((t) => t.original_buyer_id === u.id && t.owner_id !== u.id).length;
+    if (liveDeals) return flash(`ลบ "${u.display_name}" ไม่ได้ — มีดีลซื้อขาย/เปลี่ยนใบค้างอยู่ ${liveDeals} รายการ · ยกเลิกดีลที่หน้า "ตลาดใบพรี" ก่อน หรือกด "ระงับ" แทน`);
+    if (doneDeals || received || sold) return flash(`ลบ "${u.display_name}" ไม่ได้ — มีประวัติซื้อขาย/เปลี่ยนใบ (ดีลที่มีเงินเปลี่ยนมือ ${doneDeals} · ตั๋วที่ได้มา ${received} · ตั๋วที่ส่งต่อไป ${sold}) ต้องเก็บเป็นหลักฐานเงิน · กด "ระงับ" แทน`);
     // สรุปสิ่งที่กำลังจะหายให้เห็นก่อนกด + บันทึกไว้เป็นหลักฐาน (การกระทำนี้ย้อนกลับไม่ได้เลย)
     const theirs = db.tickets.filter((t) => t.owner_id === u.id);
     const paid = theirs.reduce((s, t) => s + (t.deposit_paid ?? 0) + (t.remaining_paid ?? 0), 0);
     const due = theirs.reduce((s, t) => s + Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0)), 0);
     if (!confirm(`ลบสมาชิก "${u.display_name}" ออกถาวร?\n\nจะลบ: โปรไฟล์ + บัญชีเข้าสู่ระบบ (เบอร์+PIN) + ออเดอร์/ใบพรี/รายการทั้งหมด\n· ใบพรี ${theirs.length} ใบ\n· เงินที่รับมาแล้ว ${baht(paid)}\n· ยอดค้างเก็บ ${baht(due)}\n\nกู้คืนไม่ได้ — ลูกค้าต้องสมัครใหม่ทั้งหมด`)) return;
-    dispatch(logActivity(adminId, 'purge_user', `ลบสมาชิก ${u.display_name} (${u.phone ?? '-'}) · ใบพรี ${theirs.length} ใบ · รับมาแล้ว ${baht(paid)} · ค้าง ${baht(due)}`, { targetId: u.id, targetLabel: theirs.map((t) => t.ticket_no).join(' ').slice(0, 300), amount: paid }));
     await store.flush().catch(() => {});
     if (supabase) {
       const { data, error } = await supabase.rpc('ryuma_admin_purge_user', { p_user_id: u.id });
-      const res = (data ?? {}) as { ok?: boolean; error?: string };
-      if (error || !res.ok) return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : `ลบไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
+      const res = (data ?? {}) as { ok?: boolean; error?: string; live?: number; deals?: number; received?: number; sold?: number };
+      if (error || !res.ok) {
+        return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น'
+          : res.error === 'live_deal' ? `ลบไม่ได้ — มีดีลซื้อขาย/เปลี่ยนใบค้างอยู่ ${res.live ?? ''} รายการ · ยกเลิกดีลก่อน หรือกด "ระงับ" แทน`
+          : res.error === 'market_history' ? `ลบไม่ได้ — มีประวัติซื้อขาย/เปลี่ยนใบ (ดีล ${res.deals ?? 0} · ได้มา ${res.received ?? 0} · ส่งต่อ ${res.sold ?? 0}) ต้องเก็บเป็นหลักฐาน · กด "ระงับ" แทน`
+          : `ลบไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
+      }
     }
+    // บันทึกหลังลบสำเร็จเท่านั้น — เดิมลง log ก่อนเรียก RPC ถ้าลบไม่ผ่าน log จะบอกว่าลบไปแล้ว
+    dispatch(logActivity(adminId, 'purge_user', `ลบสมาชิก ${u.display_name} (${u.phone ?? '-'}) · ใบพรี ${theirs.length} ใบ · รับมาแล้ว ${baht(paid)} · ค้าง ${baht(due)}`, { targetId: u.id, targetLabel: theirs.map((t) => t.ticket_no).join(' ').slice(0, 300), amount: paid }));
     dispatch(removeUser(u.id));
     flash(`ลบ "${u.display_name}" ออกเกลี้ยงแล้ว — ต้องสมัครใหม่`);
     if (openId === u.id) setOpenId(null);
@@ -266,17 +283,38 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
       ? `ตั้งได้สูงสุด ${baht(cap)} — ลูกค้าจ่ายส่วนต่างมาแล้ว ${baht(paidRem)} ตั้งเกินนี้เงินที่จ่ายแล้วจะหาย`
       : `มัดจำต้องอยู่ระหว่าง 0–${baht(total)}`);
     if (dep === t.deposit_paid) { setEditId(null); return; }
-    if (marketLocked(db, t.id)) return flash('ใบนี้ลงขายอยู่ในตลาดใบพรี — ยกเลิกประกาศก่อนถึงแก้มัดจำได้');
-    dispatch(editTicketDeposit(t.id, dep));
+    // โหลดของจริงก่อนแก้ (audit รอบ A R2A-02/R2B-01): หน้าที่เปิดค้างไว้ก่อนดีลเกิดจะไม่รู้ว่าใบนี้ลงขาย/เปลี่ยนมือแล้ว
+    if (!(await store.reload({ safe: true }))) return flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่');
+    const nowDb = store.getState();
+    const cur = nowDb.tickets.find((x) => x.id === t.id);
+    if (!cur || cur.owner_id !== t.owner_id || cur.deposit_paid !== t.deposit_paid || cur.remaining_paid !== t.remaining_paid)
+      return flash(`ตั๋ว ${t.ticket_no} เปลี่ยนไปแล้ว — เช็คยอดใหม่แล้วกรอกอีกครั้ง`);
+    if (marketLocked(nowDb, t.id)) return flash('ใบนี้อยู่ระหว่างซื้อขาย/เปลี่ยนใบในตลาด — ยกเลิกดีลก่อนถึงแก้มัดจำได้');
+    // ตั๋วที่เปลี่ยนมือแล้ว: ยอดมัดจำผูกกับออเดอร์ของคนสั่ง แก้ตรงนี้เงินจะไม่ลงบัญชีใคร (audit R3-16) · เซิร์ฟเวอร์ก็ปฏิเสธ
+    if (ticketTransferred(nowDb, cur)) return flash(`ตั๋ว ${t.ticket_no} เปลี่ยนมือแล้ว แก้มัดจำไม่ได้ — ถ้าเก็บเงินเพิ่ม ให้ลูกค้าส่งสลิปส่วนต่างตามปกติ`);
+    // 2 จังหวะ (review รอบ A): เขียนตั๋วก่อน → ผ่านแล้วค่อยขยับยอดมัดจำในออเดอร์ (ไม่งั้นเซิร์ฟเวอร์ปฏิเสธตั๋วแต่ออเดอร์ขยับไปแล้ว = รายได้เพี้ยน)
+    const delta = dep - cur.deposit_paid;
+    dispatch(editTicketDeposit(t.id, dep, { ticketOnly: true }));
     // read-back: mutation อาจปัดตกเงียบ → ห้ามขึ้น ✓ มั่ว
     let applied = false;
     dispatch((d) => { applied = d.tickets.find((x) => x.id === t.id)?.deposit_paid === dep; return d; });
     if (!applied) return flash('แก้มัดจำไม่สำเร็จ — รีเฟรชแล้วลองใหม่');
-    // การแก้กระจาย 2 ตาราง (ตั๋ว + ออเดอร์) ไม่ atomic → ต้องรู้ผลเซฟ; ห้ามชวน "กดซ้ำ" (delta บน total_deposit ไม่ idempotent)
-    if (await store.flush()) return flash('แก้มัดจำยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรชเช็ค');
+    const pf = await store.flush();
+    if (pf && !isTransientPersistError(pf)) return flash(`แก้มัดจำไม่ได้ — ${friendlyPersistError(pf)}`); // ถูกปฏิเสธ: ออเดอร์ไม่ถูกแตะ
+    // ตั๋วผ่าน (หรือรอลองใหม่ชั่วคราว) → ขยับออเดอร์ตาม delta เดียวกัน (คิวเซฟเดียวกัน ลองใหม่ไปพร้อมกัน)
+    dispatch(syncOrderDepositDelta(t.id, delta));
+    // ห้ามชวน "กดซ้ำ" (delta บน total_deposit ไม่ idempotent)
+    const pf2 = pf ?? (await store.flush());
+    if (pf2) return flash(persistFailText(pf2, 'แก้มัดจำยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรชเช็ค'));
     dispatch(logActivity(adminId, 'edit_deposit', `แก้มัดจำ ${t.ticket_no} ${baht(t.deposit_paid)} → ${baht(dep)} (${user?.display_name ?? ''})`, { targetId: t.id, targetLabel: t.ticket_no, amount: Math.abs(dep - t.deposit_paid) }));
     flash(`แก้มัดจำ ${t.ticket_no} → ${baht(dep)} · ส่วนต่างเหลือ ${baht(total - dep)} ✓`);
     setEditId(null);
+  };
+  const [savingDep, setSavingDep] = useState(false);
+  const saveDepositOnce = async (t: PreorderTicket) => {
+    if (savingDep) return; // กันกดซ้ำระหว่างโหลด/เซฟ (review รอบ A)
+    setSavingDep(true);
+    try { await saveDeposit(t); } finally { setSavingDep(false); }
   };
 
   const del = async (t: PreorderTicket) => {
@@ -284,6 +322,12 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
     // ตั๋วที่เคยผ่านตลาดใบพรี (ขาย/แตกขาย/เป็นตั๋วลูก) ลบไม่ได้ — mutation ปัดตกอยู่แล้ว บอกเหตุผลก่อนให้แอดมินรู้
     if (hasMarketHistory(db, t)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — ใบนี้มีประวัติซื้อขายในตลาดใบพรี (ต้องเก็บเป็นหลักฐาน)`);
     if (!confirm(`ลบตั๋ว ${t.ticket_no} (${product?.series_name ?? ''}) ออกถาวร?\nจะตัดออกจากระบบจริง${product?.is_stock ? ' + คืนสต๊อกสินค้า' : ' (ยอดจองของสินค้านี้จะลดลง)'}`)) return;
+    // โหลดของจริงก่อนลบ (audit รอบ A R2A-02): หน้าที่เปิดค้างไว้ก่อนดีลเกิด ลบตั๋วที่เพิ่งลงขาย/เปลี่ยนมือได้
+    if (!(await store.reload({ safe: true }))) return flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่');
+    const nowDb = store.getState();
+    const cur = nowDb.tickets.find((x) => x.id === t.id);
+    if (!cur) return flash(`ตั๋ว ${t.ticket_no} ไม่อยู่แล้ว`);
+    if (cur.owner_id !== t.owner_id || hasMarketHistory(nowDb, cur)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — ใบนี้เพิ่งลงขาย/เปลี่ยนมือ (ต้องเก็บเป็นหลักฐาน)`);
     // return stock for in-stock items by releasing a matching confirmed/paid hold
     if (product?.is_stock) {
       const res = db.stockReservations.find((r) => r.product_id === t.product_id && r.user_id === userId && (t.batch_id ? r.batch_id === t.batch_id : true) && ['confirmed', 'paid', 'active'].includes(r.status));
@@ -296,7 +340,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
     if (stillThere) return flash(`ลบ ${t.ticket_no} ไม่สำเร็จ — รีเฟรชแล้วลองใหม่`);
     // การลบตั๋วคือการกระทำที่ย้อนกลับไม่ได้ที่สุดในระบบ — ต้องมีร่องรอยเสมอว่าใครลบ ใบไหน ของใคร
     dispatch(logActivity(adminId, 'delete_ticket', `ลบตั๋ว ${t.ticket_no} · ${product?.series_name ?? ''} (${user?.display_name ?? ''})`, { targetId: t.id, targetLabel: t.ticket_no, amount: t.deposit_paid + (t.remaining_paid ?? 0) }));
-    if (await store.flush()) return flash('ลบไม่สำเร็จ — บันทึกไม่ผ่าน ลองใหม่อีกครั้ง');
+    { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'ลบไม่สำเร็จ — บันทึกไม่ผ่าน ลองใหม่อีกครั้ง')); }
     flash(`ลบตั๋ว ${t.ticket_no} แล้ว`);
   };
 
@@ -344,7 +388,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
                       <span className="text-[11.5px] text-ink-faint">ส่วนต่างจะเหลือ {baht(Math.max(0, total - (Number(depStr) || 0)))}{(t.remaining_paid ?? 0) > 0 && <span className="text-[#fbbf24]"> · จ่ายส่วนต่างแล้ว {baht(t.remaining_paid)} → ตั้งได้สูงสุด {baht(total - (t.remaining_paid ?? 0))}</span>}</span>
                       <div className="ml-auto flex gap-1.5">
                         <button onClick={() => setEditId(null)} className="rounded-lg border border-subtle px-3 py-1.5 text-[12px] text-ink-muted2">ยกเลิก</button>
-                        <button onClick={() => saveDeposit(t)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white">บันทึก</button>
+                        <button disabled={savingDep} onClick={() => void saveDepositOnce(t)} className="rounded-lg bg-cta px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">{savingDep ? 'กำลังบันทึก…' : 'บันทึก'}</button>
                       </div>
                     </div>
                   )}

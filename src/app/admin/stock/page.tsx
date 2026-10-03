@@ -23,6 +23,7 @@ import { ticketSourceOf, ticketOrigin } from '@/domain/services/ticketSource';
 import { pendingHeld, poolHeld } from '@/domain/services/reservations';
 import { ticketPaidFull } from '@/domain/services/delivery';
 import { store } from '@/data/store';
+import { persistFailText, isTransientPersistError } from '@/data/persistErrors';
 import { sendPush, subsForNewProduct, subsForUsers, pushEnabled } from '@/lib/push';
 import { warehouseQueue, parseWarehouseText, matchWarehouseRow } from '@/domain/services/warehouse';
 import { ocrImage } from '@/lib/ocr';
@@ -593,7 +594,7 @@ function SurplusGrant({ product: p, remaining, defaultPrice, onDone }: { product
       if (made <= 0) return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที');
       // เซฟไม่ผ่าน: ตั๋วยังอยู่ในเครื่องและระบบจะลองส่งเองใหม่ทุก 5 วิ — ห้ามชวนให้กดมอบซ้ำ
       // (เดิมข้อความสั่งว่า "ลองมอบใหม่อีกครั้ง" = สั่งให้สร้างตั๋วซ้ำ) audit 2026-08-08
-      if (await store.flush()) { setStuck(true); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      { const pf = await store.flush(); if (pf) { if (isTransientPersistError(pf)) setStuck(true); return flash(persistFailText(pf, 'ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค')); } }
       setStuck(false);
       grantKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`; // ครั้งต่อไป = คนละใบ
       dispatch(logActivity(adminId, 'grant_ticket', `มอบตั๋ว ${p.series_name} ×${q} ให้ ${u.display_name} (จากส่วนเกิน · เปิดรอบร่างให้อัตโนมัติ)`, { targetId: p.id, targetLabel: no || p.series_name, amount: depEach * q }));
@@ -692,7 +693,7 @@ function MultiGrant({ batches }: { batches: ProductBatch[] }) {
       const missed = chosen.filter((b) => !gotBatches.has(b.id));
       if (issued.length === 0) { setBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (มีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
       // เซฟไม่ผ่าน = ตั๋วยังอยู่ในเครื่อง + ระบบลองส่งเองทุก 5 วิ → ห้ามชวนให้กดซ้ำ
-      if (await store.flush()) { setMStuck(true); setBusy(false); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองชุด) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      { const pf = await store.flush(); if (pf) { if (isTransientPersistError(pf)) setMStuck(true); setBusy(false); return flash(persistFailText(pf, 'ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองชุด) รอสักครู่แล้วรีเฟรชเช็ค')); } }
       setMStuck(false);
       mKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
       // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่
@@ -1193,7 +1194,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
     dispatch((d) => { moved = before - d.tickets.filter((t) => t.batch_id === b.id && t.product_status === 'production').length; return d; });
     if (before > 0 && moved <= 0) return flash('เปลี่ยนสถานะไม่สำเร็จ — ลองรีเฟรชแล้วกดใหม่');
     // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า/ขึ้น ✓ — push ที่ออกไปแล้วเรียกคืนไม่ได้
-    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ');
+    { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ')); }
     if (p && pushEnabled(db, 'lot_shipping')) {
       const seen = new Set<string>();
       for (const t of tickets.filter((x) => x.product_status === 'production')) {
@@ -1265,7 +1266,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
     dispatch(arriveSpecialRound(b.id));
     // DNA save: เซฟให้ผ่านก่อนค่อย push "ถึงไทยแล้ว" — แจ้งลูกค้าให้มาจ่ายส่วนต่างทั้งที่สถานะ
     // ยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมาแล้วยังเป็น "เดินทาง" กดจ่ายไม่ได้ งงทั้งคู่
-    if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ');
+    { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ')); }
     // push ไปที่ "เครื่องลูกค้า" ไม่ใช่เครื่องแอดมิน — โชว์จำนวนที่ยิงจริง เพื่อให้แอดมินตรวจสอบได้
     let notified = 0, withBell = 0;
     if (p && pushEnabled(db, 'lot_arrived')) {
@@ -1367,7 +1368,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
       });
       if (made <= 0) { setGBusy(false); return flash('มอบตั๋วไม่สำเร็จ — ของไม่พอ (อาจมีลูกค้าอื่นกันไว้อยู่) ลองรีเฟรชแล้วเช็คจำนวนอีกที'); }
       // เซฟไม่ผ่าน = ตั๋วยังอยู่ในเครื่อง + ระบบลองส่งเองทุก 5 วิ → ห้ามชวนให้กดซ้ำ (เดิมสั่ง "ลองมอบใหม่")
-      if (await store.flush()) { setGStuck(true); setGBusy(false); return flash('ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค'); }
+      { const pf = await store.flush(); if (pf) { if (isTransientPersistError(pf)) setGStuck(true); setGBusy(false); return flash(persistFailText(pf, 'ยังบันทึกขึ้นเซิร์ฟเวอร์ไม่ได้ — ระบบกำลังลองใหม่ให้อัตโนมัติ ❗ห้ามกดมอบซ้ำ (จะได้ตั๋วสองใบ) รอสักครู่แล้วรีเฟรชเช็ค')); } }
       setGStuck(false);
       gKey.current = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
       // ร่องรอย: การมอบตั๋วคือ "เงินนอกระบบ" — ต้องรู้ว่าใครมอบ ให้ใคร เมื่อไหร่ รับมัดจำมาเท่าไหร่

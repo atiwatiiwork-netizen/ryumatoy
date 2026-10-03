@@ -1,4 +1,4 @@
-import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo } from '../domain/entities';
+import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo, RemainingPayment } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
 import { nextTicketNo, ticketPrefix, padTicketSeq, unmatchedApprovedItems, canBuySpecialWithLines, HEAL_SETTLE_MS, orderTicketId, isVoidedItem, ticketForItem, pairItemsWithTickets } from '../domain/services/tickets';
@@ -29,7 +29,7 @@ import { minNextBid, stepBands, extendedEnd } from '../domain/services/auctions'
 import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem, holdRow, refundRow, redeemHoldId, REDEEM_KEY, couponRewardRow, POINTS_LAUNCH_KEY, pointsLaunchInfo, launchCorrectionRows, heldPointsFor, redeemRules, redeemKindFor, batchPointsKey, SPECIAL_ROUND_POINT_CHOICES, orderPointsIssue } from '../domain/services/points';
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
-import { marketLocked, hasMarketHistory, depositGap } from '../domain/services/market';
+import { marketLocked, hasMarketHistory, depositGap, ticketTransferred } from '../domain/services/market';
 import { ticketPayer } from '../domain/services/tickets';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -294,6 +294,9 @@ export const repairTickets = () => (db: Database): Database => {
     const live = order.items.filter((i) => !isVoidedItem(i)); // ตั๋วถูกลบไปแล้ว = ตั้งใจให้ไม่มี
     for (const { item, ticket } of pairItemsWithTickets(out.tickets, order.user_id, live, usedIds)) {
       if (ticket) continue;
+      // id ของตั๋วผูกกับรายการ (t-<item>) — ถ้ามีแถว id นี้อยู่แล้ว (จับคู่ผิดใบในเคสสินค้าเดิมหลายออเดอร์ /
+      // ตั๋วเปลี่ยนมือ) ห้ามมินต์ทับ: upsert จะเขียนตั๋วจริงใบนั้นใหม่ทั้งแถว ยอดที่จ่ายแล้วหาย (audit รอบ A R3-01)
+      if (out.tickets.some((t) => t.id === orderTicketId(item.id)) || issued.some((t) => t.id === orderTicketId(item.id))) continue;
       const product = out.products.find((p) => p.id === item.product_id);
       if (!product) continue;
       const abbr = franchiseOf(out, product)?.abbr ?? 'xx';
@@ -1022,6 +1025,16 @@ export const submitRemainingPayment = (ticketId: string, userId: string, amount:
   };
 };
 
+/** สลิปนี้โอนเกินยอดค้างของตั๋วไหม (หลังหักคูปอง/แต้ม/โบนัสยศแบบเดียวกับตอนอนุมัติ) — ใช้ทั้ง mutation และป้ายเตือนหน้าแอดมิน */
+export function rpOverDue(db: Database, pay: RemainingPayment): number {
+  const t = db.tickets.find((x) => x.id === pay.ticket_id);
+  if (!t) return 0;
+  // เทียบกับยอดค้าง "ก่อนโบนัสยศ": โบนัสที่เพิ่งใช้ได้หลังลูกค้าส่งสลิป (ปิดเดือนทีหลัง) ไม่ทำให้สลิปที่จ่ายถูกต้องกลายเป็นโอนเกิน
+  //   — ตอนอนุมัติจะให้โบนัสเป็นแต้มแทนส่วนลด (review รอบ A)
+  const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - heldPointsFor(db, pay.id, pay.points_redeemed));
+  return Math.max(0, Math.round((t.remaining_paid + pay.amount - remaining) * 100) / 100);
+}
+
 /** Admin approves a remaining payment → หักส่วนลดคูปอง (ถ้ามี) + บวกยอดที่จ่าย; ครบแล้วเป็น paid_full. */
 export const approveRemainingPayment = (paymentId: string) => (db: Database): Database => {
   const pay = db.remainingPayments.find((r) => r.id === paymentId);
@@ -1033,18 +1046,25 @@ export const approveRemainingPayment = (paymentId: string) => (db: Database): Da
   const t0 = db.tickets.find((t) => t.id === pay.ticket_id);
   // สลิป "เติมมัดจำเพื่อลงขายตลาด" ไม่ใช่งวดปิดใบ — ห้ามหักโบนัสยศล่วงหน้า (ไม่งั้นส่วนลดของคนขายติดไปกับใบที่ขาย)
   const bonus = t0 && pay.purpose !== 'topup' ? pendingBonusDiscount(db, t0) : 0;
+  // ยอดโอนเกินยอดค้าง (เครื่องเก่าจ่ายยอดก่อนแตกขาย / แอดมินแก้ยอดระหว่างรอตรวจ) → ไม่อนุมัติ (audit รอบ A R3-12):
+  //   เดิม paid ถูกตัดที่ยอดค้าง ส่วนเกินหายเงียบไม่มีร่องรอย · ตัวเรียกต้อง read-back แล้วบอกให้ปฏิเสธ/คืนเงิน
+  if (t0 && rpOverDue(db, pay)) return db;
+  // ลูกค้าจ่ายเต็มยอดก่อนโบนัสยศจะเกิด (ปิดเดือนทีหลัง) → ไม่หักเป็นส่วนลดซ้ำ ให้โบนัสเป็นแต้มแทน (review รอบ A)
+  const bonusAsPoints = !!t0 && bonus > 0
+    && t0.remaining_paid + pay.amount > Math.max(0, t0.remaining_amount - (pay.coupon_discount ?? 0) - heldPointsFor(db, pay.id, pay.points_redeemed) - bonus);
+  const discount = bonusAsPoints ? 0 : bonus;
   const next: Database = {
     ...db,
     remainingPayments: db.remainingPayments.map((r) => (r.id === paymentId ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r)),
     tickets: db.tickets.map((t) => {
       if (t.id !== pay.ticket_id) return t;
       // ส่วนลดคูปอง + แต้ม (v67) + โบนัสยศ มาหักที่นี่ (ไม่ใช่ตอนส่งสลิป) แล้วค่อยบวกเงินที่รับจริง — กันยอดเกิน
-      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - heldPointsFor(db, pay.id, pay.points_redeemed) - bonus);
+      const remaining = Math.max(0, t.remaining_amount - (pay.coupon_discount ?? 0) - heldPointsFor(db, pay.id, pay.points_redeemed) - discount);
       const paid = Math.min(remaining, t.remaining_paid + pay.amount);
       return { ...t, remaining_amount: remaining, remaining_paid: paid, status: paid >= remaining ? 'paid_full' : t.status };
     }),
-    // สมุด: +โบนัส / −ใช้ลดใบนี้ (ยอดคงเหลือไม่เปลี่ยน แต่ลูกค้าเห็นประวัติ) — id ผูกเดือน+ใบ กันซ้ำ
-    pointLedger: bonus > 0 && t0 ? [...bonusRows(db, t0, 'discount', bonus, 'system'), ...db.pointLedger] : db.pointLedger,
+    // สมุด: +โบนัส / −ใช้ลดใบนี้ (ยอดคงเหลือไม่เปลี่ยน แต่ลูกค้าเห็นประวัติ) — id ผูกเดือน+ใบ กันซ้ำ · bonusAsPoints = ได้เป็นแต้ม
+    pointLedger: bonus > 0 && t0 ? [...bonusRows(db, t0, bonusAsPoints ? 'points' : 'discount', bonus, 'system'), ...db.pointLedger] : db.pointLedger,
   };
   // คะแนนสะสม (v66): งวดนี้ทำให้ตั๋ว "ปิดยอด" → ได้คะแนนครั้งเดียว (id ผูกตั๋ว = กันซ้ำ) ในมุทเทชันเดียวกัน
   return mintPointsForTickets([pay.ticket_id])(next);
@@ -1538,6 +1558,8 @@ export const fillMissingTicketsFor = (userId: string, startNos?: TicketNoStart) 
   const allocNo = ticketNoAllocator(db, startNos, new Date());
   const issued: PreorderTicket[] = [];
   for (const { order, item } of missing) {
+    // แถว id เดียวกันมีอยู่แล้ว = ไม่ใช่ตั๋วหาย (จับคู่ผิด/ตั๋วเปลี่ยนมือ) ห้ามมินต์ทับ (audit รอบ A R3-01)
+    if (db.tickets.some((t) => t.id === orderTicketId(item.id)) || issued.some((t) => t.id === orderTicketId(item.id))) continue;
     const product = db.products.find((p) => p.id === item.product_id);
     if (!product) continue;
     const abbr = franchiseOf(db, product)?.abbr ?? 'xx';
@@ -2008,11 +2030,13 @@ export const setStockCond = (productId: string, cond: StockCond) => (db: Databas
 /** Admin edits a ticket's deposit. The TOTAL price is kept constant (deposit + remaining),
  *  so raising the deposit lowers the remaining and vice-versa. e.g. 1500 total, dep 300 →
  *  remaining 1200; set dep 400 → remaining 1100. Clamped to [0, total]. */
-export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: Database): Database => {
+export const editTicketDeposit = (ticketId: string, newDeposit: number, opts: { ticketOnly?: boolean } = {}) => (db: Database): Database => {
   const t0 = db.tickets.find((t) => t.id === ticketId);
   if (!t0) return db;
   // ลงขายอยู่ในตลาด: ผู้ซื้อเห็นยอดค้างของใบนี้บนกระดานแล้ว — ห้ามขยับตัวเลขใต้เท้าดีล (ยกเลิกประกาศก่อน)
   if (marketLocked(db, ticketId)) return db;
+  // เปลี่ยนมือแล้ว: มัดจำผูกออเดอร์ของคนสั่ง แก้บนตั๋วเงินไม่ลงบัญชีใคร (audit รอบ A R3-16 · DB v74 ปฏิเสธเหมือนกัน)
+  if (ticketTransferred(db, t0)) return db;
   // ราคาเต็มของตั๋วตาม snapshot = มัดจำ + ส่วนต่างทั้งก้อน (remaining_paid เป็นส่วนหนึ่งของ
   // remaining_amount อยู่แล้ว จึงไม่บวกซ้ำ) — money audit F4
   const grandTotal = t0.deposit_paid + t0.remaining_amount;
@@ -2036,9 +2060,19 @@ export const editTicketDeposit = (ticketId: string, newDeposit: number) => (db: 
   return mintPointsForTickets([ticketId])({
     ...db,
     tickets: db.tickets.map((t) => (t.id === ticketId ? { ...t, deposit_paid: dep, remaining_amount: remaining, remaining_paid: paid, status } : t)),
-    orders: delta === 0 || !orderId ? db.orders
+    // opts.ticketOnly: ตัวเรียกเซฟตั๋วให้ผ่านก่อน แล้วค่อยเรียก syncOrderDepositDelta (review รอบ A — กันเขียนครึ่งทาง)
+    orders: opts.ticketOnly || delta === 0 || !orderId ? db.orders
       : db.orders.map((o) => (o.id === orderId ? { ...o, total_deposit: Math.max(0, (o.total_deposit ?? 0) + delta) } : o)),
   });
+};
+
+/** ขยับ total_deposit ของออเดอร์ที่ตั๋วใบนี้เกิดมา ตาม delta ของมัดจำ — จังหวะที่ 2 ของการแก้มัดจำ (หลังเซฟตั๋วผ่าน) */
+export const syncOrderDepositDelta = (ticketId: string, delta: number) => (db: Database): Database => {
+  if (!delta) return db;
+  const itemId = ticketId.startsWith('t-') ? ticketId.slice(2) : null;
+  const orderId = itemId ? db.orders.find((o) => o.items.some((it) => it.id === itemId))?.id : undefined;
+  if (!orderId) return db;
+  return { ...db, orders: db.orders.map((o) => (o.id === orderId ? { ...o, total_deposit: Math.max(0, (o.total_deposit ?? 0) + delta) } : o)) };
 };
 
 /** Admin deletes a ticket entirely — removes it + any linked remaining-payments and

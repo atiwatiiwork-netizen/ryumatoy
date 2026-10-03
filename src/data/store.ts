@@ -4,6 +4,7 @@ import { hasSupabase } from './supabaseClient';
 import { supabaseAdapter } from './supabaseAdapter';
 import { SEED_DATABASE } from './seed';
 import { simActive } from '@/lib/sim';
+import { isTransientPersistError, friendlyPersistError } from './persistErrors';
 
 /**
  * The central store — the single runtime source of truth.
@@ -40,6 +41,8 @@ export class Store {
   private saving: Promise<void> = Promise.resolve();
   private pendingSaves = 0; // >0 while a persist is in flight (block idle-reload from clobbering un-synced rows)
   private reloadSeq = 0;
+  private appliedSeq = 0;      // seq ของการโหลดล่าสุดที่ถูกนำมาใช้จริง (reload/reloadIfIdle)
+  private explicitReloads = 0; // reload() ที่กำลังโหลดอยู่ — reloadIfIdle ไม่แซง
   /** คิวที่กำลังอัปโหลดอยู่ + ผลของมัน (ผูกกับ db ชุดนั้นโดยเฉพาะ ไม่ปนกับ flush อื่น) */
   private inflight: { target: Database; done: Promise<string | null> } | null = null;
   /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
@@ -101,15 +104,24 @@ export class Store {
     const base = this.lastSynced;
     this.lastSynced = target;
     this.pendingSaves++;
+    let refetch = false;
     const done = this.saving
       .then(() => withTimeout(this.adapter.persist(target, base), PERSIST_TIMEOUT, 'persist'))
       .then((): string | null => null)
       .catch((err): string | null => {
         console.error('[store] persist failed', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!isTransientPersistError(msg)) {
+          // เซิร์ฟเวอร์ปฏิเสธถาวร (ด่าน ryuma: / RLS / FK) — ส่งซ้ำกี่รอบก็ไม่ผ่าน (audit รอบ A R3-05/R3-06):
+          //   ไม่ย้อนฐาน ไม่วนลองใหม่ → แจ้งครั้งเดียว แล้วโหลดของจริงมาแทน (แถวที่ถูกปฏิเสธกลับเป็นค่าบนเซิร์ฟเวอร์
+          //   แถวอื่นในรอบนี้ขึ้นไปแล้ว) · เดิมวนส่งทุก 5 วิตลอดไป = เครื่องค้าง + เขียนค่าเก่าทับงานใหม่ของคนอื่น
+          this.onPersistError?.(friendlyPersistError(msg));
+          refetch = true;
+          return msg;
+        }
         // rewind so the next change re-attempts these rows instead of treating them as synced
         this.lastSynced = base;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.onPersistError?.(msg);
+        this.onPersistError?.(friendlyPersistError(msg));
         // ⚠ ต้องนัดลองใหม่เสมอ — หลัง rewind จะได้ lastSynced !== db ค้างอยู่ ซึ่งทำให้
         //   reloadIfIdle (ตัวรีเฟรชอัตโนมัติ) ถูกบล็อกถาวร → คิวแอดมินหยุดอัปเดตทั้งแท็บ
         //   แล้วแอดมินทำงานบนข้อมูลเก่าโดยไม่รู้ตัว (ต้นตอของเคสอนุมัติซ้ำ) audit concurrency #10
@@ -119,6 +131,8 @@ export class Store {
       .finally(() => {
         this.pendingSaves--;
         if (this.inflight?.target === target) this.inflight = null;
+        // โหลดของจริงแบบไม่ทับงานที่ผู้ใช้เพิ่งทำระหว่างโหลด (review รอบ A: reload() เต็มๆ ทับ edit ใหม่ได้)
+        if (refetch) void this.reloadIfIdle();
       });
     this.inflight = { target, done };
     this.saving = done.then(() => undefined);
@@ -136,13 +150,22 @@ export class Store {
   // Sequence-guarded: concurrent reloads can race (e.g. the auth-change listener vs
   // an explicit reload right after signup). Only the most-recently-STARTED reload is
   // applied, so a stale in-flight fetch can never clobber fresher data.
-  reload = async (): Promise<void> => {
+  /** คืน true = ได้ข้อมูลล่าสุดจากเซิร์ฟเวอร์แล้ว · false = โหลดไม่สำเร็จ (ยังเป็นข้อมูลเดิม) หรือมี reload ใหม่กว่ามาแทน
+   *  ⚠ ปุ่มที่ต้องตัดสินจากข้อมูลล่าสุด (แอดมินจบงาน/แก้มัดจำ/ลบตั๋ว · หลัง RPC ตลาด) ต้องเช็คค่านี้ (audit รอบ A) */
+  /**
+   * `opts.safe` (ปุ่มแอดมินที่ต้องตัดสินจากข้อมูลล่าสุด): ถ้ามีงานที่ยังเซฟไม่ขึ้น (ค้างลองใหม่) → คืน false โดยไม่โหลดทับ
+   * (review รอบ A: เดิม reload เขียนทับงานที่ค้าง เช่นการอนุมัติที่กำลังรอลองใหม่ แล้วบอกว่า "สดแล้ว")
+   */
+  reload = async (opts: { safe?: boolean } = {}): Promise<boolean> => {
     // ⚠ ต้องเซฟงานที่ค้างอยู่ก่อนเสมอ — reload เขียนทับทั้ง db และ lastSynced
     //   ถ้ามีของที่ยังไม่ขึ้นเซิร์ฟเวอร์ (เพิ่งกดรับเรื่องจัดส่ง/แก้มัดจำ/เริ่มงานหาของ ซึ่งรอ debounce 350ms อยู่)
     //   งานนั้นจะหายไปเงียบๆ แล้ว flush รอบถัดไปจะรายงานว่า "เซฟสำเร็จ" เพราะ lastSynced === db แล้ว
     //   (AuthProvider เรียก reload ตอน resume/ล็อกอิน ซึ่งชนกับการกดปุ่มพอดีได้) audit concurrency #5
-    if (this.lastSynced !== this.db || this.pendingSaves > 0) await this.flush();
+    let preFailed = false;
+    if (this.lastSynced !== this.db || this.pendingSaves > 0) preFailed = !!(await this.flush()) && this.lastSynced !== this.db;
+    if (preFailed && opts.safe) return false;
     const seq = ++this.reloadSeq;
+    this.explicitReloads++;
     let data: Database;
     try {
       data = await withTimeout(this.adapter.load(), LOAD_TIMEOUT, 'reload');
@@ -150,13 +173,22 @@ export class Store {
       console.error('[store] reload failed', err);
       this.ready = true; // don't leave the store un-ready on a stalled reload (would block reloadIfIdle)
       this.emit();
-      return;
+      return false;
+    } finally {
+      this.explicitReloads--;
     }
-    if (seq !== this.reloadSeq) return; // superseded by a newer reload
+    if (seq !== this.reloadSeq) {
+      // มี reload ปุ่มอื่นเริ่มทีหลัง (กดซ้ำ / AuthProvider) — รอมันจบ ถ้ามันโหลดสำเร็จ = ข้อมูลใหม่กว่าที่เราต้องการอยู่แล้ว
+      //   (review รอบ A: เดิมคืน false = ปุ่มแอดมินขึ้น "โหลดไม่สำเร็จ" ทั้งที่ได้ข้อมูลสดแล้ว)
+      for (let i = 0; i < LOAD_TIMEOUT / 50 && this.explicitReloads > 0; i++) await new Promise((r) => setTimeout(r, 50));
+      return this.appliedSeq > seq && !preFailed;
+    }
     this.db = data;
     this.lastSynced = this.db;
+    this.appliedSeq = seq;
     this.ready = true;
     this.emit();
+    return !preFailed;
   };
 
   /** Background auto-refresh (polling / tab-focus). Safe by design: it does NOTHING when there
@@ -167,6 +199,8 @@ export class Store {
     // guard, a poll landing during a persist — when lastSynced === db momentarily — could overwrite
     // rows that haven't finished uploading, losing them.)
     if (!this.ready || this.pendingSaves > 0 || this.lastSynced !== this.db) return;
+    // reload จากปุ่มกำลังโหลดอยู่ → ไม่แซง (review รอบ A: poll 40 วิ/โฟกัสหน้าต่างทำให้ปุ่มแอดมินขึ้น "โหลดไม่สำเร็จ" ปลอม)
+    if (this.explicitReloads > 0) return;
     const before = this.db;
     const seq = ++this.reloadSeq;
     let data: Database;
@@ -178,6 +212,7 @@ export class Store {
     if (seq !== this.reloadSeq || this.db !== before) return; // superseded or a local write landed
     this.db = data;
     this.lastSynced = data;
+    this.appliedSeq = seq;
     this.emit();
   };
 

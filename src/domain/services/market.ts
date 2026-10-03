@@ -84,6 +84,9 @@ export function effectiveStatus(tr: TicketTransfer, now: Date = new Date()): Tic
 /** ป้ายสถานะที่อ่านรู้เรื่องทั้งสองแบบ — ดีลตรงไม่มี "ลงขาย/จอง" มีแต่ "ข้อเสนอ/รอผู้รับโอน" */
 export function dealStatusLabel(tr: TicketTransfer, st: TicketTransfer['status'] = effectiveStatus(tr)): string {
   if (!isDirect(tr)) return TRANSFER_STATUS_LABEL[st];
+  // v75: ผู้รับโอนแล้วแต่ดีลปิดไปก่อน — ร้านเก็บสลิปไว้ รอเคลียร์คืนเงิน (audit รอบ B R1-01)
+  if ((st === 'cancelled' || st === 'expired') && tr.review_reason === 'late_slip') return 'โอนแล้ว · รอร้านเคลียร์คืนเงิน';
+  if ((st === 'cancelled' || st === 'expired') && tr.review_reason === 'late_slip_done') return 'เคลียร์คืนเงินแล้ว';
   if (st === 'reserved') return (tr.asking_price ?? 0) > 0 ? 'รอผู้รับโอนเงิน' : 'รอผู้รับกดรับ';
   if (st === 'paid') return (tr.asking_price ?? 0) > 0 ? 'รอคนส่งเช็คเงิน' : 'รอคนส่งยืนยัน';
   if (st === 'expired') return 'ข้อเสนอหมดเวลา';
@@ -112,6 +115,14 @@ export const marketLocked = (db: Database, ticketId: string, now: Date = new Dat
 export function hasMarketHistory(db: Database, t: PreorderTicket): boolean {
   return !!t.split_from
     || db.transfers.some((tr) => tr.ticket_id === t.id || tr.child_ticket_id === t.id)
+    || db.tickets.some((x) => x.split_from === t.id);
+}
+
+/** ตั๋วนี้ "เปลี่ยนมือจริงแล้ว" (ไฟนอลแล้ว / ถูกแตกขาย / เป็นตั๋วลูก) — แก้มัดจำไม่ได้: มัดจำผูกกับออเดอร์ของคนสั่ง
+ *  แก้บนตั๋วเงินจะไม่ลงบัญชีใคร (audit รอบ A R3-16) · ตรงกับ ryuma_ticket_transferred (SQL v74) */
+export function ticketTransferred(db: Database, t: PreorderTicket): boolean {
+  return !!t.split_from
+    || db.transfers.some((tr) => TRANSFER_DONE.has(tr.status) && (tr.ticket_id === t.id || tr.child_ticket_id === t.id))
     || db.tickets.some((x) => x.split_from === t.id);
 }
 
@@ -241,7 +252,8 @@ export function myDeals(db: Database, uid: string, now: Date = new Date()) {
     todo,
     active: mine.filter((tr) => !isTodo(tr) && DEAL_ACTIVE.includes(st(tr))),
     selling: mine.filter((tr) => !isTodo(tr) && dealRole(tr, uid) === 'seller' && ['listed', 'reserved'].includes(st(tr))),
-    history: mine.filter((tr) => DEAL_DONE.includes(st(tr)) && !(dealRole(tr, uid) === 'buyer' && st(tr) === 'expired')),
+    // ผู้ซื้อ: ซ่อนการจองกระดานที่หมดเวลา (ไม่มีอะไรเกิด) แต่ดีลที่โอนเงินไปแล้วต้องเห็นเสมอ (v75 late slip)
+    history: mine.filter((tr) => DEAL_DONE.includes(st(tr)) && !(dealRole(tr, uid) === 'buyer' && st(tr) === 'expired' && !tr.paid_at)),
   };
 }
 
@@ -277,5 +289,7 @@ export function marketQueue(db: Database, now: Date = new Date()) {
   // v73: ข้อเสนอเปลี่ยนใบที่รอผู้รับ (ดูเฉยๆ ไม่ใช่งานแอดมิน) + สลิปเติมมัดจำรอตรวจ (งานแอดมิน แยกหัวข้อ)
   const offers = live.filter((x) => x.st === 'reserved' && isDirect(x.tr)).map((x) => x.tr);
   const topups = topupQueue(db);
-  return { ready, reviewing, overdue, waiting, offers, topups, jobs: ready.length + reviewing.length + overdue.length + topups.length };
+  // v75: ผู้รับโอนเงินแล้วแต่ดีลปิดไปก่อน (คนส่งถอน/หมดเวลา/ตั๋วเปลี่ยน) — ต้องเคลียร์คืนเงิน (งานแอดมิน · audit รอบ B R1-01)
+  const lateSlips = db.transfers.filter((tr) => tr.review_reason === 'late_slip');
+  return { ready, reviewing, overdue, waiting, offers, topups, lateSlips, jobs: ready.length + reviewing.length + overdue.length + topups.length + lateSlips.length };
 }

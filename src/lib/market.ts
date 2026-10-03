@@ -35,6 +35,8 @@ export type MarketRes = {
   account_name?: string | null;
   new_ticket_no?: string;
   child_ticket_id?: string | null;
+  /** v75: สลิปที่แนบหลังดีลปิด/หมดเวลา ถูกเก็บเป็นหลักฐานให้ร้านแล้ว (ไม่ย้ายตั๋ว) */
+  recorded?: boolean;
 };
 
 /** หนึ่งแถวบนกระดาน (ryuma_market_feed) — ปิดชื่อคนขายแล้ว ยอดเงินเป็นของ "ชิ้นที่ขาย" (แตกขายได้) */
@@ -108,18 +110,23 @@ export type WalletLookupRes = MarketRes & { user_id?: string; name?: string; ava
 export const walletCode = () => call<WalletCodeRes>('ryuma_wallet_code');
 /** เลขกระเป๋า → ผู้รับ (ชื่อ+รูป เพื่อยืนยัน "ใช่คนนี้ไหม") · จำกัด 20 ครั้ง/วัน */
 export const walletLookup = (code: string) => call<WalletLookupRes>('ryuma_wallet_lookup', { p_code: code });
-/** ส่งข้อเสนอเปลี่ยนใบให้เลขกระเป๋านี้ — บัญชีรับเงินถูกล็อกกับดีล (payout_snap) · ผู้รับมี 24 ชม. */
-export const marketOffer = (ticketId: string, qty: number, price: number, code: string, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }) =>
-  call<MarketRes & { to_mask?: string }>('ryuma_market_offer', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_code: code, p_payout: payout });
+/** ส่งข้อเสนอเปลี่ยนใบให้เลขกระเป๋านี้ — บัญชีรับเงินถูกล็อกกับดีล (payout_snap) · ผู้รับมี 24 ชม.
+ *  `expectUser` = user_id ที่ได้จากการค้นเลข (คนที่ยืนยัน "ใช่คนนี้") — เซิร์ฟเวอร์ (v75) ส่งให้เฉพาะเมื่อเลขยังเป็นของคนนั้น
+ *  (กันข้ามเที่ยงคืนแล้วเลขเดิมเป็นของคนแปลกหน้า · audit รอบ B R1-02) · ส่งซ้ำแบบเดิม = ok again (R1-38) */
+export const marketOffer = (ticketId: string, qty: number, price: number, code: string, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }, expectUser: string) =>
+  call<MarketRes & { to_mask?: string }>('ryuma_market_offer', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_code: code, p_payout: payout, p_expect_user: expectUser });
 /** ผู้รับไม่รับข้อเสนอ (ยังไม่โอน) → ดีลปิด ตั๋วปลดล็อก */
 export const marketDecline = (id: string) => call('ryuma_market_decline', { p_id: id });
+/** แอดมินปิดเรื่อง "ผู้รับโอนแล้วแต่ดีลปิดไปก่อน" หลังเคลียร์คืนเงิน (v75) */
+export const marketLateSlipResolve = (id: string, note: string) => call('ryuma_market_late_slip_resolve', { p_id: id, p_note: note });
 
 /**
  * push ของตลาด — ฝั่งนี้ส่งแค่ (id ดีล, ชนิด) · ปลายทาง+ข้อความตัดสินที่ server (ryuma_market_push_targets v72)
  * เพราะลูกค้าไม่เห็นเครื่องของคนอื่น (RLS) และตลาดยังปิด = ส่งถึงแอดมินเท่านั้น · best-effort ห้ามทำให้ดีลพัง
  */
 export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'reviewing' | 'remind' | 'done' | 'sold' | 'cancelled'
-  | 'offer' | 'declined' | 'withdrawn'; // v73 เปลี่ยนใบพรี
+  | 'offer' | 'declined' | 'withdrawn' // v73 เปลี่ยนใบพรี
+  | 'late_slip'; // v75 ผู้รับโอนแล้วแต่ดีลปิดไปก่อน → แจ้งคนส่ง + แอดมิน
 export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
   if (!supabase) return;
   try {
@@ -160,7 +167,7 @@ export const MARKET_ERR_TH: Record<string, string> = {
   reserved: 'มีคนกำลังจองใบนี้อยู่',
   gone: 'ใบนี้ไม่ได้ลงขายแล้ว',
   one_at_a_time: 'จองได้ทีละใบ — จ่ายหรือปล่อยใบที่จองอยู่ก่อน',
-  hold_expired: 'หมดเวลาจองแล้ว — ถ้าโอนเงินไปแล้วกด “ติดต่อร้าน”',
+  hold_expired: 'หมดเวลาแล้ว — ถ้าโอนเงินไปแล้วกด “ติดต่อร้าน”',
   too_early: 'ยังไม่ครบเวลาที่คนขายต้องตอบ',
   not_owner: 'ไม่ใช่ใบของคุณ',
   delivery_chosen: 'เลือกวิธีรับของแล้ว ขายไม่ได้',
@@ -176,5 +183,13 @@ export const MARKET_ERR_TH: Record<string, string> = {
   owner_changed: 'ตั๋วเปลี่ยนเจ้าของไปแล้ว',
   ticket_moving: 'ตั๋วเข้าขั้นตอนจัดส่งแล้ว',
   ticket_missing: 'ไม่พบตั๋วใบนี้',
+  // v75 รอบ B
+  code_changed: 'เลขกระเป๋านี้ไม่ใช่ของคนที่ยืนยันไว้แล้ว (อาจข้ามเที่ยงคืน) — ขอเลขใหม่จากผู้รับแล้วค้นอีกครั้ง',
+  recipient_paying: 'ผู้รับเปิดหน้าโอนเงินแล้ว ถอนเองไม่ได้ — ถ้าจำเป็นให้ติดต่อร้านยกเลิก',
+  withdrawn: 'ข้อเสนอนี้ถูกถอน/ยกเลิกไปแล้ว',
+  use_decline: 'ใช้ปุ่ม "ไม่รับข้อเสนอ" แทน',
+  free_deal: 'ดีลยกให้ฟรีไม่มีเงินให้ตรวจ',
+  // v74 รอบ A: ยอดเงินของใบนี้ไม่ตรงกับตอนตกลงกัน (มีคนแก้ระหว่างดีล) — ต้องยกเลิกดีลแล้วตกลงใหม่
+  ticket_changed: 'ยอดเงินของใบนี้เปลี่ยนไปจากตอนตกลงกัน — ยกเลิกดีลนี้แล้วให้ตกลงใหม่ตามยอดล่าสุด',
 };
 export const marketErrText = (r: MarketRes) => MARKET_ERR_TH[r.error ?? ''] ?? (r.error ? `ทำรายการไม่สำเร็จ (${r.error})` : 'ทำรายการไม่สำเร็จ');

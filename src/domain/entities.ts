@@ -260,6 +260,9 @@ export interface PreorderTicket {
   /** ตั๋วลูกที่ "แตกขาย" ออกจากตั๋วหลายชิ้นในตลาด (v71 · ข้อ 3B) → id ของตั๋วแม่. ตั๋วลูกไม่มีรายการในออเดอร์
    *  ของตัวเอง: เส้นเงินตามแม่เสมอ (ticketRoot) — ห้ามนับเป็นตั๋วมอบ/ตั๋วหาย */
   split_from?: string;
+  /** เลขรุ่นของตั๋ว (v74) — เพิ่มทุกครั้งที่ไฟนอลดีล · แอปส่งค่าที่โหลดมาไปกับทุกการแก้ตั๋ว เซิร์ฟเวอร์ปฏิเสธถ้าไม่ตรง
+   *  (หน้าจอเก่ากว่าไฟนอล) · แอปห้ามเขียนเอง (adapter ใช้เป็น token เท่านั้น) */
+  market_rev?: number;
   created_at: string;
   approved_at?: string;
 }
@@ -300,7 +303,9 @@ export interface TicketTransfer {
   slip_url?: string;        // สลิปที่ผู้ซื้อโอนให้คนขาย
   paid_at?: string;
   seller_confirmed_at?: string;
-  review_reason?: 'seller_silent' | 'not_received' | 'admin';
+  /** 'late_slip' (v75) = ผู้รับโอนเงินแล้วแต่ดีลปิดไปก่อน (คนส่งถอน/หมดเวลา/ตั๋วเปลี่ยน) — เก็บสลิปไว้ รอแอดมินเคลียร์คืนเงิน
+   *  'late_slip_done' = แอดมินเคลียร์แล้ว */
+  review_reason?: 'seller_silent' | 'not_received' | 'admin' | 'late_slip' | 'late_slip_done';
   review_note?: string;
   review_evidence?: string[];
   reviewing_at?: string;
@@ -324,6 +329,8 @@ export interface TicketTransfer {
   kind?: 'market' | 'direct' | null;
   /** บัญชีรับเงินที่ล็อกกับดีลตอนส่งข้อเสนอ (v73) — ผู้รับโอนเข้าบัญชีนี้เสมอ แม้คนขายแก้บัญชีทีหลัง */
   payout_snap?: PayoutInfo | null;
+  /** ผู้รับเปิดดูบัญชีโอนเงินของดีลตรงครั้งแรกเมื่อไหร่ (v75) — หลังจากนี้คนส่งถอนข้อเสนอเองไม่ได้ (กันถอนหลังผู้รับโอนแล้ว) */
+  payout_viewed_at?: string | null;
 }
 
 /** บัญชีรับเงินที่ลูกค้าลงทะเบียนไว้ (users.payout_accounts jsonb · v73) — เลือกใช้ได้ทั้ง "เปลี่ยนใบพรี" และลงขายกระดาน

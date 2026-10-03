@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
-import { setMarketPublic, setMarketDirect, approveRemainingPayment, rejectRemainingPayment, logActivity } from '@/data/mutations';
+import { persistFailText } from '@/data/persistErrors';
+import { setMarketPublic, setMarketDirect, approveRemainingPayment, rejectRemainingPayment, logActivity, rpOverDue } from '@/data/mutations';
 import { baht } from '@/lib/theme';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import * as mk from '@/lib/market';
@@ -61,7 +62,7 @@ export default function AdminMarketPage() {
       if (!ok) return;
     }
     dispatch(setMarketPublic(!isPublic));
-    if (await store.flush()) { flash('บันทึกสวิตช์ไม่สำเร็จ — ลองใหม่'); return; }
+    { const pf = await store.flush(); if (pf) { flash(persistFailText(pf, 'บันทึกสวิตช์ไม่สำเร็จ — ลองใหม่')); return; } }
     flash(isPublic ? 'ปิดกระดานจากฝั่งลูกค้าแล้ว' : 'เปิดกระดานให้ลูกค้าเห็นแล้ว 🎉');
   };
   const toggleDirect = async () => {
@@ -70,7 +71,7 @@ export default function AdminMarketPage() {
       if (!ok) return;
     }
     dispatch(setMarketDirect(!isDirectOn));
-    if (await store.flush()) { flash('บันทึกสวิตช์ไม่สำเร็จ — ลองใหม่'); return; }
+    { const pf = await store.flush(); if (pf) { flash(persistFailText(pf, 'บันทึกสวิตช์ไม่สำเร็จ — ลองใหม่')); return; } }
     flash(isDirectOn ? 'ปิด "เปลี่ยนใบพรี" จากฝั่งลูกค้าแล้ว' : 'เปิด "เปลี่ยนใบพรี" ให้ลูกค้าแล้ว 🎉');
   };
 
@@ -146,11 +147,17 @@ function QueueTab({ db, flash }: { db: Database; flash: Flash }) {
     { title: '⏳ รอคนขายเช็คเงิน', hint: 'ยังอยู่ในเวลา 12 ชม.', rows: q.waiting },
     { title: '📨 ข้อเสนอเปลี่ยนใบ · รอผู้รับ', hint: 'ส่งแล้ว ผู้รับมี 24 ชม. โอน/กดรับ — ไม่ต้องทำอะไร แค่รู้ไว้ (ยกเลิกได้ถ้าจำเป็น)', rows: q.offers },
   ];
-  if (groups.every((g) => g.rows.length === 0) && q.topups.length === 0) {
+  if (groups.every((g) => g.rows.length === 0) && q.topups.length === 0 && q.lateSlips.length === 0) {
     return <div className="rounded-2xl border border-dashed border-white/10 px-4 py-12 text-center text-[13px] text-ink-muted2">ไม่มีดีลที่ต้องจัดการตอนนี้ ✓</div>;
   }
   return (
     <div className="flex flex-col gap-5">
+      {q.lateSlips.length > 0 && (
+        <div>
+          <div className="mb-2"><span className="text-[14px] font-bold">⚠️ ผู้รับโอนแล้วแต่ดีลปิดไปก่อน</span> <span className="text-[12px] text-ink-faint">· คนส่งถอน/หมดเวลา/ตั๋วเปลี่ยน หลังผู้รับโอนเงิน — ติดต่อคนส่งให้คืนเงิน แล้วกดปิดเรื่องพร้อมโน้ต</span></div>
+          <div className="grid gap-3 lg:grid-cols-2">{q.lateSlips.map((tr) => <LateSlipCard key={tr.id} db={db} tr={tr} flash={flash} />)}</div>
+        </div>
+      )}
       {q.topups.length > 0 && (
         <div>
           <div className="mb-2"><span className="text-[14px] font-bold">💰 เติมมัดจำ · รอตรวจสลิป</span> <span className="text-[12px] text-ink-faint">· ลูกค้าเติมมัดจำให้ครบก่อนเปลี่ยนใบ/ลงขาย — เงินเข้าร้าน หักจากส่วนต่าง (ไม่ใช่งวดปิดใบ)</span></div>
@@ -163,6 +170,39 @@ function QueueTab({ db, flash }: { db: Database; flash: Flash }) {
           <div className="grid gap-3 lg:grid-cols-2">{g.rows.map((tr) => <DealAdminCard key={tr.id} db={db} tr={tr} flash={flash} />)}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** ผู้รับโอนเงินแล้วแต่ดีลปิดไปก่อน (v75 · audit รอบ B R1-01) — เงินอยู่กับคนส่ง ร้านไม่ได้ถือเงิน: แอดมินติดต่อให้คืน แล้วปิดเรื่อง
+ *  ไม่ย้ายตั๋ว ไม่เปิดดีลใหม่ (ถ้าจะเปลี่ยนใบกันจริง ให้คนส่งส่งข้อเสนอใหม่) */
+function LateSlipCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; flash: Flash }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const t = db.tickets.find((x) => x.id === tr.ticket_id);
+  const safeSlip = tr.slip_url && /^https?:\/\//i.test(tr.slip_url) ? tr.slip_url : null;
+  const resolve = async () => {
+    if (busy || !note.trim()) return;
+    setBusy(true);
+    const r = await mk.marketLateSlipResolve(tr.id, note.trim());
+    setBusy(false);
+    if (!r.ok) return flash(mk.marketErrText(r));
+    const fresh = await store.reload();
+    flash(fresh ? 'ปิดเรื่องแล้ว ✓' : 'ปิดเรื่องแล้ว ✓ · ⚠ โหลดข้อมูลใหม่ไม่สำเร็จ รีเฟรชหน้า');
+  };
+  return (
+    <div className="rounded-2xl border border-[#fbbf24]/40 bg-surface-2 p-4">
+      <div className="flex gap-3">
+        {safeSlip ? <a href={safeSlip} target="_blank" rel="noreferrer" className="shrink-0"><img src={safeSlip} alt="สลิป" className="h-20 w-14 rounded-lg bg-white object-cover" /></a> : <div className="grid h-20 w-14 shrink-0 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
+        <div className="min-w-0 flex-1 text-[12.5px]">
+          <div className="truncate text-[13.5px] font-bold">{tr.product_id ? productLabel(db, tr.product_id, tr.variant_id) : '—'}</div>
+          <div className="font-mono text-[11px] text-primary-soft">{t?.ticket_no ?? tr.ticket_id}</div>
+          <div className="mt-1">ผู้รับ <b>{who(db, tr.to_user_id)}</b> โอน <b className="font-mono">{baht(tr.asking_price)}</b> ให้ <b>{who(db, tr.from_user_id)}</b> · {fmt(tr.paid_at)}</div>
+          <div className="text-ink-faint">ดีล{dealStatusLabel(tr, effectiveStatus(tr))}{tr.cancel_reason ? ` (${tr.cancel_reason === 'seller' ? 'คนส่งถอน' : tr.cancel_reason === 'ticket_changed' ? 'ตั๋วเปลี่ยนระหว่างดีล' : tr.cancel_reason === 'buyer_declined' ? 'ผู้รับกดไม่รับ' : tr.cancel_reason.replace(/^admin: /, '')})` : ''}</div>
+        </div>
+      </div>
+      <input id={`late-${tr.id}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="โน้ตปิดเรื่อง เช่น คนส่งคืนเงินแล้ว แนบสลิปคืนทางไลน์" className="mt-3 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none" />
+      <button type="button" disabled={busy || !note.trim()} onClick={() => void resolve()} className="mt-2 w-full rounded-lg bg-success py-2 text-[13px] font-bold text-white disabled:opacity-50">เคลียร์แล้ว · ปิดเรื่อง</button>
     </div>
   );
 }
@@ -181,11 +221,15 @@ function TopupCard({ db, rp, flash }: { db: Database; rp: RemainingPayment; flas
     dispatch(approve ? approveRemainingPayment(rp.id) : rejectRemainingPayment(rp.id));
     let changed = false;
     dispatch((d) => { const x = d.remainingPayments.find((r) => r.id === rp.id); changed = approve ? x?.status === 'approved' : !x; return d; });
-    if (!changed) { setBusy(false); return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที'); }
+    if (!changed) {
+      setBusy(false);
+      const over = approve ? rpOverDue(store.getState(), rp) : 0;
+      return flash(over > 0 ? `อนุมัติไม่ได้ — ยอดสลิปเกินยอดค้างของตั๋ว ${baht(over)} · ปฏิเสธแล้วให้ลูกค้าส่งใหม่ตามยอดจริง` : 'รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+    }
     dispatch(logActivity('admin', approve ? 'approve_topup' : 'reject_topup', `${approve ? 'อนุมัติ' : 'ปฏิเสธ'}สลิปเติมมัดจำ ${t?.ticket_no ?? rp.ticket_id} · ${baht(rp.amount)} (${u?.display_name ?? ''})`, { targetId: rp.ticket_id, targetLabel: t?.ticket_no, amount: rp.amount }));
     const failed = await store.flush();
     setBusy(false);
-    if (failed) return flash('ทำแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ');
+    if (failed) return flash(persistFailText(failed, 'ทำแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ'));
     if (approve && pushEnabled(db, 'rp_approved'))
       sendPush(subsForUsers(db, [rp.user_id]), { title: '💚 รับยอดเติมมัดจำแล้ว', body: `${t?.ticket_no ?? ''} มัดจำครบแล้ว — กลับไปเปลี่ยนใบ/ลงขายได้เลย`, url: t ? `/wallet/${encodeURIComponent(t.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
     flash(approve ? `รับยอดเติมมัดจำ ${baht(rp.amount)} แล้ว ✓` : 'ปฏิเสธสลิปแล้ว');
@@ -257,9 +301,11 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
     const r = await fn();
     setBusy(false);
     if (!r.ok) { flash(mk.marketErrText(r)); return; }
-    await store.reload();
+    // ต้องได้ข้อมูลใหม่จริงหลัง RPC (audit รอบ A R2A-01 ทาง c): เดิมโหลดพลาดเงียบ แท็บนี้ยังถือตั๋วรุ่นก่อนไฟนอล
+    //   แล้วงานถัดไปบนแท็บนี้เขียนทับผลไฟนอล — ตอนนี้เซิร์ฟเวอร์ (v74) ปฏิเสธแล้ว แต่ต้องบอกแอดมินให้รีเฟรช
+    const fresh = await store.reload();
     after?.(r);
-    flash(okMsg);
+    flash(fresh ? okMsg : `${okMsg} · ⚠ โหลดข้อมูลใหม่ไม่สำเร็จ รีเฟรชหน้าก่อนทำอย่างอื่น`);
   };
   const finalize = () => act(() => mk.marketFinalize(tr.id, orderItemIdFor(db, tr.ticket_id)), `โอนสิทธิ์แล้ว ✓ ใบเข้ากระเป๋า${buyerWord}`, () => {
     void mk.marketPush(tr.id, 'done'); void mk.marketPush(tr.id, 'sold');
@@ -288,8 +334,9 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}
       </div>
       <div className="mt-3 flex gap-2 overflow-x-auto">
-        {tr.slip_url && <a href={tr.slip_url} target="_blank" rel="noreferrer" className="shrink-0 text-center text-[10.5px] text-ink-faint"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" />สลิป{buyerWord}</a>}
-        {(tr.review_evidence ?? []).map((u) => <a key={u} href={u} target="_blank" rel="noreferrer" className="shrink-0 text-center text-[10.5px] text-ink-faint"><img src={u} alt="หลักฐาน" className="h-24 w-[68px] rounded-lg bg-white object-cover" />หลักฐานคนขาย</a>)}
+        {/* เฉพาะลิงก์ http(s) — กันค่าแปลกๆ (javascript:) ที่ลูกค้ายิง RPC ตรงเข้ามา (audit รอบ B R1-16) */}
+        {tr.slip_url && /^https?:\/\//i.test(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer" className="shrink-0 text-center text-[10.5px] text-ink-faint"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" />สลิป{buyerWord}</a>}
+        {(tr.review_evidence ?? []).filter((u) => /^https?:\/\//i.test(u)).map((u) => <a key={u} href={u} target="_blank" rel="noreferrer" className="shrink-0 text-center text-[10.5px] text-ink-faint"><img src={u} alt="หลักฐาน" className="h-24 w-[68px] rounded-lg bg-white object-cover" />หลักฐานคนขาย</a>)}
       </div>
       {st !== 'reserved' && (
         <ul className="mt-3 space-y-1">

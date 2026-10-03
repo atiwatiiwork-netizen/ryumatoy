@@ -10,12 +10,13 @@ import { useToast } from '@/state/ToastProvider';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
-import { approveRemainingPayment, rejectRemainingPayment, logActivity } from '@/data/mutations';
+import { approveRemainingPayment, rejectRemainingPayment, logActivity, rpOverDue } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
 import { lineImage } from '@/domain/services/catalog';
 import { ticketSourceOf } from '@/domain/services/ticketSource';
 import { cx } from '@/components/ui';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { pendingRpGroups, type RpGroup } from '@/domain/services/payments';
 import { heldPointsFor, orderPointsIssue } from '@/domain/services/points';
@@ -62,16 +63,20 @@ export default function OrdersHubPage() {
         });
         if (ok) applied.push(r);
       }
-      if (applied.length === 0) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
+      // สลิปที่โอนเกินยอดค้าง (เครื่องเก่าจ่ายยอดก่อนแตกขาย ฯลฯ) ถูก mutation ปัดตก — บอกให้ชัด ไม่ใช่ "ถูกจัดการไปแล้ว" (audit รอบ A R3-12)
+      const over = rps.filter((r) => !applied.includes(r)).map((r) => ({ r, over: rpOverDue(store.getState(), r) })).filter((x) => x.over > 0);
+      const overMsg = over.length ? `อนุมัติไม่ได้ ${over.length} ใบ — ยอดสลิปเกินยอดค้าง (${over.map((x) => `${ticketOf(x.r.ticket_id)?.ticket_no ?? ''} เกิน ${baht(x.over)}`).join(', ')}) · ปฏิเสธใบนั้นแล้วให้ลูกค้าส่งใหม่ตามยอดจริง` : '';
+      if (applied.length === 0) { flash(overMsg || 'รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที'); return; }
       // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "รับยอดแล้ว" — push ที่ออกไปเรียกคืนไม่ได้
-      if (await store.flush()) return flash('อนุมัติแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+      { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'อนุมัติแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช')); }
       const nos = applied.map((r) => ticketOf(r.ticket_id)?.ticket_no ?? '').filter(Boolean);
       const first = ticketOf(applied[0].ticket_id);
       if (pushEnabled(db, 'rp_approved'))
         sendPush(subsForUsers(db, [applied[0].user_id]), { title: '💚 รับยอดส่วนต่างแล้ว', body: `${nos.join(', ')} ${allFull ? 'ชำระครบ — เลือกวิธีรับของได้เลย' : 'รับยอดแล้ว — เช็คยอดคงเหลือในตั๋ว'}`, url: applied.length === 1 && first ? `/wallet/${encodeURIComponent(first.ticket_no)}` : '/wallet' }, dispatch).catch(() => {});
       const total = applied.reduce((s, r) => s + r.amount, 0);
       dispatch(logActivity(adminId, 'approve_rp', `อนุมัติสลิปส่วนต่าง ${applied.length > 1 ? `${applied.length} ใบ ` : ''}(${userName(applied[0].user_id)})`, { targetId: applied[0].ticket_id, targetLabel: nos.join(' '), amount: total }));
-      flash(applied.length > 1 ? `อนุมัติส่วนต่างแล้ว ${applied.length} ใบ` : 'อนุมัติส่วนต่างแล้ว');
+      // ข้อความเดียว (toast มีช่องเดียว) — เดิมคำเตือนใบที่โอนเกินถูกข้อความสำเร็จทับทันที (review รอบ A)
+      flash(`${applied.length > 1 ? `อนุมัติส่วนต่างแล้ว ${applied.length} ใบ` : 'อนุมัติส่วนต่างแล้ว'}${overMsg ? ` · ⚠ ${overMsg}` : ''}`);
     } finally { setRpBusy(null); }
   };
 
@@ -91,7 +96,7 @@ export default function OrdersHubPage() {
       }
       if (applied.length === 0) return flash('รายการนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — รีเฟรชหน้าเช็คอีกที');
       // DNA save: เซฟให้ผ่านก่อนค่อยบอกลูกค้า "สลิปไม่ผ่าน ส่งใหม่" — ถ้าเซฟไม่ขึ้น ลูกค้าส่งใหม่ไม่ได้ (สลิปเดิมยังค้าง)
-      if (await store.flush()) return flash('ปฏิเสธแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช');
+      { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'ปฏิเสธแล้วในเครื่องนี้ แต่ยังบันทึกไม่ขึ้น — ระบบลองใหม่ให้เอง ❗ห้ามกดซ้ำ รอสักครู่แล้วรีเฟรช')); }
       const nos = applied.map((r) => ticketOf(r.ticket_id)?.ticket_no ?? '').filter(Boolean);
       if (pushEnabled(db, 'order_rejected'))
         sendPush(subsForUsers(db, [applied[0].user_id]), { title: '❌ สลิปส่วนต่างไม่ผ่าน', body: `${nos.join(', ')} — ยอด/สลิปไม่ถูกต้อง ส่งใหม่อีกครั้งได้เลย`, url: '/wallet' }, dispatch).catch(() => {});
@@ -306,6 +311,9 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
           <div className="flex flex-wrap items-center gap-x-2 text-sm font-semibold">
             <span>{userName(g.userId)}</span>
             <span>· ยอดโอน <span className="text-primary-soft">{baht(g.total)}</span></span>
+            {/* ยอดค้างจริงตอนนี้ + เตือนถ้าสลิปโอนเกิน (audit รอบ A R3-12: เดิมเห็นแค่ยอดโอน ส่วนเกินหายเงียบตอนอนุมัติ) */}
+            {!multi && (() => { const tk = ticketOf(g.rps[0].ticket_id); return tk ? <span className="text-[12px] font-normal text-ink-faint">· ค้างจริง {baht(Math.max(0, tk.remaining_amount - tk.remaining_paid))}</span> : null; })()}
+            {g.rps.some((r) => rpOverDue(db, r) > 0) && <span className="rounded-md bg-[#b91c1c]/25 px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#f87171]">⚠ โอนเกินยอดค้าง {baht(g.rps.reduce((s, r) => s + rpOverDue(db, r), 0))} — อนุมัติไม่ได้ ให้ปฏิเสธ</span>}
             {g.couponOff > 0 && <span className="text-[#4ade80]">· คูปอง −{baht(g.couponOff)}</span>}
             {/* แต้มที่ลูกค้าใช้ลดในสลิปนี้ — แอดมินต้องเห็นก่อนอนุมัติ (audit 2026-09-23: เดิมไม่โชว์เลย) */}
             {g.rps.some((r) => (r.points_redeemed ?? 0) > 0) && <span className="font-bold text-[#f1d27a]">· ⭐ ใช้แต้ม −{baht(g.rps.reduce((s, r) => s + (r.points_redeemed ?? 0), 0))}</span>}

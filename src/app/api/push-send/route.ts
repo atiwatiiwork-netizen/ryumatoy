@@ -48,6 +48,25 @@ async function callerUid(req: Request): Promise<string | null> {
   } catch { return null; }
 }
 
+/** ผู้เรียกเป็นแอดมินไหม — อ่านแถว users ของตัวเองด้วย token ของผู้เรียก (RLS users_own ให้อ่านแถวตัวเองได้)
+ *  + รายชื่อแอดมินใน env (สูตรเดียวกับ isAdminUser) · อ่านไม่ได้ = ไม่ใช่แอดมิน (ปิดไว้ก่อน) */
+async function callerIsAdmin(req: Request, authUid: string): Promise<boolean> {
+  const envIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '08809e6a-cfd1-4d57-a8f1-06a133bd2df6').split(',').map((s) => s.trim()).filter(Boolean);
+  if (envIds.includes(authUid)) return true;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const token = (req.headers.get('authorization') ?? '').slice(7).trim();
+  if (!url || !anon || !token) return false;
+  try {
+    const r = await fetch(`${url}/rest/v1/users?select=id,is_admin&auth_id=eq.${encodeURIComponent(authUid)}`, {
+      headers: { apikey: anon, Authorization: `Bearer ${token}` }, cache: 'no-store',
+    });
+    if (!r.ok) return false;
+    const rows = (await r.json()) as { id?: string; is_admin?: boolean }[];
+    return rows.some((u) => u.is_admin === true || (!!u.id && envIds.includes(u.id)));
+  } catch { return false; }
+}
+
 export async function POST(req: Request) {
   const priv = process.env.VAPID_PRIVATE_KEY;
   if (!priv) return NextResponse.json({ error: 'VAPID_PRIVATE_KEY not set' }, { status: 503 });
@@ -95,6 +114,13 @@ export async function POST(req: Request) {
       auctionMode = { subs: targets, payload: { title: d.title, body: d.body ?? '', url: d.url ?? '/' } };
     } catch { return NextResponse.json({ sent: 0, gone: [] }); }
   }
+
+  // 🔒 โหมด "ระบุเครื่อง + ข้อความเอง" ใช้ได้เฉพาะแอดมิน (audit รอบ B R1-04 · 2026-10-03):
+  //   RPC ฝั่งตลาด/ประมูลต้องคืน endpoint ให้ route นี้ ลูกค้าจึงเรียก RPC ตรงแล้วได้ endpoint ของคู่ดีล/แอดมินไปได้
+  //   endpoint อย่างเดียวยิงเองไม่ได้ (ต้องเซ็นด้วย VAPID private key ที่อยู่แค่ที่นี่) — ช่องที่เหลือคือ route นี้รับ subs+ข้อความ
+  //   อะไรก็ได้จากลูกค้าทุกคน → ปิด: ลูกค้าใช้ได้เฉพาะโหมดที่เซิร์ฟเวอร์เลือกปลายทาง+ข้อความเอง (market/auction ด้านบน)
+  //   (ลูกค้าเดิมใช้โหมดนี้แค่ "หาของ → แจ้งแอดมิน" ซึ่ง RLS ไม่ให้เห็นเครื่องแอดมินอยู่แล้ว = ส่งไม่ออกตั้งแต่ก่อนแก้)
+  if (!auctionMode && !(await callerIsAdmin(req, uid))) return NextResponse.json({ error: 'admin_only' }, { status: 403 });
 
   const subs = auctionMode ? auctionMode.subs : (body.subs ?? []).filter((s) => s?.endpoint && s?.p256dh && s?.auth).slice(0, 500);
   const payload = auctionMode ? auctionMode.payload : (body.payload ?? {});

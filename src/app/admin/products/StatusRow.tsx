@@ -17,6 +17,7 @@ import { TicketQr, cx } from '@/components/ui';
 import { franchiseOf, orderedQtyOf } from '@/domain/services/catalog';
 import { productAwaitingWarehouse } from '@/domain/services/warehouse';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { sendPush, subsForProductOwners, statusPushPayload, pushEnabled } from '@/lib/push';
 import { setProductStatus, closeProduction } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
@@ -50,7 +51,7 @@ export function StatusRow({ product: p }: { product: Product }) {
     dispatch(setProductStatus(p.id, next, extra));
     // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า/ขึ้น ✓ — push "ถึงไทย มาจ่ายส่วนต่าง" ที่ออกไปทั้งที่
     // สถานะยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมายังเป็นสถานะเดิม กดจ่ายไม่ได้ (audit 2026-08-08)
-    if (await store.flush()) { flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ'); return; }
+    { const pf = await store.flush(); if (pf) { flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ')); return; } }
     // notify this lot's buyers when it starts moving / lands (ryuma push spec 4.1/4.2)
     // ⚠ push ไปที่ "เครื่องลูกค้า" ไม่ใช่เครื่องแอดมิน — แอดมินจึงไม่เห็นแจ้งเตือนเอง (เจ้าของ 2026-08-16
     //   เข้าใจผิดว่า push ไม่ทำงาน). โชว์จำนวนที่ยิงจริงในข้อความ เพื่อให้แอดมินตรวจสอบได้ว่าส่งแล้ว

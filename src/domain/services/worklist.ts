@@ -210,6 +210,29 @@ export function dataIssues(db: Database): DataIssue[] {
     rows: emptyOrders.map((o) => ({ id: o.id, label: `#${o.id.slice(-6)}`, sub: U(o.user_id) })),
   });
 
+  // 8) ดีลซื้อขาย/เปลี่ยนใบไฟนอลแล้ว แต่ตั๋วไม่ได้อยู่กับผู้รับ (audit รอบ A R2A-01: เดิมหน้าจอเก่าเขียนทับผลไฟนอลได้เงียบๆ
+  //    v74 กันที่ฐานข้อมูลแล้ว — ตัวนี้เป็นสัญญาณเตือนถ้ามีทางอื่นหลุดมา) · ดูดีลล่าสุดของตั๋วแต่ละใบ (ส่งต่อเป็นทอดได้)
+  const lastDone = new Map<string, Database['transfers'][number]>();
+  for (const tr of db.transfers) {
+    if (tr.status !== 'done' && tr.status !== 'approved') continue;
+    const tid = tr.child_ticket_id || tr.ticket_id;
+    const prev = lastDone.get(tid);
+    if (!prev || (tr.approved_at ?? '') > (prev.approved_at ?? '')) lastDone.set(tid, tr);
+  }
+  const wrongHolder = [...lastDone.entries()].filter(([tid, tr]) => {
+    const t = db.tickets.find((x) => x.id === tid);
+    return !t || t.owner_id !== tr.to_user_id;
+  });
+  if (wrongHolder.length) out.push({
+    key: 'transfer_owner', severity: 'high', fix: 'none',
+    title: 'ดีลไฟนอลแล้วแต่ตั๋วไม่อยู่กับผู้รับ',
+    why: 'ผู้รับจ่ายเงินแล้วแต่ไม่มีตั๋ว หรือตั๋วถูกลบ/ย้ายกลับ — เช็คประวัติดีลแล้วแจ้งทีมแก้ข้อมูล ห้ามให้คนขายขายซ้ำ',
+    rows: wrongHolder.map(([tid, tr]) => {
+      const t = db.tickets.find((x) => x.id === tid);
+      return { id: tr.id, label: tr.new_ticket_no ?? t?.ticket_no ?? tid, sub: t ? `ผู้รับ ${U(tr.to_user_id ?? '')} · ตอนนี้อยู่กับ ${U(t.owner_id)}` : `ผู้รับ ${U(tr.to_user_id ?? '')} · ไม่พบตั๋ว` };
+    }),
+  });
+
   const rank = { high: 0, mid: 1, low: 2 };
   return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
 }

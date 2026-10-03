@@ -13,6 +13,7 @@ import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice, resolveShi
 import { marketLocked } from '@/domain/services/market';
 import { acceptDelivery, chooseDelivery, closeDelivery, markShippedOffline, setParcel, logActivity } from '@/data/mutations';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { LabelSheet } from '../orders/LabelSheet';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
@@ -55,8 +56,9 @@ export default function ShippingPage() {
 
   // DNA save: เซฟให้ผ่านก่อนค่อย push/ขึ้น ✓ — push ที่ออกไปแล้วเรียกคืนไม่ได้ (audit 2026-08-08)
   const commit = async () => {
-    if (!(await store.flush())) return true;
-    flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค');
+    const pf = await store.flush();
+    if (!pf) return true;
+    flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค'));
     return false;
   };
 
@@ -276,7 +278,7 @@ function TrackRow({ ticket }: { ticket: PreorderTicket }) {
       dispatch((d) => { const x = d.tickets.find((tt) => tt.id === ticket.id); applied = x?.status === 'shipped' && x.parcel_no === no.trim(); return d; });
       if (!applied) return flash('ตั๋วนี้ถูกจัดส่งไปแล้ว — ตรวจหน้าอีกครั้ง');
       // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งเลขพัสดุ — เลขที่ push ไปแล้วแต่เซฟไม่ขึ้น = ตั๋วลูกค้าไม่มีเลขให้กดตาม
-      if (await store.flush()) return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค');
+      { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็ค')); }
       const cLabel = CARRIERS.find((c) => c.key === carrier)?.label ?? carrier;
       // push "ส่งแล้ว" ให้ลูกค้าทันทีหลังกรอกเลข (เจ้าของ 2026-07-23 ข้อ 3)
       if (pushEnabled(db, 'parcel'))
