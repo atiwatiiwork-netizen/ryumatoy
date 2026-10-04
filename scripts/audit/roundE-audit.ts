@@ -36,6 +36,10 @@ const base = (over: Partial<Database>): Database => ({ ...structuredClone(SEED_D
   ok('D1 มีดีลค้าง → ยังเข้าหน้าดีลได้แม้ปิดสวิตช์ (R1-12)', hasLiveDeal(db, 'uB') && hasLiveDeal(db, 'uA') && !hasLiveDeal(db, 'uC'));
   ok('D2 แบนเนอร์ข้อเสนอเข้าในกระเป๋า: เฉพาะข้อเสนอที่ยังรอตอบ (R3-07)', incomingOffers(db, 'uB').map((x) => x.id).join() === 'live');
   ok('D3 ข้อเสนอหมดเวลา ผู้รับยังเห็นในประวัติ (R1-36)', myDeals(db, 'uB').history.some((x) => x.id === 'exp'));
+  const dbL = base({ transfers: [tr({ id: 'gone', hold_until: ago(30), expires_at: ago(30), updated_at: ago(30) })] });
+  const dbOld = base({ transfers: [tr({ id: 'old', hold_until: ago(400), expires_at: ago(400), updated_at: ago(400) })] });
+  ok('D4 ผู้รับข้อเสนอมีเงินที่เพิ่งหมดเวลา (ยังไม่แนบสลิป) ยังเข้าหน้าดีลได้แม้ปิดสวิตช์ — ไว้แนบสลิปแจ้งร้าน · เกิน 7 วันไม่นับ',
+    hasLiveDeal(dbL, 'uB') && !hasLiveDeal(dbL, 'uA') && !hasLiveDeal(dbOld, 'uB'));
 }
 
 // ── ปิดรอบ: ตั๋วรอบพิเศษแบบมัดจำที่ค้าง 'open' ตามไปผลิต (R2B-18) ─────────────────────────────

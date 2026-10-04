@@ -70,7 +70,7 @@ export default function AdminMembersPage() {
     if (supabase) {
       const { data, error } = await supabase.rpc('ryuma_admin_purge_user', { p_user_id: u.id });
       const res = (data ?? {}) as { ok?: boolean; error?: string };
-      if (error || !res.ok) return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : `ปฏิเสธไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
+      if (error || !res.ok) return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น' : res.error === 'admin_target' || res.error === 'self' ? 'บัญชีแอดมินลบ/ปฏิเสธไม่ได้ — กดอนุมัติแทน' : `ปฏิเสธไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
     }
     dispatch(removeUser(u.id));
     flash('ปฏิเสธ + ลบคำขอแล้ว · เบอร์/FB ว่างให้สมัครใหม่ได้');
@@ -104,6 +104,8 @@ export default function AdminMembersPage() {
       const res = (data ?? {}) as { ok?: boolean; error?: string; live?: number; deals?: number; received?: number; sold?: number };
       if (error || !res.ok) {
         return flash(res.error === 'not_admin' ? 'ต้องเป็นแอดมินเท่านั้น'
+          : res.error === 'self' ? 'ลบบัญชีของตัวเองไม่ได้'
+          : res.error === 'admin_target' ? 'ลบบัญชีแอดมินไม่ได้ — ถอดสิทธิ์แอดมินก่อน'
           : res.error === 'live_deal' ? `ลบไม่ได้ — มีดีลซื้อขาย/เปลี่ยนใบค้างอยู่ ${res.live ?? ''} รายการ · ยกเลิกดีลก่อน หรือกด "ระงับ" แทน`
           : res.error === 'market_history' ? `ลบไม่ได้ — มีประวัติซื้อขาย/เปลี่ยนใบ (ดีล ${res.deals ?? 0} · ได้มา ${res.received ?? 0} · ส่งต่อ ${res.sold ?? 0}) ต้องเก็บเป็นหลักฐาน · กด "ระงับ" แทน`
           : `ลบไม่สำเร็จ: ${error?.message ?? res.error ?? 'error'}`);
@@ -142,7 +144,8 @@ export default function AdminMembersPage() {
         <div className="mb-3 flex items-center gap-2 text-base font-bold text-ink"><Icon name="bell" size={18} className="text-[#fbbf24]" /> <span>รออนุมัติ</span> <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{pending.length}</span></div>
         {pending.length === 0 ? <div className="py-3 text-[13px] text-ink-faint">ไม่มีสมาชิกรออนุมัติ 🎉</div> : (
           <div className="flex flex-col gap-2.5">
-            {pending.map((u) => <PendingRow key={u.id} u={u} onApprove={() => approve(u)} onReject={() => reject(u)} />)}
+            {/* บัญชีแอดมินที่ยังไม่อนุมัติ: อนุมัติได้อย่างเดียว ห้ามมีปุ่มปฏิเสธ (= ลบบัญชีถาวร · review รอบ E) */}
+            {pending.map((u) => <PendingRow key={u.id} u={u} onApprove={() => approve(u)} onReject={u.is_admin ? undefined : () => reject(u)} />)}
           </div>
         )}
       </div>
@@ -407,7 +410,7 @@ const STATUS_LABEL: Record<string, string> = { open: 'เปิดจอง', pr
 
 // Pending-approval row. FB present → clickable verify link; FB missing → admin can paste the link
 // the customer sends (handles a stale cached signup build that didn't capture it).
-function PendingRow({ u, onApprove, onReject }: { u: User; onApprove: () => void; onReject: () => void }) {
+function PendingRow({ u, onApprove, onReject }: { u: User; onApprove: () => void; onReject?: () => void }) {
   const dispatch = useDispatch();
   const { flash } = useToast();
   const [editing, setEditing] = useState(false);
@@ -434,7 +437,7 @@ function PendingRow({ u, onApprove, onReject }: { u: User; onApprove: () => void
             : <button onClick={() => setEditing(true)} className="mt-0.5 text-[11px] font-semibold text-[#fbbf24] hover:underline">⚠️ ไม่ได้ให้ FB — แตะเพื่อเพิ่ม/ตรวจสอบ</button>}
       </div>
       <div className="flex shrink-0 gap-2">
-        <button onClick={onReject} className="rounded-[9px] border border-[#f87171]/50 bg-[#f87171]/[0.08] px-3 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>
+        {onReject && <button onClick={onReject} className="rounded-[9px] border border-[#f87171]/50 bg-[#f87171]/[0.08] px-3 py-2 text-[13px] font-bold text-[#f87171]">ปฏิเสธ</button>}
         <button onClick={onApprove} className="rounded-[9px] bg-success px-4 py-2 text-[13px] font-bold text-white">อนุมัติ</button>
       </div>
     </div>

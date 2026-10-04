@@ -486,7 +486,11 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
           {/* ยกให้ฟรี: ไม่มีเงินเปลี่ยนมือ คนส่งเปลี่ยนใจได้จนกว่าจะยืนยัน (audit รอบ E R1-58 · v78) */}
           {st === 'paid' && (
             <button type="button" disabled={busy}
-              onClick={() => { if (window.confirm('ยกเลิกการยกให้? ผู้รับจะเห็นว่าถูกถอน และใบพรีกลับมาเป็นของคุณ')) void run(() => mk.marketCancel(tr.id), 'ยกเลิกการยกให้แล้ว · ใบพรีปลดล็อกแล้ว', () => { void mk.marketPush(tr.id, 'withdrawn'); }); }}
+              onClick={() => { if (window.confirm('ยกเลิกการยกให้? ผู้รับจะเห็นว่าถูกถอน และใบพรีกลับมาเป็นของคุณ')) void run(async () => {
+                const r = await mk.marketCancel(tr.id);
+                // เซิร์ฟเวอร์ยังไม่อัปเดต (ก่อนรัน v78) ตอบ bad_status — บอกตรงๆ แทน "รีเฟรช" ที่วนไม่จบ
+                return r.error === 'bad_status' && r.status === 'paid' ? { error: 'gift_cancel_unavailable' } : r;
+              }, 'ยกเลิกการยกให้แล้ว · ใบพรีปลดล็อกแล้ว', () => { void mk.marketPush(tr.id, 'withdrawn'); }); }}
               className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13.5px] font-bold text-ink-muted2">ยกเลิกการยกให้</button>
           )}
         </div>

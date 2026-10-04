@@ -103,9 +103,13 @@ export function topupQueue(db: Database) {
 
 export const isActiveTransfer = (tr: TicketTransfer, now: Date = new Date()) => ACTIVE.has(effectiveStatus(tr, now));
 
-/** คนนี้มีดีล (ขาย/รับ/ข้อเสนอ) ที่ยังไม่จบไหม — ใช้เปิดหน้าดีลให้แม้ปิดสวิตช์ไปแล้ว (R1-12) */
+/** คนนี้มีดีล (ขาย/รับ/ข้อเสนอ) ที่ยังไม่จบไหม — ใช้เปิดหน้าดีลให้แม้ปิดสวิตช์ไปแล้ว (R1-12)
+ *  + ข้อเสนอเปลี่ยนใบที่มีเงินซึ่งเพิ่งปิด/หมดเวลา (7 วัน) โดยผู้รับยังไม่แนบสลิป — ผู้รับที่โอนไปแล้วต้องเข้าไปแนบสลิปแจ้งร้านได้ (review รอบ E) */
 export const hasLiveDeal = (db: Database, uid: string, now: Date = new Date()) =>
-  db.transfers.some((tr) => (tr.from_user_id === uid || tr.to_user_id === uid) && isActiveTransfer(tr, now));
+  db.transfers.some((tr) => (tr.from_user_id === uid || tr.to_user_id === uid) && (isActiveTransfer(tr, now)
+    || (tr.to_user_id === uid && isDirect(tr) && (tr.asking_price ?? 0) > 0 && !tr.paid_at
+      && ['expired', 'cancelled'].includes(effectiveStatus(tr, now))
+      && now.getTime() - ms(tr.updated_at ?? tr.hold_until ?? tr.listed_at) < 7 * 86_400_000)));
 
 /** ข้อเสนอเปลี่ยนใบที่ส่งมาถึงคนนี้และยังรอให้ตอบ (โชว์แบนเนอร์ในกระเป๋า · R3-07) */
 export const incomingOffers = (db: Database, uid: string, now: Date = new Date()) =>

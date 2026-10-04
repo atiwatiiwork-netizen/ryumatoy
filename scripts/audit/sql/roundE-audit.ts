@@ -91,6 +91,14 @@ const reason = async (db: PGlite, t: string) => (await q(db, `select ryuma_marke
   const hr = (await q(db, `select status, to_user_id from ticket_transfers where id = $1`, [h.id]))[0];
   ok('E8 ลงประกาศใหม่หลังข้อเสนอหมดเวลา → ข้อเสนอเดิมยังมีชื่อผู้รับ (ประวัติผู้รับไม่หาย)', !!l2.ok && hr?.status === 'expired' && hr?.to_user_id === 'uB', { l2, hr });
 
+  // ลบสมาชิก: ห้ามลบตัวเอง / บัญชีแอดมิน (review รอบ E)
+  await db.exec('set session_replication_role = replica;');
+  await db.query(`insert into users (id, display_name, auth_id, approved, is_admin, rank) values ('uY','Admin2',null,false,true,'bronze')`);
+  await db.exec('set session_replication_role = origin;');
+  const ps = await call(db, 'X', 'ryuma_admin_purge_user', ['uX']);
+  const pa = await call(db, 'X', 'ryuma_admin_purge_user', ['uY']);
+  ok('E9 แอดมินลบตัวเอง/ลบบัญชีแอดมินอื่น (แม้ยังไม่อนุมัติ) ไม่ได้', ps.error === 'self' && pa.error === 'admin_target' && (await q(db, `select id from users where id = 'uY'`)).length === 1, { ps, pa });
+
   console.log(`\nroundE-audit (sql): ${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);
 })();

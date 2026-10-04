@@ -9,6 +9,7 @@
 --  R1-58  ยกให้ฟรีที่ผู้รับกดรับแล้ว คนส่งยกเลิกไม่ได้ → ยกเลิกได้จนกว่าจะกดยืนยัน
 --  R1-36  ข้อเสนอเปลี่ยนใบที่หมดเวลา ถูกล้างชื่อผู้รับตอนลงประกาศใหม่ → ประวัติผู้รับหาย → เก็บชื่อผู้รับไว้เสมอ
 --  R1-33  ข้อความ push ไม่แยกกระดาน/เปลี่ยนใบ/ยกให้
+--  review  ลบสมาชิก: ห้ามลบตัวเอง / ห้ามลบบัญชีแอดมิน
 -- ============================================================================
 
 
@@ -255,6 +256,51 @@ end $$;
 drop trigger if exists ryuma_transfers_keep_recipient on ticket_transfers;
 create trigger ryuma_transfers_keep_recipient before update on ticket_transfers
   for each row execute function ryuma_transfers_keep_recipient();
+
+-- 7) ลบสมาชิก (ทับ v76) — + ห้ามลบตัวเอง / ห้ามลบบัญชีแอดมิน (ถอดสิทธิ์แอดมินก่อนถ้าจำเป็นจริง)
+create or replace function ryuma_admin_purge_user(p_user_id text)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare v_auth uuid; v_live int; v_hist int; v_recv int; v_sold int;
+begin
+  if not is_app_admin() then return json_build_object('error','not_admin'); end if;
+  -- ห้ามลบตัวเอง และห้ามลบบัญชีแอดมิน (review รอบ E: รายการรออนุมัติเคยโชว์ปุ่มปฏิเสธบนบัญชีแอดมิน = ลบถาวร)
+  if p_user_id = app_user_id() then return json_build_object('error', 'self'); end if;
+  if exists (select 1 from users where id = p_user_id and is_admin) then return json_build_object('error', 'admin_target'); end if;
+  select count(*) into v_live from ticket_transfers tr
+   where (tr.from_user_id = p_user_id or tr.to_user_id = p_user_id)
+     and ryuma_market_live(tr.status, tr.hold_until, tr.expires_at);
+  if v_live > 0 then return json_build_object('error', 'live_deal', 'live', v_live); end if;
+  select count(*) into v_hist from ticket_transfers tr
+   where (tr.from_user_id = p_user_id or tr.to_user_id = p_user_id)
+     and (tr.status in ('done', 'approved') or tr.paid_at is not null);
+  select count(*) into v_recv from preorder_tickets t
+   where t.owner_id = p_user_id and (coalesce(t.original_buyer_id, t.owner_id) <> p_user_id or t.split_from is not null);
+  select count(*) into v_sold from preorder_tickets t
+   where t.original_buyer_id = p_user_id and t.owner_id <> p_user_id;
+  if v_hist + v_recv + v_sold > 0 then
+    return json_build_object('error', 'market_history', 'deals', v_hist, 'received', v_recv, 'sold', v_sold);
+  end if;
+
+  select auth_id into v_auth from users where id = p_user_id;
+  perform set_config('ryuma.trusted', 'on', true);
+  delete from ticket_transfers where from_user_id = p_user_id or to_user_id = p_user_id
+     or ticket_id in (select id from preorder_tickets where owner_id = p_user_id);
+  delete from remaining_payments where user_id = p_user_id
+     or ticket_id in (select id from preorder_tickets where owner_id = p_user_id);
+  delete from preorder_tickets where owner_id = p_user_id;
+  delete from order_items where order_id in (select id from orders where user_id = p_user_id);
+  delete from orders where user_id = p_user_id;
+  delete from rank_requests where user_id = p_user_id;
+  delete from stock_reservations where user_id = p_user_id;
+  delete from user_secrets where user_id = p_user_id;
+  delete from users where id = p_user_id;
+  if v_auth is not null then delete from auth.users where id = v_auth; end if;
+  perform set_config('ryuma.trusted', 'off', true);
+  return json_build_object('ok', true);
+end $$;
+
+revoke all on function ryuma_admin_purge_user(text) from public, anon;
+grant execute on function ryuma_admin_purge_user(text) to authenticated;
 
 -- ── ตรวจหลังรัน (ไม่บังคับ) ──────────────────────────────────────────────────
 -- select tgname from pg_trigger where tgname = 'ryuma_transfers_keep_recipient';   -- 1 แถว
