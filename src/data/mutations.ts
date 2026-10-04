@@ -56,6 +56,11 @@ export const genId = (prefix: string) => id(prefix);
  *  - รอบมัดจำบน SKU production/shipping (legacy ของกำลังมา) = สืบตามจริง. */
 const mirrorStatusFor = (product: Product, batchId?: string | null, fullPay?: boolean): ProductStatus =>
   batchId && !fullPay && ['arrived', 'delivered', 'closed'].includes(product.status) ? 'open' : product.status;
+/** รอบพิเศษแบบ "มัดจำ" (ไม่ใช่รอบจ่ายเต็ม = ของในมือ) */
+const batchIsDeposit = (db: Database, batchId: string) => {
+  const b = db.batches.find((x) => x.id === batchId);
+  return !!b && b.deposit_amount < b.price_total;
+};
 
 /** Insert or replace a row by id within a collection. */
 function upsertById<T extends { id: string }>(rows: T[], row: T): T[] {
@@ -470,7 +475,17 @@ export const closeBatch = (batchId: string) => (db: Database): Database => {
   // ห้ามปิดรอบขณะมีลูกค้ากำลังจ่าย/สลิปรอตรวจในรอบนี้ — ไม่งั้น SKU หลุดไปแท็บ "ส่วนเกิน" ทั้งที่ของยังถูกจอง
   // แล้วเปิดรอบใหม่/มอบตั๋วทับ พออนุมัติสลิปที่ค้าง = ตั๋วเกินของจริง (audit 2026-09-21 #3) → ตัวเรียกต้อง read-back
   if (pendingHeld(db, b.product_id, b.id) > 0) return db;
-  return { ...db, batches: db.batches.map((x) => (x.id === batchId ? { ...x, status: 'closed' } : x)) };
+  // ปิดรอบมัดจำตอนสินค้าผลิต/เดินทางอยู่แล้ว → ตั๋วที่ยังค้าง 'open' (เกิดตอนกระดานหลักเปิด) สืบสถานะจริงของสินค้า
+  //   (audit รอบ E R2B-18) · สินค้าที่ยังเปิดจอง/จบไปแล้วไม่แตะ (ปล่อยให้สเต็ปเปอร์รอบพิเศษพาไป)
+  const p = db.products.find((x) => x.id === b.product_id);
+  const follow = p && !p.is_stock && ['production', 'shipping'].includes(p.status) && batchIsDeposit(db, b.id) ? p.status : null;
+  return {
+    ...db,
+    batches: db.batches.map((x) => (x.id === batchId ? { ...x, status: 'closed' } : x)),
+    tickets: follow
+      ? db.tickets.map((t) => (t.batch_id === b.id && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: follow } : t))
+      : db.tickets,
+  };
 };
 
 /** เปิดรอบที่ปิดไปแล้วกลับมาขายต่อ (เจ้าของ 2026-07-30: "ดันเผลอไปกดปิดรอบ ทำไรไม่ได้เลย").
@@ -1905,7 +1920,9 @@ export const closeProduction = (entries: { productId: string; finalQty: number; 
     // cascade เฉพาะตั๋วรอบที่ยังจองอยู่ ('open') — ห้ามลากตั๋วรอบเก่าที่ arrived/shipped ถอยกลับมาผลิต
     // (audit 2026-07-23: ตั๋วจบแล้วถอยสถานะ = หายจากคิวจัดส่งเงียบๆ)
     // + ห้ามลากตั๋วรอบพิเศษ (batch_id) — ล็อตนั้นมีสเต็ปเปอร์ของตัวเอง (depart/arriveSpecialRound) ของอาจอยู่ในมือแล้ว
-    tickets: db.tickets.map((t) => (ids.has(t.product_id) && !t.batch_id && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
+    // + ตั๋วรอบพิเศษแบบมัดจำที่เกิดตอนกระดานหลักยังเปิด (สถานะสืบ 'open' จากกระดาน) ต้องตามไปผลิตด้วย (audit รอบ E R2B-18:
+    //   เดิมค้าง 'open' ถาวร ลูกค้าเห็น "ขายได้หลังปิดรอบ" แม้ปิดทั้งสองรอบแล้ว) · รอบจ่ายเต็ม (ของในมือ) ไม่แตะ
+    tickets: db.tickets.map((t) => (ids.has(t.product_id) && (!t.batch_id || batchIsDeposit(db, t.batch_id)) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
     boardLogs: entries.length
       ? [{ id: id('bl'), board_title: 'ปิดรอบสั่งผลิต', maker_id: makerId, closed_at: now, lines }, ...db.boardLogs]
       : db.boardLogs,
@@ -2190,7 +2207,7 @@ export const closeBoardWithProduction = (boardId: string, entries: { productId: 
     }),
     // scope เดียวกับ closeProduction — เฉพาะตั๋ว 'open' ยังไม่ shipped (กัน bleed ข้ามรอบ)
     // + ห้ามลากตั๋วรอบพิเศษ (batch_id) — ล็อตนั้นมีสเต็ปเปอร์ของตัวเอง (เหมือน closeProduction)
-    tickets: db.tickets.map((t) => (byId.has(t.product_id) && !t.batch_id && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)),
+    tickets: db.tickets.map((t) => (byId.has(t.product_id) && (!t.batch_id || batchIsDeposit(db, t.batch_id)) && t.product_status === 'open' && t.status !== 'shipped' ? { ...t, product_status: 'production' } : t)), // + รอบพิเศษแบบมัดจำ (R2B-18)
     boardLogs: [
       { id: id('bl'), board_id: boardId, board_title: board.title, maker_id: board.maker_id, closed_at: now, lines },
       ...db.boardLogs,

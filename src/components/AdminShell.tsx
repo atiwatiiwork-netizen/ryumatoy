@@ -129,7 +129,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // badge "งานค้างวันนี้" = งานด่วน (ทำก่อน) + นัดชำระที่ถึงกำหนด + ปัญหาข้อมูลที่ต้องแก้
   const todayJobs = worklist(db).filter((w) => w.urgency === 'now').reduce((s, w) => s + w.count, 0) + plansDue(db).length + dataIssues(db).length;
 
-  const newMembers = db.users.filter((u) => u.approved === false && !u.is_admin).length;
+  const newMembers = db.users.filter((u) => u.approved === false).length;
   const rankReq = db.rankRequests.filter((r) => r.status === 'pending').length;
   const sourcingJobs = db.sourcingRequests.filter((r) => r.status === 'requested' || r.status === 'paid').length;
   // ประมูล (v60): หมดเวลาแล้วรอกดสรุปผล + สลิปค่าเข้าสนามรอตรวจ (ไม่มี scheduler — ต้องมีคนกด)

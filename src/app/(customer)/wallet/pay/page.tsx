@@ -18,6 +18,7 @@ import { usableGrantsFor, scopeAllows, couponMatchesProduct, couponDiscount } fr
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitRemainingPayment } from '@/data/mutations';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { useSmartBack } from '@/lib/nav';
 import { notifyAdminLine } from '@/lib/notify';
 import { copyText, digitsOnly } from '@/lib/clipboard';
@@ -111,18 +112,27 @@ function PayInner() {
     if ((!slip && total > 0) || busy || tickets.length === 0) return; // คูปองครอบทั้งยอด = ไม่ต้องมีสลิป
     setBusy(true);
     try {
-      const before = db.remainingPayments.length;
+      // สลิปเดียวต้อง "ครบทุกใบหรือไม่ส่งเลย" (audit รอบ E R3-11: เดิมใบที่ถูกล็อก/เปลี่ยนมือระหว่างทางหลุด
+      //   ได้แถวครึ่งเดียว ยอดในสลิปไม่ตรงกับที่แอดมินเห็น และลูกค้าส่งใหม่ไม่ได้)
+      //   1) โหลดสถานะล่าสุด  2) ลองทำบนสำเนาก่อน ถ้าไม่ครบทุกใบ = ไม่ทำเลย
+      if (!(await store.reload({ safe: true }))) { setBusy(false); return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ส่ง)'); }
+      const fresh = store.getState();
+      const stale = tickets.filter((t) => { const x = fresh.tickets.find((y) => y.id === t.id); return !x || x.owner_id !== uid || !ticketSelectable(fresh, x) || ticketDue(x) !== ticketDue(t); });
+      if (stale.length) { setBusy(false); return flash(`ใบ ${stale.map((t) => t.ticket_no).join(', ')} เปลี่ยนไปแล้ว (ล็อก/เปลี่ยนมือ/ยอดเปลี่ยน) — ยังไม่ได้ส่ง กลับไปเลือกใหม่แล้วโอนตามยอดใหม่`); }
+      const make = (t: PreorderTicket) => submitRemainingPayment(t.id, uid, lineAmount(t), slip ?? '', couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined, { points: ptsByTicket.get(t.id) ?? 0 });
+      let trial = fresh;
+      for (const t of tickets) trial = make(t)(trial);
+      if (trial.remainingPayments.length - fresh.remainingPayments.length !== tickets.length) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — บางใบมีสลิปรอตรวจอยู่แล้ว/ยอดไม่ตรง · ยังไม่ได้ส่ง ลองรีเฟรชแล้วเลือกใหม่'); }
+      const before = fresh.remainingPayments.length;
       // สลิปเดียว = slip_url เดียวกันทุกแถว → แอดมินเห็นเป็นกลุ่ม (pendingRpGroups)
-      for (const t of tickets) {
-        dispatch(submitRemainingPayment(t.id, uid, lineAmount(t), slip ?? '', couponTicket?.id === t.id && selected ? { grantId: selected.grant.id, discount: couponOff } : undefined, { points: ptsByTicket.get(t.id) ?? 0 }));
-      }
+      for (const t of tickets) dispatch(make(t));
       let after = before;
       dispatch((d) => { after = d.remainingPayments.length; return d; });
       const made = after - before;
       if (made === 0) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — ใบที่เลือกอาจมีสลิปรอตรวจอยู่แล้ว ลองรีเฟรช'); }
       const failed = await store.flush();
       setBusy(false);
-      if (failed) return flash('บันทึกไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งอีกครั้ง');
+      if (failed) return flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ ระบบลองส่งให้เองเมื่อเน็ตกลับมา'));
       notifyAdminLine(`💸 สลิปส่วนต่างรวม ${made} ใบ: ${tickets.map((t) => t.ticket_no).join(', ')} · ${total.toLocaleString()} บาท`);
       flash(made < tickets.length ? `ส่งสลิปแล้ว ${made}/${tickets.length} ใบ · รอ Admin ตรวจสอบ` : `ส่งสลิป ${made} ใบแล้ว · รอ Admin ตรวจสอบ`);
       router.replace('/wallet');

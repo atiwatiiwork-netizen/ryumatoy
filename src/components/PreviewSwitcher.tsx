@@ -18,7 +18,8 @@ export function PreviewSwitcher() {
   if (!show) return null;
   const base = 'rounded-full px-3.5 py-1.5 text-xs font-bold';
   return (
-    <div className="fixed bottom-[78px] right-4 z-[200] flex gap-1 rounded-full border border-subtle bg-[rgba(10,8,9,.96)] p-1 lg:bottom-4">
+    // อยู่เหนือแถบ "ชำระรวม" ของกระเป๋า และอยู่ใต้แผง/ป๊อปอัป (z 110 < 120) — เดิมบังบรรทัดบัญชีรับเงินในแผงเปลี่ยนใบ (audit รอบ E R3-25)
+    <div className="fixed bottom-[148px] right-3 z-[110] flex gap-1 rounded-full border border-subtle bg-[rgba(10,8,9,.96)] p-1 lg:bottom-4">
       <Link href="/" className={cx(base, !onAdmin ? 'bg-primary text-white' : 'text-ink-muted')}>📱 ลูกค้า</Link>
       <Link href="/admin" className={cx(base, onAdmin ? 'bg-primary text-white' : 'text-ink-muted')}>🖥️ แอดมิน</Link>
     </div>

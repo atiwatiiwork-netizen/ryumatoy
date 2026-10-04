@@ -17,6 +17,7 @@ import { usableGrantsFor } from '@/domain/services/coupons';
 import { balanceOf, pointsVisibleTo } from '@/domain/services/points';
 import { MyCoupons } from '@/components/CouponTicket';
 import { WalletCodeChip } from '@/components/market/WalletCodeChip';
+import { marketLocked, incomingOffers } from '@/domain/services/market';
 import type { Database, PreorderTicket } from '@/domain/entities';
 
 type Tab = 'all' | 'preorder' | 'pay' | 'shipping' | 'done' | 'coupon';
@@ -63,7 +64,9 @@ export default function WalletPage() {
   }
 
   // ใบที่ติ๊กได้ = เปิดให้จ่าย + ไม่มีสลิปค้างตรวจ; รายการที่เลือกไว้แล้วหลุดเกณฑ์ (เช่น poll มาว่าส่งสลิปแล้ว) ถูกตัดออกเอง
-  const selectable = (t: PreorderTicket) => ticketPayable(t) && !pendingRpFor(db, t.id);
+  //   ใบที่ล็อกอยู่ในดีล/ข้อเสนอ จ่ายส่วนต่างไม่ได้ → ติ๊กไม่ได้ (audit รอบ E R3-24: เดิมติ๊กได้แล้วหน้าจ่ายตัดทิ้งเงียบๆ)
+  const selectable = (t: PreorderTicket) => ticketPayable(t) && !pendingRpFor(db, t.id) && !marketLocked(db, t.id);
+  const offers = incomingOffers(db, CURRENT_USER_ID);
   const selectedTickets = mine.filter((t) => sel.has(t.id) && selectable(t));
   const selectedTotal = selectedTickets.reduce((s, t) => s + ticketDue(t), 0);
   const toggle = (id: string) => setSel((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -75,6 +78,17 @@ export default function WalletPage() {
       <div className="mb-4 mt-1 text-[13px] text-ink-muted">{mine.length} ใบ · ค้างชำระรวม <span className="font-bold text-primary-soft">{baht(totalDue)}</span>{pointsVisibleTo(db, CURRENT_USER_ID) && <> · <Link href="/points" className="font-bold text-[#f1d27a]">⭐ {points.toLocaleString('en-US')} คะแนน</Link></>}</div>
       {/* เลขกระเป๋ารายวัน (v73 เปลี่ยนใบพรี) — คอมโพเนนต์ซ่อนตัวเองถ้าสวิตช์ยังปิด */}
       <WalletCodeChip className="mb-4" />
+      {/* มีคนเปลี่ยนใบพรีให้ — ลูกค้าที่ไม่เปิดกระดิ่งก็ต้องเห็น (audit รอบ E R3-07: เดิมเจอได้แค่เมนูโปรไฟล์ ข้อเสนอหมดเวลาเงียบๆ) */}
+      {offers.map((o) => (
+        <Link key={o.id} href={`/market/${o.id}`} className="mb-3 flex items-center gap-3 rounded-2xl border border-[#f1d27a]/45 bg-[#f1d27a]/[0.1] px-3.5 py-3">
+          <span className="text-[22px]">🎁</span>
+          <span className="min-w-0 flex-1 text-[12.5px] leading-snug">
+            <b className="block text-[13.5px] text-[#f1d27a]">มีคนเปลี่ยนใบพรีให้คุณ</b>
+            {(o.asking_price ?? 0) > 0 ? `โอน ${baht(o.asking_price)} แล้วแนบสลิป` : 'ยกให้ฟรี — กดรับ'} ภายใน {o.hold_until ? new Date(o.hold_until).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '24 ชม.'}
+          </span>
+          <Icon name="chevronRight" size={18} className="shrink-0 text-[#f1d27a]" />
+        </Link>
+      ))}
 
       <div className="mb-[18px] flex items-center gap-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">

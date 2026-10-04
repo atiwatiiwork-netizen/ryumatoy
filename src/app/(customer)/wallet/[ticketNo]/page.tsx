@@ -19,6 +19,7 @@ import { ticketPayable } from '@/domain/services/payments';
 import { monthlyBonusForTicket, pendingBonusDiscount, ymShort } from '@/domain/services/monthly';
 import { balanceOf, maxRedeemable, redeemPicks, redeemRules, redeemEnabled, redeemKindFor } from '@/domain/services/points';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { preorderCouponsForTicket, couponDiscount } from '@/domain/services/coupons';
 import { CouponTicket } from '@/components/CouponTicket';
 import { useSmartBack } from '@/lib/nav';
@@ -29,7 +30,7 @@ import { shippingInfoOf, composeAddress, addressProblem, splitComposed } from '@
 import type { ProductStatus, PreorderTicket, DeliveryMethod, ShippingInfo } from '@/domain/entities';
 import Link from 'next/link';
 import { SellSheet } from '@/components/market/SellSheet';
-import { marketVisibleTo, directVisibleTo, activeListingOf, boughtFromMarket, dealStatusLabel, isDirect } from '@/domain/services/market';
+import { marketVisibleTo, directVisibleTo, activeListingOf, boughtFromMarket, dealStatusLabel, isDirect, sellBlockedForGood, marketLocked } from '@/domain/services/market';
 import type { SellMode } from '@/components/market/SellSheet';
 
 const TIMELINE: { key: ProductStatus; label: string }[] = [
@@ -162,14 +163,14 @@ export default function TicketDetailPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[640px]">
+    <div className="mx-auto max-w-[640px] pb-28">
       <BackBar title="ใบพรี" onBack={goBack} />
 
       <div className="relative mb-4 rounded-2xl border border-[#b91c1c]/35 bg-surface-2 px-[18px] py-[22px] text-center">
         <div className="absolute -left-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="absolute -right-[9px] top-[55%] h-[18px] w-[18px] rounded-full bg-base" />
         <div className="mb-3.5 font-mono text-[15px] tracking-wider text-primary-soft">{ticket.ticket_no}</div>
-        {fromMarket && <div className="-mt-2 mb-3 inline-block rounded-full border border-[#c4b5fd]/40 bg-[#c4b5fd]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#c4b5fd]">🔁 ได้มาจากตลาด</div>}
+        {fromMarket && <div className="-mt-2 mb-3 inline-block rounded-full border border-[#c4b5fd]/40 bg-[#c4b5fd]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#c4b5fd]">{isDirect(fromMarket) ? "🔁 ได้มาจากการเปลี่ยนใบ" : "🔁 ได้มาจากตลาด"}</div>}
         <div className="flex justify-center"><TicketQr value={typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(ticket.ticket_no)}` : ticket.ticket_no} size={150} /></div>
         <div className="mt-3 text-[11.5px] text-ink-faint">แสดง QR นี้เพื่อยืนยันตัวตนตอนรับของ</div>
       </div>
@@ -325,15 +326,30 @@ export default function TicketDetailPage() {
       {deliveryReady(db, ticket) && !listing && <DeliverySection ticket={ticket} />}
 
       {selling && <SellSheet ticket={ticket} mode={selling} onClose={() => setSelling(null)} />}
-      <div className="flex gap-2.5">
-        {canDirect && !listing && <Button variant="outline" icon="swap" onClick={transfer}>เปลี่ยนใบพรี</Button>}
-        {(!canDirect || listing || marketVisibleTo(db, CURRENT_USER_ID)) && (
-          <Button variant="outline" icon="swap" onClick={listing ? transfer : resell}>{listing ? (isDirect(listing) ? 'ดูข้อเสนอ' : 'ดูประกาศขาย') : 'ลงขาย P2P'}</Button>
-        )}
-        {canPay && !pendingRP && !paying && (
-          <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
-        )}
-      </div>
+      {(() => {
+        // ปุ่มเปลี่ยนใบ/ลงขาย โผล่เฉพาะใบที่ "มีทางขายได้" — ใบที่ส่งแล้ว/พร้อมส่ง/ยังเปิดรอบ/หาของ ไม่โชว์ (audit รอบ E R3-19)
+        //   ส่วนเหตุผลชั่วคราว (เติมมัดจำ/สลิปรอตรวจ/ถือไม่ครบ 3 วัน) ยังโชว์ปุ่ม แล้วแผงบอกเหตุผลเอง
+        const eligible = !!listing || !sellBlockedForGood(db, ticket, CURRENT_USER_ID);
+        const showDirect = eligible && canDirect && !listing;
+        const showMarket = eligible && (!canDirect || !!listing || marketVisibleTo(db, CURRENT_USER_ID));
+        const n = (showDirect ? 1 : 0) + (showMarket ? 1 : 0);
+        return (
+          // จอ 375px: ปุ่มจ่ายเต็มแถว แล้วปุ่มตลาดแถวละ 2 (เดิม 3 ปุ่มในแถวเดียว ข้อความตกบรรทัด · R3-26 / R2B-23)
+          <div className="flex flex-col gap-2.5">
+            {canPay && !pendingRP && !paying && (
+              <Button icon="payments" onClick={() => setPaying(true)}>จ่ายส่วนต่าง</Button>
+            )}
+            {n > 0 && (
+              <div className={cx('grid gap-2.5', n === 2 ? 'grid-cols-2' : 'grid-cols-1')}>
+                {showDirect && <Button variant="outline" icon="swap" className="whitespace-nowrap px-3" onClick={transfer}>เปลี่ยนใบพรี</Button>}
+                {showMarket && (
+                  <Button variant="outline" icon="swap" className="whitespace-nowrap px-3" onClick={listing ? transfer : resell}>{listing ? (isDirect(listing) ? 'ดูข้อเสนอ' : 'ดูประกาศขาย') : 'ลงขาย P2P'}</Button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -371,6 +387,10 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
     if (method === 'registered' && !me?.shipping_address?.trim()) return flash('ยังไม่มีที่อยู่ในระบบ — เลือก "ที่อยู่ใหม่" แทน');
     if (method === 'custom') { const bad = addressProblem(info); if (bad) return flash(bad); }
     setBusy(true);
+    // สถานะล่าสุดก่อน: ใบที่เพิ่งถูกส่งข้อเสนอ/ลงขายจากอีกเครื่อง เซิร์ฟเวอร์จะคืนค่าเดิมเงียบๆ
+    //   → ต้องรู้ก่อน ไม่งั้นขึ้น "ส่งคำขอแล้ว" + LINE แอดมิน ทั้งที่ไม่ได้บันทึก (audit รอบ E R3-14)
+    if (!(await store.reload({ safe: true }))) { setBusy(false); return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่'); }
+    if (marketLocked(store.getState(), ticket.id)) { setBusy(false); return flash('ใบนี้อยู่ระหว่างเปลี่ยนใบ/ลงขาย — จบดีลหรือถอนก่อน แล้วค่อยเลือกวิธีรับของ'); }
     // delivery.address เก็บเป็นข้อความประกอบแล้ว (ที่อยู่ + จังหวัด + ไปรษณีย์) — ใบปะหน้า/คิวแอดมินอ่านช่องเดิม
     dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method,
       method === 'custom' ? { name: info.name!.trim(), phone: info.phone!.trim(), address: composeAddress(info) } : undefined));
@@ -381,7 +401,7 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
     const failed = await store.flush();
     setBusy(false);
     if (!applied) { flash('ส่งคำขอไม่สำเร็จ — รีเฟรชหน้าแล้วลองใหม่ หรือทักแอดมิน'); return; }
-    if (failed) { flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่อีกครั้ง'); return; }
+    if (failed) { flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่อีกครั้ง')); return; }
     notifyAdminLine(`📦 คำขอรับของใหม่: ${ticket.ticket_no} · ${DELIVERY_METHOD_LABEL[method]}`);
     flash('ส่งคำขอแล้ว · รอแอดมินยืนยัน');
     setChoosing(false);

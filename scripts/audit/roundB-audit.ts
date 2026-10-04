@@ -22,8 +22,8 @@ const base = (over: Partial<TicketTransfer>): TicketTransfer => ({ id: 'tr', tic
     && dealStatusLabel(done) === 'เคลียร์คืนเงินแล้ว' && dealStatusLabel(base({ cancel_reason: 'seller' })) === 'ถอนข้อเสนอแล้ว', [dealStatusLabel(late), dealStatusLabel(lateExp), dealStatusLabel(done)]);
   const db: Database = { ...structuredClone(SEED_DATABASE), transfers: [late, lateExp, done, plainExp] };
   const hist = myDeals(db, 'uB').history.map((x) => x.id).sort();
-  ok('L2 ประวัติของผู้รับ: ดีลที่โอนเงินไปแล้วต้องเห็นเสมอ (รวมที่หมดเวลา) · ข้อเสนอหมดเวลาที่ไม่ได้โอน ซ่อนได้',
-    JSON.stringify(hist) === JSON.stringify(['tr-done', 'tr-exp', 'tr-late']) && effectiveStatus(plainExp) === 'expired', hist);
+  ok('L2 ประวัติของผู้รับ: ดีลที่โอนเงินไปแล้วต้องเห็นเสมอ (รวมที่หมดเวลา) · ข้อเสนอหมดเวลาที่ไม่ได้โอนก็ยังเห็น (รอบ E R1-36)',
+    JSON.stringify(hist) === JSON.stringify(['tr-done', 'tr-exp', 'tr-late', 'tr-plain']) && effectiveStatus(plainExp) === 'expired', hist);
   const q = marketQueue(db);
   ok('L3 คิวแอดมิน: "ผู้รับโอนแล้วแต่ดีลปิด" = งาน (ที่เคลียร์แล้วไม่นับ)', q.lateSlips.length === 2 && q.jobs === 2, { late: q.lateSlips.map((x) => x.id), jobs: q.jobs });
 }

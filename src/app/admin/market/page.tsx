@@ -302,17 +302,24 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
   const buyer = db.users.find((x) => x.id === tr.to_user_id);
   const sla = sellerSlaLeft(tr);
   const buyerWord = direct ? 'ผู้รับ' : 'ผู้ซื้อ';
+  // เบอร์/ที่อยู่ซ้ำ: เทียบแบบตัดช่องว่าง/ขีด (audit รอบ E R1-42: เดิมเทียบตรงตัว + ข้อความเป็นบวกเสมอแม้ติดธงแดง)
+  const normPhone = (v?: string) => (v ?? '').replace(/\D/g, '').slice(-9);
+  const normAddr = (v?: string) => (v ?? '').replace(/\s+/g, '').toLowerCase();
+  const sender = db.users.find((x) => x.id === tr.from_user_id);
+  const samePhone = !!(buyer && sender && normPhone(sender.phone) && normPhone(sender.phone) === normPhone(buyer.phone));
+  const sameAddr = !!(buyer && sender && normAddr(sender.shipping_address) && normAddr(sender.shipping_address) === normAddr(buyer.shipping_address));
+  const sellerWord = direct ? 'คนส่ง' : 'คนขาย';
   const checks: { ok: boolean; label: string }[] = [
-    { ok: !!tr.seller_confirmed_at, label: tr.seller_confirmed_at ? `คนขายยืนยัน${free ? 'แล้ว' : 'รับเงินแล้ว'} · ${fmt(tr.seller_confirmed_at)}` : `คนขายยังไม่ยืนยัน${free ? '' : 'รับเงิน'}` },
+    { ok: !!tr.seller_confirmed_at, label: tr.seller_confirmed_at ? `${sellerWord}ยืนยัน${free ? 'แล้ว' : 'รับเงินแล้ว'} · ${fmt(tr.seller_confirmed_at)}` : `${sellerWord}ยังไม่ยืนยัน${free ? '' : 'รับเงิน'}` },
     free
       ? { ok: !!tr.paid_at, label: tr.paid_at ? `ยกให้ฟรี · ผู้รับกดรับแล้ว · ${fmt(tr.paid_at)}` : 'ยกให้ฟรี · ผู้รับยังไม่กดรับ' }
       : { ok: !!tr.slip_url, label: tr.slip_url ? `${buyerWord}แนบสลิปแล้ว · ${fmt(tr.paid_at)}` : 'ยังไม่มีสลิป' },
-    { ok: !!t && t.owner_id === tr.from_user_id, label: t ? (t.owner_id === tr.from_user_id ? 'ตั๋วยังอยู่กับคนขาย' : 'ตั๋วเปลี่ยนเจ้าของไปแล้ว!') : 'ไม่พบตั๋ว' },
+    { ok: !!t && t.owner_id === tr.from_user_id, label: t ? (t.owner_id === tr.from_user_id ? `ตั๋วยังอยู่กับ${sellerWord}` : 'ตั๋วเปลี่ยนเจ้าของไปแล้ว!') : 'ไม่พบตั๋ว' },
     { ok: !!t && !t.delivery && t.status !== 'shipped', label: 'ยังไม่เลือกวิธีรับของ / ยังไม่ส่ง' },
     { ok: !!t && (tr.qty ?? t.qty) <= t.qty, label: `${direct ? 'เปลี่ยน' : 'ขาย'} ${tr.qty ?? t?.qty ?? 1} จาก ${t?.qty ?? '?'} ชิ้น${t && (tr.qty ?? t.qty) < t.qty ? ' (แตกตั๋วลูกให้' + buyerWord + ')' : ''}` },
     ...(direct ? [
       { ok: !!buyer && !!(buyer.shipping_address ?? '').trim(), label: buyer ? ((buyer.shipping_address ?? '').trim() ? `${buyerWord}มีที่อยู่จัดส่ง ✓` : `${buyerWord}ยังไม่มีที่อยู่จัดส่ง!`) : `ไม่พบ${buyerWord}` },
-      { ok: !(buyer && db.users.find((x) => x.id === tr.from_user_id && ((x.phone && x.phone === buyer.phone) || (x.shipping_address && x.shipping_address === buyer.shipping_address)))), label: 'ผู้รับกับคนส่งไม่ได้ใช้เบอร์/ที่อยู่เดียวกัน' },
+      { ok: !samePhone && !sameAddr, label: samePhone || sameAddr ? `ผู้รับกับคนส่งใช้${samePhone ? 'เบอร์' : ''}${samePhone && sameAddr ? '/' : ''}${sameAddr ? 'ที่อยู่' : ''}เดียวกัน — เช็คว่าไม่ใช่คนเดียวกัน` : 'ผู้รับกับคนส่งไม่ได้ใช้เบอร์/ที่อยู่เดียวกัน' },
     ] : []),
   ];
   const act = async (fn: () => Promise<mk.MarketRes>, okMsg: string, after?: (r: mk.MarketRes) => void) => {
@@ -355,7 +362,7 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
           ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={pay} full size={16} /></>
           : tr.payout_snap ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={tr.payout_snap} full size={16} /></> : null}
         {direct && st === 'reserved' && tr.hold_until && <><span className="text-ink-faint">ผู้รับต้องตอบใน</span><span>{fmt(tr.hold_until)}</span></>}
-        {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลาคนขาย</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
+        {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลา{sellerWord}</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}
       </div>
       <div className="mt-3 flex gap-2 overflow-x-auto">
@@ -392,7 +399,7 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
         </div>
         {cancelling && (
           <div className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.08] p-3">
-            <div className="text-[12px] text-ink-muted2">{tr.paid_at && !free ? `${buyerWord}โอนไปแล้ว — ตามกติกา คนขายต้องคืนเงินเอง + แนบสลิปคืน` : 'ยังไม่มีการโอนเงิน'}</div>
+            <div className="text-[12px] text-ink-muted2">{free ? 'ยกให้ฟรี — ไม่มีเงินเปลี่ยนมือ' : tr.paid_at ? `${buyerWord}โอนไปแล้ว — ตามกติกา ${sellerWord}ต้องคืนเงินเอง + แนบสลิปคืน` : 'ยังไม่มีการโอนเงิน'}</div>
             <input id={`cancel-${tr.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เหตุผล (ลูกค้าจะเห็น)" className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none" />
             <div className="mt-2 flex gap-2">
               <button type="button" onClick={() => setCancelling(false)} className="flex-1 rounded-lg border border-subtle py-2 text-[12.5px] font-bold text-ink-muted2">ไม่ยกเลิก</button>
@@ -409,6 +416,8 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
 // ── ดีลทั้งหมด ─────────────────────────────────────────────────────────────────
 function AllTab({ db }: { db: Database }) {
   const [f, setF] = useState<string>('');
+  // ป้ายกลางที่ใช้ได้ทั้งกระดานและเปลี่ยนใบ (audit รอบ E R1-35)
+  const ALL_CHIP: Record<string, string> = { listed: 'ลงขาย (กระดาน)', reserved: 'จอง / ข้อเสนอรอผู้รับ', paid: 'โอน/กดรับแล้ว', seller_ok: 'คนส่ง/คนขายยืนยันแล้ว', cancelled: 'ยกเลิก/ถอน', expired: 'หมดเวลา' };
   const rows = db.transfers.map((tr) => ({ tr, st: effectiveStatus(tr) }))
     .filter((x) => !f || x.st === f || (f === 'direct' && isDirect(x.tr)))
     .sort((a, b) => (b.tr.updated_at ?? b.tr.listed_at).localeCompare(a.tr.updated_at ?? a.tr.listed_at));
@@ -421,7 +430,7 @@ function AllTab({ db }: { db: Database }) {
         <button type="button" onClick={() => setF('')} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', !f ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>ทั้งหมด {db.transfers.length}</button>
         {directCount > 0 && <button type="button" onClick={() => setF('direct')} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', f === 'direct' ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>🔁 เปลี่ยนใบ {directCount}</button>}
         {[...counts.entries()].map(([s, n]) => (
-          <button type="button" key={s} onClick={() => setF(s)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', f === s ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>{TRANSFER_STATUS_LABEL[s as TicketTransfer['status']] ?? s} {n}</button>
+          <button type="button" key={s} onClick={() => setF(s)} className={cx('rounded-full border px-3 py-1 text-[12px] font-bold', f === s ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>{ALL_CHIP[s] ?? TRANSFER_STATUS_LABEL[s as TicketTransfer['status']] ?? s} {n}</button>
         ))}
       </div>
       {rows.length === 0 && <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-[13px] text-ink-muted2">ยังไม่มีดีล</div>}

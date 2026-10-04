@@ -108,7 +108,7 @@ export function worklist(db: Database): WorkItem[] {
   add({ key: 'auc_cancel', urgency: 'today', icon: '↩️', title: 'คำขอยกเลิกบิด', detail: 'ลูกค้าบิดผิด — ตรวจแล้วกดยกเลิกให้', count: cancelReqs.length, href: '/admin/auctions' });
 
   // ── สมาชิก / หาของ / กิจกรรม ──
-  add({ key: 'members', urgency: 'now', icon: '👤', title: 'สมาชิกใหม่รออนุมัติ', detail: 'อนุมัติแล้วลูกค้าเริ่มสั่งได้', count: db.users.filter((u) => u.approved === false && !u.is_admin).length, href: '/admin/members' });
+  add({ key: 'members', urgency: 'now', icon: '👤', title: 'สมาชิกใหม่รออนุมัติ', detail: 'อนุมัติแล้วลูกค้าเริ่มสั่งได้', count: db.users.filter((u) => u.approved === false).length, href: '/admin/members' });
   add({ key: 'ranks', urgency: 'soon', icon: '🏅', title: 'คำขอเลื่อนขั้นรอตรวจ', detail: '', count: db.rankRequests.filter((r) => r.status === 'pending').length, href: '/admin/ranks' });
   add({ key: 'sourcing', urgency: 'now', icon: '🔎', title: 'งานหาของรอดำเนินการ', detail: 'เสนอราคา / เริ่มงานหลังลูกค้าจ่ายมัดจำ', count: db.sourcingRequests.filter((r) => ['requested', 'paid'].includes(r.status)).length, href: '/admin/sourcing' });
   add({ key: 'mission', urgency: 'soon', icon: '🎯', title: 'ภารกิจรอตรวจ', detail: '', count: db.missionSubmissions.filter((m) => m.status === 'pending').length, href: '/admin/events' });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -46,16 +46,23 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   const me = db.users.find((u) => u.id === uid);
   const direct = mode === 'direct';
   // หลายชิ้น: ตั้งต้นทั้งใบ (audit รอบ C R2B-06: เดิมตั้งต้น 1 ชิ้นแต่ยอดเท่าทุนของทั้งใบ)
-  const [qty, setQty] = useState(ticket.qty || 1);
+  // ร่างที่พิมพ์ค้างไว้ (จำนวน/ยอด/เลขกระเป๋า) อยู่รอดถ้าแผงปิดไปเผลอๆ หรือหน้า re-render (DNA react-state · audit รอบ E R1-52)
+  const draftKey = `sellsheet:${ticket.id}:${mode}`;
+  const draft = (() => { try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') as { qty?: number; priceStr?: string; code?: string } | null; } catch { return null; } })();
+  const [qty, setQty] = useState(draft?.qty ?? (ticket.qty || 1));
   const pv0 = listingPreview(t, t.qty, 0);
-  const [priceStr, setPriceStr] = useState(String(Math.round(pv0.paid)));
+  const [priceStr, setPriceStr] = useState(draft?.priceStr ?? String(Math.round(pv0.paid)));
   // บัญชีหลัก = ตัวที่ตรงกับ payout_info (เลือกล่าสุด) ไม่งั้นตัวแรก
   const [payoutId, setPayoutId] = useState<string | undefined>(() => primaryPayoutId(me) ?? payoutAccountsOf(me)[0]?.id);
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // direct: เลขกระเป๋าผู้รับ + ผลค้น (ผูกกับเลขที่ค้น — เปลี่ยนเลขแล้วผลเดิมใช้ไม่ได้)
-  const [code, setCode] = useState('');
-  const codeRef = useRef('');
+  const [code, setCode] = useState(draft?.code ?? '');
+  useEffect(() => {
+    try { sessionStorage.setItem(draftKey, JSON.stringify({ qty, priceStr, code })); } catch { /* โหมดส่วนตัว — ไม่เป็นไร */ }
+  }, [draftKey, qty, priceStr, code]);
+  const clearDraft = () => { try { sessionStorage.removeItem(draftKey); } catch { /* ignore */ } };
+  const codeRef = useRef(draft?.code ?? '');
   const [target, setTarget] = useState<LookedUp | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -149,12 +156,15 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
       void mk.marketPush(r.id, 'listed');
       flash('ลงประกาศแล้ว 🎉 ใบนี้ขึ้นกระดานแล้ว');
     }
+    clearDraft();
     onClose();
     router.push(`/market/${r.id}`);
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/70 sm:items-center" onClick={onClose}>
+    // แตะพื้นหลัง = ปิดเฉพาะตอนยังไม่ได้แนบสลิป (ร่างอื่นเก็บไว้แล้ว) — กันเผลอปิดทิ้งสลิปที่อัปโหลดแล้ว (R1-52)
+    <div role="dialog" aria-modal="true" aria-label={direct ? 'เปลี่ยนใบพรี' : 'ลงขายใบพรี'} className="fixed inset-0 z-[120] flex items-end justify-center bg-black/70 sm:items-center"
+      onClick={() => { if (!slip || window.confirm('ปิดแผงนี้? สลิปที่แนบไว้จะหายไป')) onClose(); }}>
       <div className="max-h-[92vh] w-full max-w-[520px] overflow-y-auto rounded-t-3xl border border-subtle bg-surface-2 p-4 pb-[calc(16px+env(safe-area-inset-bottom))] sm:rounded-3xl motion-safe:animate-riseIn" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 flex items-center gap-3">
           <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl"><StubArt db={db} productId={t.product_id} variantId={t.variant_id} /></div>
@@ -265,7 +275,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                     </div>
                   </div>
                 )}
-                {target && !target.ok && <div className="mt-2 text-[12px] text-[#f87171]">{mk.marketErrText(target)}</div>}
+                {target && !target.ok && <div className="mt-2 text-[12px] text-[#f87171]">{mk.lookupErrText(target)}</div>}
                 <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ผู้รับต้องกดรับเอง · คุณถอนข้อเสนอได้จนกว่าผู้รับจะเปิดหน้าโอนเงิน</div>
               </div>
             )}
@@ -273,7 +283,10 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
             <ul className="space-y-1 text-[11.5px] leading-relaxed text-ink-faint">
               <li>🔒 ส่งแล้วใบนี้ล็อก — จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะจบดีลหรือถอน</li>
               {direct
-                ? <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. โอน+แนบสลิป · โอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม. · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>
+                ? (price === 0 && !priceMissing
+                  // ยกให้ฟรี: ไม่มีโอน/สลิป (audit รอบ E R2B-21)
+                  ? <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. กดรับ · แล้วคุณกดยืนยัน (ก่อนยืนยันยังยกเลิกการยกให้ได้) · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>
+                  : <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. โอน+แนบสลิป · โอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม. · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>)
                 : <li>⏳ ประกาศอยู่ {MARKET.listingDays} วัน · มีคนจอง {MARKET.holdMin} นาที · ผู้ซื้อโอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม.</li>}
               {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ · โบนัสยศที่ได้จากใบนี้จะถูกเรียกคืน</li>}
               {needPayout && payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}

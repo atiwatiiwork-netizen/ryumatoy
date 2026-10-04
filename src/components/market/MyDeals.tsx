@@ -53,7 +53,7 @@ export function MyDeals({ onOpen }: { onOpen?: (id: string) => void }) {
   const sections: { title: string; rows: TicketTransfer[]; hot?: boolean }[] = [
     { title: 'ต้องทำ', rows: g.todo, hot: true },
     { title: 'กำลังดำเนินการ', rows: g.active },
-    { title: 'ลงขายอยู่', rows: g.selling },
+    { title: 'ลงขาย / ส่งข้อเสนออยู่', rows: g.selling },
     { title: 'ประวัติ', rows: g.history.slice(0, 30) },
   ];
   const empty = sections.every((s) => s.rows.length === 0);
@@ -80,14 +80,15 @@ export function MyDeals({ onOpen }: { onOpen?: (id: string) => void }) {
                   <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl">{tr.product_id && <StubArt db={db} productId={tr.product_id} variantId={tr.variant_id} />}</div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className={cx('rounded-md px-1.5 text-[10px] font-bold', seller ? 'bg-[#f1d27a]/15 text-[#f1d27a]' : 'bg-[#86c8ff]/15 text-[#86c8ff]')}>{isDirect(tr) ? (seller ? '🔁 ส่งให้' : '🔁 รับ') : seller ? 'ขาย' : 'ซื้อ'}</span>
+                      {/* shrink-0 + nowrap: ป้ายไม่ตกบรรทัดบนจอ 375px (audit รอบ E R2B-24) */}
+                      <span className={cx('shrink-0 whitespace-nowrap rounded-md px-1.5 text-[10px] font-bold', seller ? 'bg-[#f1d27a]/15 text-[#f1d27a]' : 'bg-[#86c8ff]/15 text-[#86c8ff]')}>{isDirect(tr) ? (seller ? '🔁 ส่งให้' : '🔁 รับ') : seller ? 'ขาย' : 'ซื้อ'}</span>
                       <span className="truncate text-[13.5px] font-bold">{tr.product_id ? productLabel(db, tr.product_id, tr.variant_id) : 'ใบพรี'}</span>
                     </div>
                     <div className={cx('mt-0.5 truncate text-[11.5px]', s.hot ? 'font-bold text-primary-soft' : 'text-ink-faint')}>{nextStep(tr, uid, st)}</div>
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="font-mono text-[14px] font-bold">{isDirect(tr) && (tr.asking_price ?? 0) <= 0 ? 'ฟรี' : baht(tr.asking_price)}</div>
-                    <span className={cx('mt-0.5 inline-block rounded-full border px-1.5 text-[10px] font-bold', TONE[st] ?? TONE.cancelled)}>{dealStatusLabel(tr, st)}</span>
+                    <span className={cx('mt-0.5 inline-block whitespace-nowrap rounded-full border px-1.5 text-[10px] font-bold', TONE[st] ?? TONE.cancelled)}>{dealStatusLabel(tr, st)}</span>
                   </div>
                 </>
               );

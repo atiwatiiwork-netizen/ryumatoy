@@ -103,6 +103,14 @@ export function topupQueue(db: Database) {
 
 export const isActiveTransfer = (tr: TicketTransfer, now: Date = new Date()) => ACTIVE.has(effectiveStatus(tr, now));
 
+/** คนนี้มีดีล (ขาย/รับ/ข้อเสนอ) ที่ยังไม่จบไหม — ใช้เปิดหน้าดีลให้แม้ปิดสวิตช์ไปแล้ว (R1-12) */
+export const hasLiveDeal = (db: Database, uid: string, now: Date = new Date()) =>
+  db.transfers.some((tr) => (tr.from_user_id === uid || tr.to_user_id === uid) && isActiveTransfer(tr, now));
+
+/** ข้อเสนอเปลี่ยนใบที่ส่งมาถึงคนนี้และยังรอให้ตอบ (โชว์แบนเนอร์ในกระเป๋า · R3-07) */
+export const incomingOffers = (db: Database, uid: string, now: Date = new Date()) =>
+  db.transfers.filter((tr) => isDirect(tr) && tr.to_user_id === uid && effectiveStatus(tr, now) === 'reserved');
+
 /** ประกาศที่ยังค้างของตั๋วใบนี้ (มีได้ใบเดียว) */
 export function activeListingOf(db: Database, ticketId: string, now: Date = new Date()): TicketTransfer | undefined {
   return db.transfers.find((tr) => tr.ticket_id === ticketId && isActiveTransfer(tr, now));
@@ -240,27 +248,38 @@ export function resellAllowedAt(db: Database, t: PreorderTicket, userId: string)
  * ลงขายใบนี้ได้ไหม — คืนเหตุผลภาษาไทย (null = ได้). ด่านจริงอยู่ใน ryuma_market_list (SQL ตัวเดียวกัน)
  * ข้อ 1 สถานะ · 2 แหล่ง · 3 จำนวนชิ้น · 4 เพดานประกาศ · 5 ถือ 3 วัน · 9 เติมมัดจำ
  */
-export function sellBlockReason(db: Database, t: PreorderTicket, userId: string, qty: number = t.qty, now: Date = new Date()): string | null {
+/** เหตุผลที่ "ไม่มีทางขาย/เปลี่ยนใบได้" (ไม่ใช่เรื่องชั่วคราว) — null = มีทาง · ใช้ซ่อนปุ่มในหน้าใบพรี (R3-19)
+ *  ลำดับตรงกับ ryuma_market_block_reason (v78): ของพร้อมส่ง/หาของ มาก่อน "ยังเปิดจอง" (R2B-17: เดิมของพร้อมส่งได้เหตุผลผิด) */
+function permanentBlock(db: Database, t: PreorderTicket, userId: string): string | null {
   if (t.owner_id !== userId) return 'ไม่ใช่ใบของคุณ';
   if (t.status === 'shipped') return 'ส่งของแล้ว';
   if (t.status === 'pending_approval' || t.status === 'transferred') return 'ใบนี้ยังไม่พร้อมขาย';
   if (t.delivery) return 'เลือกวิธีรับของแล้ว';
-  if (t.product_status === 'open') return 'ยังเปิดจองอยู่ — ขายได้หลังปิดรอบ';
-  if (!SELLABLE_PRODUCT_STATUSES.includes(t.product_status)) return 'ของถึงมือแล้ว ขายในตลาดไม่ได้';
   // ข้อ 2: เฉพาะใบพรี — กติกาเดียวกับ ryuma_market_block_reason (ไม่ใช้ ticketSourceOf ทั้งก้อน: ตัวชี้ "ตั๋วมอบ"
   //   ต้องเห็นออเดอร์ทุกใบ ซึ่งฝั่ง SQL/เซสชันลูกค้าเห็นไม่เท่ากัน → ตัดสินเฉพาะ 2 เคสที่ไม่ใช่ใบพรีจริง)
   const p = db.products.find((x) => x.id === t.product_id);
   if (p?.is_stock && !t.batch_id && (t.remaining_amount ?? 0) === 0 && !t.split_from) return 'ของพร้อมส่งไม่ใช่ใบพรี';
-  if (isSourcingTicket(db, t)) return 'ตั๋วงานหาของขายในตลาดไม่ได้';
+  // ตั๋วในรอบ "หาของ" แม้เรื่องหาของถูกลบไปแล้ว (R2B-19 · เหมือน points.ts)
+  if (isSourcingTicket(db, t) || (t.batch_id && db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ')) return 'ตั๋วงานหาของขายในตลาดไม่ได้';
+  if (t.product_status === 'open') return 'ยังเปิดจองอยู่ — ขายได้หลังปิดรอบ';
+  if (!SELLABLE_PRODUCT_STATUSES.includes(t.product_status)) return 'ของถึงมือแล้ว ขายในตลาดไม่ได้';
+  return null;
+}
+/** ใบนี้ขาย/เปลี่ยนใบไม่ได้แน่ๆ (ซ่อนปุ่ม) — เหตุผลชั่วคราวไม่นับ */
+export const sellBlockedForGood = (db: Database, t: PreorderTicket, userId: string) => permanentBlock(db, t, userId) !== null;
+
+export function sellBlockReason(db: Database, t: PreorderTicket, userId: string, qty: number = t.qty, now: Date = new Date()): string | null {
+  const hard = permanentBlock(db, t, userId);
+  if (hard) return hard;
   if (!(qty >= 1 && qty <= t.qty && Number.isInteger(qty))) return 'จำนวนชิ้นไม่ถูกต้อง';
   if (db.remainingPayments.some((r) => r.ticket_id === t.id && r.status === 'pending')) return 'มีสลิปส่วนต่างรอตรวจ';
-  if (activeListingOf(db, t.id, now)) return 'ลงขายอยู่แล้ว';
+  if (activeListingOf(db, t.id, now)) return 'ใบนี้ลงขาย/ส่งข้อเสนออยู่แล้ว';
   const active = db.transfers.filter((tr) => tr.from_user_id === userId && isActiveTransfer(tr, now)).length;
-  if (active >= MARKET.maxActive) return `ลงประกาศพร้อมกันได้สูงสุด ${MARKET.maxActive} ใบ`;
+  if (active >= MARKET.maxActive) return `ลงขาย/ส่งข้อเสนอพร้อมกันได้สูงสุด ${MARKET.maxActive} ใบ`;
   const resell = resellAllowedAt(db, t, userId);
-  if (resell && resell.getTime() > now.getTime()) return `ซื้อจากตลาดมา ต้องถือครบ ${MARKET.resellDays} วัน (ขายได้ ${resell.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })})`;
+  if (resell && resell.getTime() > now.getTime()) return `ได้ใบนี้มาจากคนอื่น ต้องถือครบ ${MARKET.resellDays} วัน (ขายได้ ${resell.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })})`;
   const gap = depositGap(db, t);
-  if (gap > 0) return `ต้องเติมมัดจำอีก ฿${gap.toLocaleString('en-US')} ก่อนลงขาย`;
+  if (gap > 0) return `ต้องเติมมัดจำอีก ฿${gap.toLocaleString('en-US')} ก่อนเปลี่ยนใบ/ลงขาย`;
   return null;
 }
 
@@ -293,7 +312,8 @@ export function myDeals(db: Database, uid: string, now: Date = new Date()) {
     active: mine.filter((tr) => !isTodo(tr) && DEAL_ACTIVE.includes(st(tr))),
     selling: mine.filter((tr) => !isTodo(tr) && dealRole(tr, uid) === 'seller' && ['listed', 'reserved'].includes(st(tr))),
     // ผู้ซื้อ: ซ่อนการจองกระดานที่หมดเวลา (ไม่มีอะไรเกิด) แต่ดีลที่โอนเงินไปแล้วต้องเห็นเสมอ (v75 late slip)
-    history: mine.filter((tr) => DEAL_DONE.includes(st(tr)) && !(dealRole(tr, uid) === 'buyer' && st(tr) === 'expired' && !tr.paid_at)),
+    //   ข้อเสนอเปลี่ยนใบที่หมดเวลา ผู้รับต้องยังเห็นในประวัติ (audit รอบ E R1-36)
+    history: mine.filter((tr) => DEAL_DONE.includes(st(tr)) && !(dealRole(tr, uid) === 'buyer' && st(tr) === 'expired' && !tr.paid_at && !isDirect(tr))),
   };
 }
 

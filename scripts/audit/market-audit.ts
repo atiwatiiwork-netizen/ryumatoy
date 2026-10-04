@@ -337,16 +337,16 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
     && effectiveStatus({ ...stale, kind: undefined }) === 'expired' && effectiveStatus({ ...stale, kind: undefined, expires_at: iso(10 * D) }) === 'listed');
   db.transfers.push(live, stale);
   ok('N2 ตั๋วที่มีข้อเสนอค้าง = ล็อก · หมดเวลาแล้ว = ปลดล็อก (จ่ายส่วนต่าง/ลงขายใหม่ได้)', marketLocked(db, a.id) && !marketLocked(db, b.id)
-    && sellBlockReason(db, a, S) === 'ลงขายอยู่แล้ว' && sellBlockReason(db, b, S) === null);
+    && sellBlockReason(db, a, S) === 'ใบนี้ลงขาย/ส่งข้อเสนออยู่แล้ว' && sellBlockReason(db, b, S) === null);
   ok('N3 ป้ายสถานะดีลตรง: รอผู้รับโอน / ยกให้ = รอผู้รับกดรับ / ผู้รับไม่รับ / ถอนข้อเสนอ / หมดเวลา · กระดานป้ายเดิม',
     dealStatusLabel(live) === 'รอผู้รับโอนเงิน' && dealStatusLabel({ ...live, asking_price: 0 }) === 'รอผู้รับกดรับ'
     && dealStatusLabel({ ...live, status: 'cancelled', cancel_reason: 'buyer_declined' }) === 'ผู้รับไม่รับ'
     && dealStatusLabel({ ...live, status: 'cancelled', cancel_reason: 'seller' }) === 'ถอนข้อเสนอแล้ว'
     && dealStatusLabel(stale) === 'ข้อเสนอหมดเวลา' && dealStatusLabel({ ...live, kind: undefined }) === 'มีคนจอง');
   const dS = myDeals(db, S), dB = myDeals(db, B);
-  ok('N4 ดีลของฉัน: ผู้รับเห็นข้อเสนอใน "ต้องทำ" · คนส่งเห็นใน "ลงขายอยู่" · ข้อเสนอหมดเวลาไม่โผล่ฝั่งผู้รับ',
+  ok('N4 ดีลของฉัน: ผู้รับเห็นข้อเสนอใน "ต้องทำ" · คนส่งเห็นใน "ลงขายอยู่" · ข้อเสนอหมดเวลายังอยู่ในประวัติทั้งสองฝั่ง (audit รอบ E R1-36)',
     dB.todo.length === 1 && dB.todo[0].id === live.id && dS.selling.length === 1 && dS.selling[0].id === live.id
-    && !dB.history.some((x) => x.id === stale.id) && dS.history.some((x) => x.id === stale.id), { todo: dB.todo.length, selling: dS.selling.length });
+    && dB.history.some((x) => x.id === stale.id) && dS.history.some((x) => x.id === stale.id), { todo: dB.todo.length, selling: dS.selling.length });
   const q0 = marketQueue(db);
   ok('N5 คิวแอดมิน: ข้อเสนอรอผู้รับโผล่ใน offers (ไม่นับเป็นงาน) · ยังไม่มีสลิปเติมมัดจำ', q0.offers.length === 1 && q0.topups.length === 0 && q0.jobs === 0);
   // เติมมัดจำ (Diamond มัดจำ 0) → สลิป purpose=topup เข้าคิวแยกหัวข้อ + นับเป็นงาน
@@ -390,8 +390,10 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   db4.transfers = [offer(a, { status: 'seller_ok', paid_at: iso(-2 * H), seller_confirmed_at: iso(-H), slip_url: 'https://x/s.jpg' })];
   const db5 = simulateFinalize(db4, db4.transfers[0].id);
   const moved = db5.tickets.find((x) => x.id === a.id)!;
+  const sumMoney = (d: typeof db4) => d.tickets.reduce((s, t) => s + t.deposit_paid + t.remaining_amount, 0) * 1e6 + d.tickets.reduce((s, t) => s + t.deposit_paid + t.remaining_paid, 0);
   ok('N14 ไฟนอลดีลตรง: ตั๋วย้ายไปผู้รับ · เลข -T1 · เงินร้านไม่ขยับ · ผู้รับติดถือ 3 วัน', moved.owner_id === B && moved.ticket_no.endsWith('-T1')
-    && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 3 วัน'));
+    // เงินบนตั๋วต้องไม่หายไม่งอก: ยอดเต็ม/ที่จ่ายแล้ว รวมทุกใบเท่าเดิม (audit รอบ E R1-47: เดิมเทียบ cashIn ซึ่งไฟนอลไม่แตะอยู่แล้ว ไม่มีวันล้ม)
+    && sumMoney(db5) === sumMoney(db4) && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 3 วัน'));
 }
 
 console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);

@@ -256,7 +256,7 @@ export function PromptPayCard({ amount, promptpay, accountNo, bank, accountName,
   const copy = async (v: string, what: string) => flash((await copyText(digitsOnly(v))) ? `คัดลอก${what}แล้ว ✓` : 'คัดลอกไม่สำเร็จ');
   return (
     <div className="overflow-hidden rounded-2xl bg-white text-center text-[#141414]">
-      <div className="bg-[#162b4d] py-2 text-[12px] font-bold tracking-wide text-white">{payload ? 'พร้อมเพย์ · สแกนจ่าย' : 'โอนเข้าบัญชีคนขาย'}</div>
+      <div className="bg-[#162b4d] py-2 text-[12px] font-bold tracking-wide text-white">{payload ? 'พร้อมเพย์ · สแกนจ่าย' : 'โอนเข้าบัญชีนี้'}</div>
       {payload && <div className="flex justify-center pt-3"><QRCodeSVG value={payload} size={168} level="M" marginSize={1} /></div>}
       <div className="pt-2 font-mono text-[22px] font-bold">{baht(amount)}.00</div>
       <div className="mt-0.5 px-3 text-[12px] text-[#555]">{accountName}</div>

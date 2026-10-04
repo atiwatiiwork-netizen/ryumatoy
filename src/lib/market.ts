@@ -1,4 +1,5 @@
 import { supabase } from '@/data/supabaseClient';
+import { simActive, SIM_BLOCKED } from '@/lib/sim';
 
 /**
  * สะพานไปหา RPC ตลาดใบพรี (migration v71 · ryuma-p2p-spec).
@@ -72,6 +73,9 @@ export const isMissingRpc = (r: MarketRes) => r.error === 'no_rpc';
 
 async function call<T = MarketRes>(fn: string, args: Record<string, unknown> = {}): Promise<T & MarketRes> {
   if (!supabase) return { error: 'no_server' } as T & MarketRes;
+  // โหมด "ดูเป็นลูกค้า": RPC ตลาดวิ่งด้วย session แอดมินตัวจริง (มีผลจริง · ขอเลขกระเป๋า/นับโควตา/บันทึกเปิดดูบัญชี)
+  //   → อ่านกระดานได้อย่างเดียว ที่เหลือไม่ส่ง (audit รอบ E R2B-09 / R2A-09)
+  if (simActive() && fn !== 'ryuma_market_feed') return { error: 'sim' } as T & MarketRes;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const { data, error } = await Promise.race([
@@ -132,7 +136,7 @@ export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'rev
   | 'offer' | 'declined' | 'withdrawn' // v73 เปลี่ยนใบพรี
   | 'late_slip'; // v75 ผู้รับโอนแล้วแต่ดีลปิดไปก่อน → แจ้งคนส่ง + แอดมิน
 export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
-  if (!supabase) return;
+  if (!supabase || simActive()) return;
   try {
     const token = await Promise.race([
       supabase.auth.getSession().then((r) => r.data.session?.access_token),
@@ -150,6 +154,7 @@ export async function marketPush(id: string, kind: MarketPushKind): Promise<void
 /** ข้อความไทยของรหัส error — ใช้ร่วมทุกหน้า (ลูกค้า + แอดมิน) */
 export const MARKET_ERR_TH: Record<string, string> = {
   closed: 'ยังไม่เปิดให้ใช้งาน — เร็วๆ นี้',
+  sim: SIM_BLOCKED,
   // v73 เปลี่ยนใบพรี
   bad_code: 'เลขกระเป๋าต้องเป็นตัวเลข 4 หลัก',
   too_many: 'ค้นเลขกระเป๋าครบโควตาวันนี้แล้ว (20 ครั้ง) — ลองใหม่พรุ่งนี้',
@@ -165,8 +170,9 @@ export const MARKET_ERR_TH: Record<string, string> = {
   bad_price: 'ราคาต้องเป็นจำนวนเต็มบาท',
   bad_qty: 'จำนวนชิ้นไม่ถูกต้อง',
   bad_slip: 'แนบรูปสลิปก่อน',
-  no_payout: 'ใส่บัญชีรับเงิน (พร้อมเพย์) ก่อนลงขาย',
-  no_address: 'ผู้รับต้องมีที่อยู่จัดส่งในโปรไฟล์ก่อน',
+  no_payout: 'เลือกหรือเพิ่มบัญชีรับเงินก่อน',
+  // ใช้ทั้งตอนจองกระดาน (ตัวคุณ) และตอนส่งข้อเสนอ (ผู้รับ) — ข้อความกลางๆ (audit รอบ E R1-31)
+  no_address: 'คนรับใบต้องมีที่อยู่จัดส่งในโปรไฟล์ก่อน — ถ้าเป็นคุณ เพิ่มได้ที่หน้าโปรไฟล์',
   own_listing: 'ซื้อประกาศของตัวเองไม่ได้',
   reserved: 'มีคนกำลังจองใบนี้อยู่',
   gone: 'ใบนี้ไม่ได้ลงขายแล้ว',
@@ -180,10 +186,10 @@ export const MARKET_ERR_TH: Record<string, string> = {
   instock: 'ของพร้อมส่งไม่ใช่ใบพรี',
   sourcing: 'ตั๋วงานหาของขายในตลาดไม่ได้',
   pending_slip: 'มีสลิปส่วนต่างรอตรวจ',
-  already_listed: 'ลงขายอยู่แล้ว',
-  max_active: 'ลงประกาศพร้อมกันได้สูงสุด 5 ใบ',
-  resell_hold: 'ซื้อจากตลาดมา ต้องถือครบ 3 วันก่อนขายต่อ',
-  topup_needed: 'ต้องเติมมัดจำให้ครบก่อนลงขาย',
+  already_listed: 'ใบนี้ลงขาย/ส่งข้อเสนออยู่แล้ว',
+  max_active: 'ลงขาย/ส่งข้อเสนอพร้อมกันได้สูงสุด 5 ใบ',
+  resell_hold: 'ได้ใบนี้มาจากคนอื่น ต้องถือครบ 3 วันก่อนส่งต่อ',
+  topup_needed: 'ต้องเติมมัดจำให้ครบก่อนเปลี่ยนใบ/ลงขาย',
   owner_changed: 'ตั๋วเปลี่ยนเจ้าของไปแล้ว',
   ticket_moving: 'ตั๋วเข้าขั้นตอนจัดส่งแล้ว',
   ticket_missing: 'ไม่พบตั๋วใบนี้',
@@ -197,3 +203,6 @@ export const MARKET_ERR_TH: Record<string, string> = {
   ticket_changed: 'ยอดเงินของใบนี้เปลี่ยนไปจากตอนตกลงกัน — ยกเลิกดีลนี้แล้วให้ตกลงใหม่ตามยอดล่าสุด',
 };
 export const marketErrText = (r: MarketRes) => MARKET_ERR_TH[r.error ?? ''] ?? (r.error ? `ทำรายการไม่สำเร็จ (${r.error})` : 'ทำรายการไม่สำเร็จ');
+/** ข้อความผลค้นเลขกระเป๋า — เลขไม่เจอ ≠ "รายการหาย" (audit รอบ E R1-18) */
+export const lookupErrText = (r: MarketRes) =>
+  r.error === 'not_found' ? 'ไม่พบเลขกระเป๋านี้ — เลขเปลี่ยนทุกเที่ยงคืน ขอเลขล่าสุดจากผู้รับ' : marketErrText(r);

@@ -37,7 +37,8 @@ export default function AdminMembersPage() {
   const [busyId, setBusyId] = useState<string | null>(null); // กันกดอนุมัติซ้ำระหว่างรอ RPC
   const [manageId, setManageId] = useState<string | null>(null);
 
-  const pending = db.users.filter((u) => u.approved === false && !u.is_admin);
+  // แอดมินที่ถูกตั้งก่อนอนุมัติก็ต้องโผล่ให้กดอนุมัติได้ (audit รอบ E R2B-12: เดิมไม่มีที่ไหนให้กด รับใบพรีไม่ได้ถาวร)
+  const pending = db.users.filter((u) => u.approved === false);
   const members = db.users.filter((u) => u.id !== 'u-admin' && u.approved !== false);
 
   const approve = async (u: User) => {

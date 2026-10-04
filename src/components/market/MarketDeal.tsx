@@ -22,9 +22,13 @@ import { PayoutLine } from './PayoutPicker';
 type Flash = (m: string) => void;
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 /** เวลาที่เหลือแบบอ่านง่าย: เกิน 1 ชม. = "23 ชม. 59 นาที" · ต่ำกว่า = mm:ss */
-const leftLabel = (msLeft: number) => msLeft >= 3_600_000 ? `${Math.floor(msLeft / 3_600_000)} ชม. ${Math.floor((msLeft % 3_600_000) / 60_000)} นาที` : mmss(msLeft);
-/** ชื่อคู่ดีล — RLS อาจไม่ให้เห็นแถว user ของอีกฝั่ง → ใช้ mask จาก id (เจ้าของ: ไม่ต้องสนชื่อ ขอแค่ยอด+ใบตรง) */
-const whoMask = (db: Database, id?: string) => { const u = db.users.find((x) => x.id === id); return u ? sellerMask(u) : `R•••${(id ?? '').replace(/\D/g, '').slice(-2) || (id ?? '').slice(-2)}`; };
+//   หมดเวลาแล้ว (ช่วงผ่อนผัน 10 นาทีก่อนระบบปิด) ไม่โชว์ "00:00" (audit รอบ E R3-29)
+const leftLabel = (msLeft: number) => msLeft <= 0 ? 'หมดเวลาแล้ว' : msLeft >= 3_600_000 ? `${Math.floor(msLeft / 3_600_000)} ชม. ${Math.floor((msLeft % 3_600_000) / 60_000)} นาที` : mmss(msLeft);
+/** ป้ายสั้นในวงนาฬิกา: ชม.ที่เหลือ / นาทีที่เหลือ */
+const ringLabel = (msLeft: number) => msLeft <= 0 ? 'หมด' : msLeft >= 3_600_000 ? `${Math.ceil(msLeft / 3_600_000)}ชม.` : `${Math.ceil(msLeft / 60_000)}น.`;
+/** ชื่อคู่ดีล — RLS ไม่ให้เห็นแถว user ของอีกฝั่ง → ใช้คำกลางๆ แทน mask ที่เดาจาก id (audit รอบ E R1-17: เดิม mask
+ *  จาก id ไม่ตรงกับ mask จากรหัสสมาชิกที่ server โชว์ตอนค้นเลข) · เห็นแถว user ได้ (แอดมิน) = mask จากรหัสสมาชิก */
+const whoMask = (db: Database, id: string | undefined, fallback: string) => { const u = db.users.find((x) => x.id === id); return u ? ` ${sellerMask(u)} ` : fallback; };
 const DIRECT_STEPS = ['ได้รับข้อเสนอ', 'โอน + สลิป', 'คนส่งเช็ค', 'ร้านโอนสิทธิ์'];
 const FREE_STEPS = ['ได้รับข้อเสนอ', 'กดรับ', 'คนส่งยืนยัน', 'ร้านโอนสิทธิ์'];
 
@@ -45,7 +49,9 @@ export function MarketDeal({ id, mode = 'live', onBack }: { id: string; mode?: '
   const tr = db.transfers.find((x) => x.id === id);
   const role = tr ? dealRole(tr, uid) : 'none';
   const direct = !!tr && isDirect(tr);
-  const st = tr ? effectiveStatus(tr, new Date(now)) : row?.status;
+  // นาฬิกาเดียวกับนับถอยหลัง (เวลาเซิร์ฟเวอร์) — เดิมสถานะใช้นาฬิกาเครื่อง นับถอยหลังใช้เวลาเซิร์ฟเวอร์ (R1-55)
+  void now;
+  const st = tr ? effectiveStatus(tr, new Date(serverNow())) : row?.status;
   const productId = tr?.product_id ?? row?.product_id;
   const variantId = (tr?.variant_id ?? row?.variant_id) || undefined;
   const reload = async () => { await store.reload(); await refresh(); };
@@ -97,9 +103,9 @@ export function MarketDeal({ id, mode = 'live', onBack }: { id: string; mode?: '
       ) : role === 'buyer' && st === 'reserved' && tr ? (
         <PayPanel tr={tr} price={price} due={due} serverNow={serverNow} now={now} flash={flash} reload={reload} />
       ) : role === 'buyer' && tr ? (
-        <BuyerTrack tr={tr} st={st!} price={price} due={due} now={now} flash={flash} reload={reload} lineOa={db.settings.line_oa_id} />
+        <BuyerTrack db={db} uid={uid} tr={tr} st={st!} price={price} due={due} now={serverNow()} flash={flash} reload={reload} lineOa={db.settings.line_oa_id} />
       ) : role === 'seller' && tr ? (
-        <SellerPanel db={db} tr={tr} st={st!} price={price} due={due} now={now} flash={flash} reload={reload}
+        <SellerPanel db={db} uid={uid} tr={tr} st={st!} price={price} due={due} now={serverNow()} flash={flash} reload={reload}
           ticketNo={db.tickets.find((t) => t.id === tr.ticket_id)?.ticket_no} />
       ) : row ? (
         <PublicPanel id={id} row={row} price={price} due={due} total={total}
@@ -177,12 +183,15 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
   };
   const accept = async () => {
     if (busy || (!free && !slip)) return;
+    // ยกให้ฟรีกดครั้งเดียวก็ผูกมัดหนี้ส่วนต่าง — ถามก่อน (audit รอบ E R1-54)
+    if (free && !window.confirm(`รับใบพรีนี้?\nคุณจะเป็นคนจ่ายส่วนต่างที่ค้าง ${baht(due)} ให้ร้านตอนของถึงไทย · กดรับแล้วยกเลิกเองไม่ได้`)) return;
     setBusy(true);
     const r = await mk.marketPay(tr.id, slip ?? '');
-    setBusy(false);
-    if (!r.ok && r.recorded) { await reportLateSlip(tr, price, r, flash, reload); return; }
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok && r.recorded) { await reportLateSlip(tr, price, r, flash, reload); setBusy(false); return; }
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
+    // ปุ่มยังล็อกจนโหลดสถานะใหม่เสร็จ — กันกดซ้ำแล้วขึ้น error/ส่ง LINE ซ้ำ (R1-53)
     await reload();
+    setBusy(false);
     void mk.marketPush(tr.id, 'paid');
     notifyAdminLine(free
       ? `🤝 [เปลี่ยนใบพรี] ผู้รับกดรับใบ (ยกให้ฟรี) แล้ว — รอคนส่งยืนยัน · ดีล ${tr.id}`
@@ -194,18 +203,18 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
     if (!window.confirm('ไม่รับข้อเสนอนี้? ใบพรีจะกลับไปที่คนส่ง')) return;
     setBusy(true);
     const r = await mk.marketDecline(tr.id);
-    setBusy(false);
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
     await reload();
+    setBusy(false);
     void mk.marketPush(tr.id, 'declined');
     flash('ไม่รับข้อเสนอแล้ว · แจ้งคนส่งแล้ว');
   };
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3 rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-3.5 py-3">
-        <HoldRing msLeft={left} total={MARKET.offerHours * 3_600_000} size={48} stroke={4}><span className="text-[10px]">24ชม.</span></HoldRing>
+        <HoldRing msLeft={left} total={MARKET.offerHours * 3_600_000} size={48} stroke={4}><span className="text-[10px]">{ringLabel(left)}</span></HoldRing>
         <div className="text-[12px] leading-relaxed text-ink-muted2">
-          <b className="block text-[13.5px] text-[#f1d27a]">{whoMask(db, tr.from_user_id)} เปลี่ยนใบพรีใบนี้ให้คุณ</b>
+          <b className="block text-[13.5px] text-[#f1d27a]">{whoMask(db, tr.from_user_id, 'มีคน')}เปลี่ยนใบพรีใบนี้ให้คุณ</b>
           {free ? 'ยกให้ฟรี — กดรับภายในเวลา' : 'โอนตามยอดแล้วแนบสลิปภายในเวลา'} · เหลือ <b className="font-mono text-ink">{leftLabel(left)}</b>{left <= 0 ? ' · หมดเวลาแล้ว — ถ้าโอนไปแล้วรีบแนบสลิป' : ''}
         </div>
       </div>
@@ -254,9 +263,9 @@ function PayPanel({ tr, price, due, serverNow, now, flash, reload }: {
     if (!slip || busy) return;
     setBusy(true);
     const r = await mk.marketPay(tr.id, slip);
-    setBusy(false);
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
     await reload();
+    setBusy(false);
     void mk.marketPush(tr.id, 'paid');
     notifyAdminLine(`🎟️ ตลาดใบพรี: ผู้ซื้อโอน ${baht(price)} ให้คนขายแล้ว (รอคนขายยืนยัน) · ดีล ${tr.id}`);
     flash('ส่งสลิปแล้ว · แจ้งคนขายให้เช็คเงินแล้ว');
@@ -296,8 +305,8 @@ function PayPanel({ tr, price, due, serverNow, now, flash, reload }: {
 }
 
 // ── ผู้ซื้อ/ผู้รับ หลังโอน: ติดตาม ───────────────────────────────────────────────────
-function BuyerTrack({ tr, st, price, due, now, flash, reload, lineOa }: {
-  tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; lineOa?: string;
+function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }: {
+  db: Database; uid: string; tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; lineOa?: string;
 }) {
   const direct = isDirect(tr);
   const free = direct && price <= 0;
@@ -315,6 +324,15 @@ function BuyerTrack({ tr, st, price, due, now, flash, reload, lineOa }: {
     flash('ส่งเรื่องให้ร้านตรวจสอบแล้ว');
   };
   if (st === 'done' || st === 'approved') {
+    // ส่งต่อไปแล้ว (ใบไม่อยู่ในกระเป๋าคุณ) — ห้ามบอกว่า "เข้ากระเป๋า" + ลิงก์ไปใบที่ไม่ใช่ของคุณแล้ว (audit รอบ E R3-18)
+    const gotId = tr.child_ticket_id || tr.ticket_id;
+    if (!db.tickets.some((t) => t.id === gotId && t.owner_id === uid)) {
+      return (
+        <div className="rounded-2xl border border-subtle bg-surface-2 p-4 text-[13px] leading-relaxed text-ink-muted2">
+          <b className="text-ink">ได้รับใบ {tr.new_ticket_no ?? ''} แล้ว</b> · ตอนนี้ใบนี้ไม่ได้อยู่ในกระเป๋าคุณ (ส่งต่อ/เปลี่ยนใบไปแล้ว)
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-center gap-3 text-center">
         <div className="text-[22px] font-extrabold motion-safe:animate-riseIn">🎉 ใบพรีเข้ากระเป๋าแล้ว!</div>
@@ -383,8 +401,8 @@ function BuyerTrack({ tr, st, price, due, now, flash, reload, lineOa }: {
 }
 
 // ── คนขาย / คนส่ง ─────────────────────────────────────────────────────────────────
-function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
-  db: Database; tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; ticketNo?: string;
+function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo }: {
+  db: Database; uid: string; tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; ticketNo?: string;
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [note, setNote] = useState('');
@@ -399,9 +417,9 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
     if (busy) return;
     setBusy(true);
     const r = await fn();
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
+    await reload(); // ปุ่มล็อกจนสถานะใหม่มาถึง (R1-53)
     setBusy(false);
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
-    await reload();
     after?.();
     flash(ok);
   };
@@ -414,9 +432,9 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
       <div className="flex flex-col gap-3">
         <MoneySplit price={price} due={due} />
         <div className="flex items-center gap-3 rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-muted2">
-          <HoldRing msLeft={holdLeft} total={MARKET.offerHours * 3_600_000} size={40} stroke={4} />
+          <HoldRing msLeft={holdLeft} total={MARKET.offerHours * 3_600_000} size={40} stroke={4}><span className="text-[9px]">{ringLabel(holdLeft)}</span></HoldRing>
           <div>
-            <b className="text-[#f1d27a]">ส่งข้อเสนอให้ {whoMask(db, tr.to_user_id)} แล้ว</b> · เขามีเวลา <b className="font-mono text-ink">{leftLabel(holdLeft)}</b> {free ? 'กดรับ' : 'โอน + แนบสลิป'}<br />
+            <b className="text-[#f1d27a]">ส่งข้อเสนอให้{whoMask(db, tr.to_user_id, 'ผู้รับ')}แล้ว</b> · {holdLeft > 0 ? <>เขามีเวลา <b className="font-mono text-ink">{leftLabel(holdLeft)}</b> {free ? 'กดรับ' : 'โอน + แนบสลิป'}</> : <>หมดเวลาแล้ว · ระบบกำลังปิดข้อเสนอ</>}<br />
             ใบนี้ถูกล็อก 🔒 จนกว่าเขาจะรับ/ไม่รับ{tr.payout_viewed_at ? '' : ' หรือคุณถอนข้อเสนอ'}
           </div>
         </div>
@@ -462,9 +480,15 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
       return (
         <div className="flex flex-col gap-3">
           <div className="rounded-2xl border border-[#16a34a]/35 bg-surface-2 p-3.5 text-[13px] leading-relaxed text-ink-muted2">
-            <b className="text-ink">{whoMask(db, tr.to_user_id)} กดรับใบพรีแล้ว</b> · {fmt(tr.paid_at)}<br />กดยืนยัน — ร้านจะโอนสิทธิ์ให้เขาต่อ (ใบนี้จะออกจากกระเป๋าคุณ)
+            <b className="text-ink">{whoMask(db, tr.to_user_id, 'ผู้รับ')}กดรับใบพรีแล้ว</b> · {fmt(tr.paid_at)}<br />กดยืนยัน — ร้านจะโอนสิทธิ์ให้เขาต่อ (ใบนี้จะออกจากกระเป๋าคุณ)
           </div>
           {confirmBtn}
+          {/* ยกให้ฟรี: ไม่มีเงินเปลี่ยนมือ คนส่งเปลี่ยนใจได้จนกว่าจะยืนยัน (audit รอบ E R1-58 · v78) */}
+          {st === 'paid' && (
+            <button type="button" disabled={busy}
+              onClick={() => { if (window.confirm('ยกเลิกการยกให้? ผู้รับจะเห็นว่าถูกถอน และใบพรีกลับมาเป็นของคุณ')) void run(() => mk.marketCancel(tr.id), 'ยกเลิกการยกให้แล้ว · ใบพรีปลดล็อกแล้ว', () => { void mk.marketPush(tr.id, 'withdrawn'); }); }}
+              className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13.5px] font-bold text-ink-muted2">ยกเลิกการยกให้</button>
+          )}
         </div>
       );
     }
@@ -523,18 +547,23 @@ function SellerPanel({ db, tr, st, price, due, now, flash, reload, ticketNo }: {
     cancelled: direct ? `${dealStatusLabel(tr, 'cancelled')}${tr.cancel_reason?.startsWith('admin: ') ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : ''}` : `ประกาศถูกยกเลิก${tr.cancel_reason ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : ''}`,
     expired: direct ? 'ข้อเสนอหมดเวลา — ผู้รับไม่ได้ตอบใน 24 ชม. · ใบปลดล็อกแล้ว ส่งใหม่ได้จากหน้าใบพรี' : 'ประกาศหมดอายุ — ลงขายใหม่ได้จากหน้าใบพรี',
   };
+  const moneyIn = (st === 'expired' || st === 'cancelled') && !!tr.paid_at && price > 0;
+  // ใบที่ขายไปแล้วกลับมาอยู่กับคุณ (รับคืนมา) — บอกตรงๆ แทน "ขายสำเร็จ" เฉยๆ (R3-18)
+  const backId = tr.child_ticket_id || tr.ticket_id;
+  const back = (st === 'done' || st === 'approved') ? db.tickets.find((t) => t.id === backId && t.owner_id === uid) : undefined;
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-2xl border border-subtle bg-surface-2 px-4 py-3.5 text-[13px] text-ink-muted2">{msg[st] ?? dealStatusLabel(tr, st as TicketTransfer['status'])}</div>
-      {/* ผู้รับแนบสลิปหลังดีลปิด (v75) — คนส่งต้องรู้ว่ามีเงินเข้าบัญชีตัวเอง และต้องคืน */}
-      {(st === 'expired' || st === 'cancelled') && tr.paid_at && price > 0 && (
+      {back && <Link href={`/wallet/${encodeURIComponent(back.ticket_no)}`} className="rounded-btn border border-accent px-5 py-3 text-center text-[13.5px] font-bold text-primary-soft">ตอนนี้ใบนี้กลับมาอยู่กับคุณแล้ว · ดูใบ {back.ticket_no}</Link>}
+      {/* ผู้รับโอนแล้วแต่ดีลปิด/ร้านยกเลิก (v75) — คนส่งต้องรู้ว่ามีเงินเข้าบัญชีตัวเอง และต้องคืน (R3-28) */}
+      {moneyIn && (
         <div className="rounded-2xl border border-[#fbbf24]/40 bg-[#fbbf24]/[0.08] px-4 py-3 text-[12.5px] leading-relaxed text-[#fbbf24]">
-          ⚠️ ผู้รับแจ้งว่าโอน {baht(price)} เข้าบัญชีคุณแล้ว ({fmt(tr.paid_at)}) แต่ดีลปิดไปก่อน — เช็คบัญชี แล้วคืนเงินผู้รับ · ร้านจะติดต่อคุณ
+          ⚠️ {tr.cancel_reason?.startsWith('admin') ? 'ร้านยกเลิกดีลนี้' : 'ดีลปิดไปก่อน'} แต่{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}โอน {baht(price)} เข้าบัญชีคุณแล้ว ({fmt(tr.paid_at)}) — เช็คบัญชี แล้วคืนเงินให้เขา · ร้านจะติดต่อคุณ
           {tr.slip_url && /^https?:\/\//.test(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer" className="ml-1 underline">ดูสลิป</a>}
         </div>
       )}
       {(st === 'expired' || st === 'cancelled') && ticketNo && (
-        <Link href={`/wallet/${encodeURIComponent(ticketNo)}`} className="rounded-btn border border-accent px-5 py-3 text-center text-[14px] font-bold text-primary-soft">ไปที่ใบพรี {ticketNo}</Link>
+        <Link href={`/wallet/${encodeURIComponent(ticketNo)}`} className="rounded-btn border border-accent px-5 py-3 text-center text-[14px] font-bold text-primary-soft">{moneyIn ? `ดูใบพรี ${ticketNo}` : `ไปที่ใบพรี ${ticketNo}`}</Link>
       )}
     </div>
   );
