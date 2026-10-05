@@ -15,6 +15,7 @@ import { baht } from '@/lib/theme';
 import { productLabel } from '@/domain/services/catalog';
 import { depositGap, listingPreview, sellBlockReason, standardDepositPerUnit, topupIsFullPayment, MARKET } from '@/domain/services/market';
 import { heldByPayer } from '@/domain/services/tickets';
+import { monthlyBonusForTicket } from '@/domain/services/monthly';
 import * as mk from '@/lib/market';
 import type { PayoutAccount, PreorderTicket } from '@/domain/entities';
 import { QrPanel, cx } from '@/components/ui';
@@ -83,6 +84,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   // ยกให้ฟรี (ดีลตรง ฿0) ไม่มีเงินให้รับ → ไม่ต้องมีบัญชี (audit รอบ C R1-58)
   const needPayout = !(direct && !priceMissing && price === 0);
   const verb = direct ? 'เปลี่ยนใบ' : 'ลงขาย';
+  const bonus = monthlyBonusForTicket(db, t);
 
   const saveTopup = async () => {
     if (!slip || busy) return;
@@ -276,7 +278,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                   </div>
                 )}
                 {target && !target.ok && <div className="mt-2 text-[12px] text-[#f87171]">{mk.lookupErrText(target)}</div>}
-                <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ผู้รับต้องกดรับเอง · คุณถอนข้อเสนอได้จนกว่าผู้รับจะเปิดหน้าโอนเงิน</div>
+                <div className="mt-2 text-[11px] text-ink-faint">ค้นได้วันละ {MARKET.lookupPerDay} ครั้ง · ผู้รับต้องกดรับเอง · ถอนข้อเสนอได้ แต่ต้องใส่เหตุผล (ผู้รับและร้านเห็น)</div>
               </div>
             )}
 
@@ -288,7 +290,10 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                   ? <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. กดรับ · แล้วคุณกดยืนยัน (ก่อนยืนยันยังยกเลิกการยกให้ได้) · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>
                   : <li>⏳ ผู้รับมี {MARKET.offerHours} ชม. โอน+แนบสลิป · โอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม. · ร้านกดโอนสิทธิ์เป็นขั้นสุดท้าย</li>)
                 : <li>⏳ ประกาศอยู่ {MARKET.listingDays} วัน · มีคนจอง {MARKET.holdMin} นาที · ผู้ซื้อโอนแล้วคุณต้องยืนยันใน {MARKET.sellerSlaH} ชม.</li>}
-              {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ · โบนัสยศที่ได้จากใบนี้จะถูกเรียกคืน</li>}
+              {heldByPayer(t) && <li>🏆 {direct ? 'เปลี่ยนใบแล้ว' : 'ขายแล้ว'}ใบนี้ไม่นับยศรายเดือน/Event ของคุณ{bonus
+                // โบนัสยศรายเดือนที่ผูกกับใบนี้ถูกยกเลิก (เจ้าของ 2026-10-05) — บอกยอดจริงก่อนกดส่ง
+                ? (bonus.applied ? ` · โบนัสยศ ${bonus.amount.toLocaleString('en-US')} แต้มที่ใช้ไปแล้วกับใบนี้จะถูกดึงคืน` : ` · โบนัสยศ ${bonus.amount.toLocaleString('en-US')} แต้ม (${bonus.tier.label}) ที่ผูกกับใบนี้จะถูกยกเลิก`)
+                : ''}</li>}
               {needPayout && payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
             </ul>
             {err && <div role="alert" className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] px-3 py-2 text-[12.5px] font-semibold text-[#f87171]">{err}</div>}

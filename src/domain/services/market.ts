@@ -44,7 +44,7 @@ export const MARKET = {
   sellerRemindH: [2, 8],
   listingDays: 14,      // ข้อ 17 — ประกาศหมดอายุ (ต่ออายุได้)
   maxActive: 5,         // ข้อ 4 — ประกาศค้างพร้อมกันต่อคน
-  resellDays: 3,        // ข้อ 5 — ซื้อจากตลาดแล้วต้องถือ 3 วันก่อนขายต่อ
+  resellDays: 2,        // ข้อ 5 — ได้ใบมาแล้วต้องถือ 2 วันก่อนส่งต่อ (cool down · เจ้าของ 2026-10-05 · เดิม 3)
   offerHours: 24,       // v73 เปลี่ยนใบพรี — ผู้รับมี 24 ชม. โอน+แนบสลิป (ไม่มีใครรอแย่ง จึงไม่ใช่ 15 นาที)
   lookupPerDay: 20,     // v73 — ค้นเลขกระเป๋าได้วันละ 20 ครั้ง (กันไล่เดา 4 หลัก)
 } as const;
@@ -239,7 +239,7 @@ export function sellerMask(u?: Pick<User, 'id' | 'member_code'>): string {
   return `R•••${tail}`;
 }
 
-/** ตั๋วที่ซื้อจากตลาด ขายต่อได้เมื่อไหร่ (ข้อ 5: ถือครบ 3 วัน) — null = ขายได้เลย */
+/** ตั๋วที่ได้มาจากตลาด/เปลี่ยนใบ ส่งต่อได้เมื่อไหร่ (ข้อ 5: ถือครบ 2 วัน) — null = ขายได้เลย */
 export function resellAllowedAt(db: Database, t: PreorderTicket, userId: string): Date | null {
   const last = db.transfers
     .filter((tr) => TRANSFER_DONE.has(tr.status) && tr.to_user_id === userId && (tr.child_ticket_id || tr.ticket_id) === t.id)

@@ -364,6 +364,7 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
           <b className="text-ink">{direct ? dealStatusLabel(tr, st as TicketTransfer['status']) : `ดีลนี้${TRANSFER_STATUS_LABEL[st as TicketTransfer['status']]}`}</b>
           {tr.paid_at && price > 0 && <div className="mt-1">คุณโอนไปแล้ว {baht(price)} — ร้านได้รับสลิปแล้ว แอดมินจะติดต่อให้{sender}คืนเงินพร้อมสลิปคืน</div>}
           {tr.cancel_reason && !['buyer_declined', 'seller'].includes(tr.cancel_reason) && <div className="mt-1 text-[12px] text-ink-faint">เหตุผล: {tr.cancel_reason === 'ticket_changed' ? 'ตั๋วเปลี่ยนไประหว่างดีล' : tr.cancel_reason.replace(/^admin: /, '')}</div>}
+          {tr.cancel_reason === 'seller' && tr.cancel_note && <div className="mt-1 text-[12px] text-ink-muted2">เหตุผลจาก{sender}: “{tr.cancel_note}”</div>}
         </div>
         {canReport && (
           <div className="rounded-2xl border border-[#fbbf24]/35 bg-[#fbbf24]/[0.06] p-3.5">
@@ -400,6 +401,36 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
   );
 }
 
+// ── ถอน/ยกเลิกพร้อมเหตุผล (v79 · เจ้าของ 2026-10-05 "ยกเลิกพร้อมเหตุผล กันเกรียน") ─────────────
+//   คอมโพเนนต์ระดับไฟล์ (DNA react-state) · เหตุผลที่เลือก + รายละเอียด (บังคับเมื่อเลือก "อื่นๆ")
+const CANCEL_REASONS = ['ส่งผิดคน', 'ตั้งยอดผิด', 'ผู้รับไม่ตอบ / ติดต่อไม่ได้', 'ตกลงกันใหม่ จะส่งข้อเสนอใหม่', 'เปลี่ยนใจ ไม่เปลี่ยนใบแล้ว', 'อื่นๆ'];
+function CancelWithReason({ title, warn, busy, onSubmit, onClose }: { title: string; warn?: string; busy: boolean; onSubmit: (reason: string) => void; onClose: () => void }) {
+  const [pick, setPick] = useState('');
+  const [note, setNote] = useState('');
+  const other = pick === 'อื่นๆ';
+  const reason = other ? note.trim() : [pick, note.trim()].filter(Boolean).join(' · ');
+  const ready = !!pick && (!other || note.trim().length >= 2);
+  return (
+    <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
+      <div className="text-[13.5px] font-bold">{title} · เลือกเหตุผล</div>
+      <div className="mt-0.5 text-[11.5px] text-ink-faint">ผู้รับและร้านจะเห็นเหตุผลนี้</div>
+      {warn && <div className="mt-2 rounded-lg border border-[#fbbf24]/40 bg-[#fbbf24]/10 px-2.5 py-2 text-[12px] text-[#fbbf24]">⚠️ {warn}</div>}
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {CANCEL_REASONS.map((r) => (
+          <button key={r} type="button" onClick={() => setPick(r)}
+            className={cx('rounded-full border px-2.5 py-1 text-[12px] font-semibold', pick === r ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>{r}</button>
+        ))}
+      </div>
+      <input id="mk-cancel-note" value={note} onChange={(e) => setNote(e.target.value.slice(0, 200))} placeholder={other ? 'พิมพ์เหตุผล (บังคับ)' : 'รายละเอียดเพิ่ม (ถ้ามี)'}
+        className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none focus:border-accent" />
+      <div className="mt-2.5 flex gap-2">
+        <button type="button" onClick={onClose} className="flex-1 rounded-btn border border-subtle bg-surface-3 py-2.5 text-[13px] font-bold text-ink-muted2">ไม่ถอนแล้ว</button>
+        <button type="button" disabled={!ready || busy} onClick={() => onSubmit(reason)} className="flex-1 rounded-btn bg-cta py-2.5 text-[13px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังส่ง…' : `ยืนยัน${title}`}</button>
+      </div>
+    </div>
+  );
+}
+
 // ── คนขาย / คนส่ง ─────────────────────────────────────────────────────────────────
 function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo }: {
   db: Database; uid: string; tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; ticketNo?: string;
@@ -413,6 +444,17 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   // บัญชีที่ล็อกกับดีลนี้ = เงินต้องเข้าบัญชีไหน (audit รอบ C R1-49 · v76 คนส่ง/คนขายอ่านของดีลตัวเองได้)
   const [myPayout, setMyPayout] = useState<mk.MarketRes | null>(null);
   useEffect(() => { if (!free) void mk.marketPayout(tr.id).then(setMyPayout); }, [tr.id, free]);
+  const [withdrawing, setWithdrawing] = useState(false);
+  /** ถอนข้อเสนอ/ยกเลิกการยกให้ พร้อมเหตุผล (v79) — แจ้งผู้รับ (push มีเหตุผล) + LINE ร้าน */
+  const withdraw = (reason: string, ok: string) => run(async () => {
+    const r = await mk.marketCancel(tr.id, reason);
+    // เซิร์ฟเวอร์ยังไม่อัปเดต (ก่อนรัน v79/v78) — บอกให้ติดต่อร้าน แทนข้อความที่ทำให้วนรีเฟรช
+    return r.error === 'no_rpc' || (r.error === 'bad_status' && r.status === 'paid') ? { error: 'gift_cancel_unavailable' } : r;
+  }, ok, () => {
+    setWithdrawing(false);
+    void mk.marketPush(tr.id, 'withdrawn');
+    notifyAdminLine(`↩️ [เปลี่ยนใบพรี] คนส่ง${free ? 'ยกเลิกการยกให้' : 'ถอนข้อเสนอ'} ${ticketNo ?? ''} · เหตุผล: ${reason}${tr.payout_viewed_at ? ' · ⚠ ผู้รับเปิดหน้าโอนเงินแล้ว' : ''} · ดีล ${tr.id}`);
+  });
   const run = async (fn: () => Promise<mk.MarketRes>, ok: string, after?: () => void) => {
     if (busy) return;
     setBusy(true);
@@ -438,15 +480,15 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
             ใบนี้ถูกล็อก 🔒 จนกว่าเขาจะรับ/ไม่รับ{tr.payout_viewed_at ? '' : ' หรือคุณถอนข้อเสนอ'}
           </div>
         </div>
-        {tr.payout_viewed_at ? (
-          // ผู้รับเปิดหน้าโอนเงินแล้ว = อาจกำลังโอน → ถอนเองไม่ได้ (v75 · audit รอบ B R1-01) ต้องให้ร้านยกเลิก
-          <div className="rounded-xl border border-subtle bg-surface-2 px-3 py-2.5 text-[12px] leading-relaxed text-ink-muted2">
-            ผู้รับเปิดหน้าโอนเงินแล้ว {fmt(tr.payout_viewed_at)} · <b className="text-ink">ถอนข้อเสนอเองไม่ได้</b> (กันผู้รับโอนแล้วเสียเงิน) — ถ้าจำเป็นให้ติดต่อร้านยกเลิก
-          </div>
+        {/* ถอนได้ทุกเมื่อ แต่ต้องเลือกเหตุผล — ผู้รับ + ร้านเห็น กันเกรียน (เจ้าของ 2026-10-05 · v79)
+            ผู้รับเปิดหน้าโอนแล้ว = เตือนว่าอาจมีเงินเข้า ต้องคืน (ผู้รับแนบสลิปแจ้งร้านได้ · late slip v75) */}
+        {withdrawing ? (
+          <CancelWithReason busy={busy} title="ถอนข้อเสนอ" onClose={() => setWithdrawing(false)}
+            warn={tr.payout_viewed_at ? `ผู้รับเปิดหน้าโอนเงินแล้ว (${fmt(tr.payout_viewed_at)}) อาจโอนมาแล้ว — ถ้าเงินเข้าบัญชีคุณ ต้องคืนให้เขา` : undefined}
+            onSubmit={(reason) => void withdraw(reason, 'ถอนข้อเสนอแล้ว · ใบพรีปลดล็อกแล้ว')} />
         ) : (
-          <button type="button" disabled={busy}
-            onClick={() => { if (window.confirm('ถอนข้อเสนอนี้? ผู้รับจะเห็นว่าถูกถอน และใบพรีปลดล็อก')) void run(() => mk.marketCancel(tr.id), 'ถอนข้อเสนอแล้ว · ใบพรีปลดล็อกแล้ว', () => { void mk.marketPush(tr.id, 'withdrawn'); }); }}
-            className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[14px] font-bold text-ink-muted2">ถอนข้อเสนอ</button>
+          <button type="button" disabled={busy} onClick={() => setWithdrawing(true)}
+            className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[14px] font-bold text-ink-muted2">ถอนข้อเสนอ…</button>
         )}
       </div>
     );
@@ -483,16 +525,14 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
             <b className="text-ink">{whoMask(db, tr.to_user_id, 'ผู้รับ')}กดรับใบพรีแล้ว</b> · {fmt(tr.paid_at)}<br />กดยืนยัน — ร้านจะโอนสิทธิ์ให้เขาต่อ (ใบนี้จะออกจากกระเป๋าคุณ)
           </div>
           {confirmBtn}
-          {/* ยกให้ฟรี: ไม่มีเงินเปลี่ยนมือ คนส่งเปลี่ยนใจได้จนกว่าจะยืนยัน (audit รอบ E R1-58 · v78) */}
-          {st === 'paid' && (
-            <button type="button" disabled={busy}
-              onClick={() => { if (window.confirm('ยกเลิกการยกให้? ผู้รับจะเห็นว่าถูกถอน และใบพรีกลับมาเป็นของคุณ')) void run(async () => {
-                const r = await mk.marketCancel(tr.id);
-                // เซิร์ฟเวอร์ยังไม่อัปเดต (ก่อนรัน v78) ตอบ bad_status — บอกตรงๆ แทน "รีเฟรช" ที่วนไม่จบ
-                return r.error === 'bad_status' && r.status === 'paid' ? { error: 'gift_cancel_unavailable' } : r;
-              }, 'ยกเลิกการยกให้แล้ว · ใบพรีปลดล็อกแล้ว', () => { void mk.marketPush(tr.id, 'withdrawn'); }); }}
-              className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13.5px] font-bold text-ink-muted2">ยกเลิกการยกให้</button>
-          )}
+          {/* ยกให้ฟรี: ไม่มีเงินเปลี่ยนมือ คนส่งเปลี่ยนใจได้จนกว่าจะยืนยัน (audit รอบ E R1-58 · v78) — ต้องมีเหตุผล (v79) */}
+          {st === 'paid' && (withdrawing ? (
+            <CancelWithReason busy={busy} title="ยกเลิกการยกให้" onClose={() => setWithdrawing(false)}
+              onSubmit={(reason) => void withdraw(reason, 'ยกเลิกการยกให้แล้ว · ใบพรีปลดล็อกแล้ว')} />
+          ) : (
+            <button type="button" disabled={busy} onClick={() => setWithdrawing(true)}
+              className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13.5px] font-bold text-ink-muted2">ยกเลิกการยกให้…</button>
+          ))}
         </div>
       );
     }
@@ -548,7 +588,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
     pending_admin: `คุณยืนยัน${free ? 'แล้ว' : 'รับเงินแล้ว'} ✓ · รอร้านโอนสิทธิ์ให้${direct ? 'ผู้รับ' : 'ผู้ซื้อ'}`,
     done: `${direct ? 'เปลี่ยนใบสำเร็จ' : 'ขายสำเร็จ'} 🤝 · ${tr.prev_ticket_no ?? ''} → ${tr.new_ticket_no ?? ''}`,
     approved: `${direct ? 'เปลี่ยนใบสำเร็จ' : 'ขายสำเร็จ'} 🤝`,
-    cancelled: direct ? `${dealStatusLabel(tr, 'cancelled')}${tr.cancel_reason?.startsWith('admin: ') ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : ''}` : `ประกาศถูกยกเลิก${tr.cancel_reason ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : ''}`,
+    cancelled: direct ? `${dealStatusLabel(tr, 'cancelled')}${tr.cancel_reason?.startsWith('admin: ') ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : tr.cancel_note ? ` · เหตุผล: ${tr.cancel_note}` : ''}` : `ประกาศถูกยกเลิก${tr.cancel_reason ? ` (${tr.cancel_reason.replace(/^admin: /, '')})` : ''}`,
     expired: direct ? 'ข้อเสนอหมดเวลา — ผู้รับไม่ได้ตอบใน 24 ชม. · ใบปลดล็อกแล้ว ส่งใหม่ได้จากหน้าใบพรี' : 'ประกาศหมดอายุ — ลงขายใหม่ได้จากหน้าใบพรี',
   };
   const moneyIn = (st === 'expired' || st === 'cancelled') && !!tr.paid_at && price > 0;

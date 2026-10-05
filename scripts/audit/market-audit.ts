@@ -208,7 +208,7 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   ok('G2 เกินผ่อนผัน → กลับเป็นลงขาย', effectiveStatus({ ...tr, hold_until: iso(-11 * 60_000) }) === 'listed');
   ok('G3 เกินผ่อนผัน + ประกาศหมดอายุ → expired', effectiveStatus({ ...tr, hold_until: iso(-11 * 60_000), expires_at: iso(-1) }) === 'expired');
   ok('G4 listed เกินอายุ → expired', effectiveStatus({ status: 'listed', expires_at: iso(-1) } as TicketTransfer) === 'expired');
-  ok('G5 ค่าคงที่ตรงคำตอบเจ้าของ', MARKET.holdMin === 15 && MARKET.sellerSlaH === 12 && MARKET.listingDays === 14 && MARKET.maxActive === 5 && MARKET.resellDays === 3);
+  ok('G5 ค่าคงที่ตรงคำตอบเจ้าของ', MARKET.holdMin === 15 && MARKET.sellerSlaH === 12 && MARKET.listingDays === 14 && MARKET.maxActive === 5 && MARKET.resellDays === 2);
 }
 
 // ── H) เติมมัดจำก่อนลงขาย (ข้อ 9) ───────────────────────────────────────────────────
@@ -247,9 +247,9 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const rs = { ...db, tickets: db.tickets.map((x) => (x.id === bought.id ? { ...x, owner_id: B } : x)),
     transfers: [...db.transfers, listing(bought, { status: 'done', to_user_id: B, approved_at: iso(-D) })] };
   const heldB = rs.tickets.find((x) => x.id === bought.id)!;
-  ok('I5 ซื้อมา 1 วัน = ยังขายต่อไม่ได้ (ถือ 3 วัน)', (sellBlockReason(rs, heldB, B) ?? '').includes('3 วัน'), sellBlockReason(rs, heldB, B));
+  ok('I5 ซื้อมา 1 วัน = ยังขายต่อไม่ได้ (cool down 2 วัน)', (sellBlockReason(rs, heldB, B) ?? '').includes('2 วัน'), sellBlockReason(rs, heldB, B));
   const rs4 = { ...rs, transfers: rs.transfers.map((x) => (x.ticket_id === bought.id ? { ...x, approved_at: iso(-4 * D) } : x)) };
-  ok('I6 ถือครบ 3 วัน = ขายต่อได้', sellBlockReason(rs4, heldB, B) === null, sellBlockReason(rs4, heldB, B));
+  ok('I6 ถือครบ cool down = ขายต่อได้', sellBlockReason(rs4, heldB, B) === null, sellBlockReason(rs4, heldB, B));
   ok('I7 จำนวนชิ้นเกินใบ = ไม่ได้', sellBlockReason(db, d1, S, 2) === 'จำนวนชิ้นไม่ถูกต้อง');
 }
 
@@ -393,7 +393,7 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const sumMoney = (d: typeof db4) => d.tickets.reduce((s, t) => s + t.deposit_paid + t.remaining_amount, 0) * 1e6 + d.tickets.reduce((s, t) => s + t.deposit_paid + t.remaining_paid, 0);
   ok('N14 ไฟนอลดีลตรง: ตั๋วย้ายไปผู้รับ · เลข -T1 · เงินร้านไม่ขยับ · ผู้รับติดถือ 3 วัน', moved.owner_id === B && moved.ticket_no.endsWith('-T1')
     // เงินบนตั๋วต้องไม่หายไม่งอก: ยอดเต็ม/ที่จ่ายแล้ว รวมทุกใบเท่าเดิม (audit รอบ E R1-47: เดิมเทียบ cashIn ซึ่งไฟนอลไม่แตะอยู่แล้ว ไม่มีวันล้ม)
-    && sumMoney(db5) === sumMoney(db4) && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 3 วัน'));
+    && sumMoney(db5) === sumMoney(db4) && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 2 วัน'));
 }
 
 console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);

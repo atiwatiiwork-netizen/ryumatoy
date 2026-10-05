@@ -98,7 +98,8 @@ export const marketFeed = () => call<{ rows?: MarketRow[]; closed?: boolean }>('
 /** ลงประกาศ — ส่งบัญชีที่เลือกในหน้าลงขายไปด้วย (v76: เซิร์ฟเวอร์ล็อกบัญชีนี้กับประกาศ ไม่ไปอ่านบัญชีหลักที่อาจยังเซฟไม่ขึ้น) */
 export const marketList = (ticketId: string, qty: number, price: number, payout: { promptpay?: string; bank?: string; account_no?: string; account_name: string }) =>
   call('ryuma_market_list', { p_ticket_id: ticketId, p_qty: qty, p_price: price, p_payout: payout });
-export const marketCancel = (id: string) => call('ryuma_market_cancel', { p_id: id });
+/** ถอนประกาศ/ถอนข้อเสนอ — ดีลตรงต้องมีเหตุผล (v79 · เจ้าของ 2026-10-05 กันเกรียน) · กระดานไม่บังคับ */
+export const marketCancel = (id: string, reason?: string) => call('ryuma_market_cancel', { p_id: id, p_reason: reason ?? null });
 export const marketReserve = (id: string) => call('ryuma_market_reserve', { p_id: id });
 export const marketRelease = (id: string) => call('ryuma_market_release', { p_id: id });
 export const marketPayout = (id: string) => call('ryuma_market_payout', { p_id: id });
@@ -188,7 +189,8 @@ export const MARKET_ERR_TH: Record<string, string> = {
   pending_slip: 'มีสลิปส่วนต่างรอตรวจ',
   already_listed: 'ใบนี้ลงขาย/ส่งข้อเสนออยู่แล้ว',
   max_active: 'ลงขาย/ส่งข้อเสนอพร้อมกันได้สูงสุด 5 ใบ',
-  resell_hold: 'ได้ใบนี้มาจากคนอื่น ต้องถือครบ 3 วันก่อนส่งต่อ',
+  resell_hold: 'ได้ใบนี้มาจากคนอื่น ต้องถือครบ 2 วันก่อนส่งต่อ',
+  reason_required: 'ใส่เหตุผลที่ถอน/ยกเลิกก่อน (ผู้รับและร้านจะเห็น)',
   topup_needed: 'ต้องเติมมัดจำให้ครบก่อนเปลี่ยนใบ/ลงขาย',
   owner_changed: 'ตั๋วเปลี่ยนเจ้าของไปแล้ว',
   ticket_moving: 'ตั๋วเข้าขั้นตอนจัดส่งแล้ว',
@@ -199,7 +201,7 @@ export const MARKET_ERR_TH: Record<string, string> = {
   withdrawn: 'ข้อเสนอนี้ถูกถอน/ยกเลิกไปแล้ว',
   use_decline: 'ใช้ปุ่ม "ไม่รับข้อเสนอ" แทน',
   free_deal: 'ดีลยกให้ฟรีไม่มีเงินให้ตรวจ',
-  gift_cancel_unavailable: 'ยังยกเลิกการยกให้เองไม่ได้ในตอนนี้ — ติดต่อร้านให้ยกเลิกแทน',
+  gift_cancel_unavailable: 'ยังถอน/ยกเลิกเองไม่ได้ในตอนนี้ (ร้านกำลังอัปเดตระบบ) — ติดต่อร้านให้ยกเลิกแทน',
   // v74 รอบ A: ยอดเงินของใบนี้ไม่ตรงกับตอนตกลงกัน (มีคนแก้ระหว่างดีล) — ต้องยกเลิกดีลแล้วตกลงใหม่
   ticket_changed: 'ยอดเงินของใบนี้เปลี่ยนไปจากตอนตกลงกัน — ยกเลิกดีลนี้แล้วให้ตกลงใหม่ตามยอดล่าสุด',
 };

@@ -323,6 +323,7 @@ export interface TicketTransfer {
   expires_at?: string;      // ประกาศหมดอายุ (14 วัน · ข้อ 17)
   cancelled_at?: string;
   cancel_reason?: string;
+  cancel_note?: string | null; // v79: เหตุผลที่คนส่งพิมพ์ตอนถอน/ยกเลิก (ผู้รับ + ร้านเห็น)
   updated_at?: string;
   /** ยอดเงินของชิ้นที่ขาย ณ ตอนลงประกาศ (v72) — ผู้ซื้อมองไม่เห็นตั๋วคนขายตาม RLS จึงอ่านจากตรงนี้ */
   snap?: { paid: number; due: number; total: number; product_status?: string; ticket_hint?: string } | null;

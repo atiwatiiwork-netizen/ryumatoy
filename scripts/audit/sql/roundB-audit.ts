@@ -86,12 +86,13 @@ async function boot() {
     const t1 = await tr(db, o.id);
     ok('W1 ผู้รับเปิดดูบัญชีโอนเงิน → บันทึก payout_viewed_at', !!p.ok && !!t1.payout_viewed_at, { p, t1: t1.payout_viewed_at });
     const c = await call(db, 'A', 'ryuma_market_cancel', [o.id]);
-    ok('W2 ผู้รับเปิดหน้าโอนแล้ว คนส่งถอนเองไม่ได้ (recipient_paying)', c.error === 'recipient_paying' && (await tr(db, o.id)).status === 'reserved', c);
+    // v79 (เจ้าของ 2026-10-05): ถอนได้ทุกเมื่อแต่ต้องมีเหตุผล — ไม่ใส่เหตุผล = ไม่ถอน
+    ok('W2 ผู้รับเปิดหน้าโอนแล้ว คนส่งถอนโดยไม่ใส่เหตุผลไม่ได้ (reason_required)', c.error === 'reason_required' && (await tr(db, o.id)).status === 'reserved', c);
     const pay = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://x/slip.jpg']);
     ok('W3 ผู้รับแนบสลิปได้ตามปกติ → paid', !!pay.ok && (await tr(db, o.id)).status === 'paid', pay);
 
     const o2 = await offer('t-oi3', 500);
-    const c2 = await call(db, 'A', 'ryuma_market_cancel', [o2.id]);
+    const c2 = await call(db, 'A', 'ryuma_market_cancel', [o2.id, 'ส่งผิดคน']);
     ok('W4 ผู้รับยังไม่เปิดหน้าโอน → คนส่งถอนได้', !!c2.ok, c2);
     const late = await call(db, 'B', 'ryuma_market_pay', [o2.id, 'https://x/late.jpg']);
     const t2 = await tr(db, o2.id);
@@ -142,7 +143,7 @@ async function boot() {
     const o3 = await offer('t-oi8', 300);
     const bad2 = await call(db, 'B', 'ryuma_market_pay', [o3.id, 'ftp://x']);
     ok('X7 ดีลมีเงิน: สลิปต้องเป็นลิงก์ http(s)', bad2.error === 'bad_slip', bad2);
-    const cv = await call(db, 'A', 'ryuma_market_cancel', [o3.id]);
+    const cv = await call(db, 'A', 'ryuma_market_cancel', [o3.id, 'ตั้งยอดผิด']);
     ok('X8 ดีลมีเงินที่ผู้รับยังไม่เปิดดูบัญชี ถอนได้ (ไม่ล็อกเกินจำเป็น)', !!cv.ok, cv);
   }
 

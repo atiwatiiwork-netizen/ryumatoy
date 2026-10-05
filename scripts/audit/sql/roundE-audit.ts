@@ -58,14 +58,14 @@ const reason = async (db: PGlite, t: string) => (await q(db, `select ryuma_marke
   const codeB = (await call(db, 'B', 'ryuma_wallet_code')).code as string;
   const f = await call(db, 'A', 'ryuma_market_offer', ['t-oi1', 1, 0, codeB, null, 'uB']);
   const acc = await call(db, 'B', 'ryuma_market_pay', [f.id, '']);
-  const cn = await call(db, 'A', 'ryuma_market_cancel', [f.id]);
+  const cn = await call(db, 'A', 'ryuma_market_cancel', [f.id, 'เปลี่ยนใจ ไม่เปลี่ยนใบแล้ว']);
   const st = (await q(db, `select status, cancel_reason from ticket_transfers where id = $1`, [f.id]))[0];
   ok('E3 ยกให้ฟรีที่ผู้รับกดรับแล้ว คนส่งยกเลิกได้ก่อนยืนยัน', !!f.ok && !!acc.ok && !!cn.ok && st?.status === 'cancelled' && st?.cancel_reason === 'seller', { f, acc, cn, st });
   const pw = await call(db, 'A', 'ryuma_market_push_targets', [f.id, 'withdrawn']);
   ok('E4 push ถึงผู้รับ: "คนส่งยกเลิกการยกให้แล้ว" (ไม่บอกให้แนบสลิป)', /ยกเลิกการยกให้/.test(pw.body ?? ''), pw);
   const p2 = await call(db, 'A', 'ryuma_market_offer', ['t-oi2', 1, 500, codeB, PAY, 'uB']);
   await call(db, 'B', 'ryuma_market_pay', [p2.id, 'https://x/s.jpg']);
-  const cn2 = await call(db, 'A', 'ryuma_market_cancel', [p2.id]);
+  const cn2 = await call(db, 'A', 'ryuma_market_cancel', [p2.id, 'เปลี่ยนใจ']);
   ok('E5 ดีลมีเงินที่ผู้รับโอนแล้ว คนส่งยังถอนเองไม่ได้', cn2.error === 'bad_status', cn2);
 
   // push ข้อความ seller_ok ของยกให้ฟรี (R1-33)

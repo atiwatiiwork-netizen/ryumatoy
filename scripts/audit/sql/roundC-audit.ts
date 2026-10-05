@@ -122,7 +122,7 @@ async function boot() {
     ok('P4 ผู้รับอ่านได้ระหว่างข้อเสนอ · คนนอกไม่ได้', pB.promptpay === '0812345678' && pC.error === 'not_found', { pB, pC });
     ok('P5 คนส่งดูบัญชีของดีลตัวเองได้ (R1-49) · แอดมินดูได้', pA.promptpay === '0812345678' && pX.promptpay === '0812345678', { pA, pX });
     const cn = await call(db, 'A', 'ryuma_market_cancel', [o.id]);
-    ok('P6 ผู้รับเปิดดูบัญชีแล้ว คนส่งถอนเองไม่ได้ (v75 ยังทำงาน)', cn.error === 'recipient_paying', cn);
+    ok('P6 ถอนโดยไม่ใส่เหตุผลไม่ได้ (v79 reason_required)', cn.error === 'reason_required', cn);
     await call(db, 'X', 'ryuma_market_admin_cancel', [o.id, 'test']);
     const pB2 = await call(db, 'B', 'ryuma_market_payout', [o.id]);
     ok('P7 ดีลถูกยกเลิกแล้ว ผู้รับอ่านบัญชีไม่ได้อีก (R1-10)', pB2.error === 'not_found', pB2);

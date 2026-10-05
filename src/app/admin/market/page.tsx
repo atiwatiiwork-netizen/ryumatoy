@@ -198,7 +198,7 @@ function LateSlipCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fla
           <div className="truncate text-[13.5px] font-bold">{tr.product_id ? productLabel(db, tr.product_id, tr.variant_id) : '—'}</div>
           <div className="font-mono text-[11px] text-primary-soft">{t?.ticket_no ?? tr.ticket_id}</div>
           <div className="mt-1">ผู้รับ <b>{who(db, tr.to_user_id)}</b> โอน <b className="font-mono">{baht(tr.asking_price)}</b> ให้ <b>{who(db, tr.from_user_id)}</b> · {fmt(tr.paid_at)}</div>
-          <div className="text-ink-faint">ดีล{dealStatusLabel(tr, effectiveStatus(tr))}{tr.cancel_reason ? ` (${tr.cancel_reason === 'seller' ? 'คนส่งถอน' : tr.cancel_reason === 'ticket_changed' ? 'ตั๋วเปลี่ยนระหว่างดีล' : tr.cancel_reason === 'buyer_declined' ? 'ผู้รับกดไม่รับ' : tr.cancel_reason.replace(/^admin: /, '')})` : ''}</div>
+          <div className="text-ink-faint">ดีล{dealStatusLabel(tr, effectiveStatus(tr))}{tr.cancel_reason ? ` (${tr.cancel_reason === 'seller' ? `คนส่งถอน${tr.cancel_note ? ` · “${tr.cancel_note}”` : ''}` : tr.cancel_reason === 'ticket_changed' ? 'ตั๋วเปลี่ยนระหว่างดีล' : tr.cancel_reason === 'buyer_declined' ? 'ผู้รับกดไม่รับ' : tr.cancel_reason.replace(/^admin: /, '')})` : ''}</div>
         </div>
       </div>
       <input id={`late-${tr.id}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="โน้ตปิดเรื่อง เช่น คนส่งคืนเงินแล้ว แนบสลิปคืนทางไลน์" className="mt-3 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none" />
@@ -309,6 +309,9 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
   const samePhone = !!(buyer && sender && normPhone(sender.phone) && normPhone(sender.phone) === normPhone(buyer.phone));
   const sameAddr = !!(buyer && sender && normAddr(sender.shipping_address) && normAddr(sender.shipping_address) === normAddr(buyer.shipping_address));
   const sellerWord = direct ? 'คนส่ง' : 'คนขาย';
+  const monthAgo = Date.now() - 30 * 86_400_000;
+  const senderWithdrawals = db.transfers.filter((x) => x.id !== tr.id && x.from_user_id === tr.from_user_id && isDirect(x) && x.status === 'cancelled'
+    && x.cancel_reason === 'seller' && new Date(x.cancelled_at ?? x.updated_at ?? x.listed_at).getTime() > monthAgo).length;
   const checks: { ok: boolean; label: string }[] = [
     { ok: !!tr.seller_confirmed_at, label: tr.seller_confirmed_at ? `${sellerWord}ยืนยัน${free ? 'แล้ว' : 'รับเงินแล้ว'} · ${fmt(tr.seller_confirmed_at)}` : `${sellerWord}ยังไม่ยืนยัน${free ? '' : 'รับเงิน'}` },
     free
@@ -362,6 +365,8 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
           ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={pay} full size={16} /></>
           : tr.payout_snap ? <><span className="text-ink-faint">บัญชีรับเงิน</span><PayoutLine info={tr.payout_snap} full size={16} /></> : null}
         {direct && st === 'reserved' && tr.hold_until && <><span className="text-ink-faint">ผู้รับต้องตอบใน</span><span>{fmt(tr.hold_until)}</span></>}
+        {/* กันเกรียน (v79): คนส่งที่ถอนข้อเสนอบ่อย — ร้านเห็นทันทีในการ์ด */}
+        {direct && senderWithdrawals > 0 && <><span className="text-ink-faint">คนส่งเคยถอน</span><span className={senderWithdrawals >= 3 ? 'font-bold text-[#f87171]' : ''}>{senderWithdrawals} ครั้งใน 30 วัน</span></>}
         {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลา{sellerWord}</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}
       </div>
@@ -445,7 +450,7 @@ function AllTab({ db }: { db: Database }) {
                 <td className="max-w-[220px] truncate px-3 py-2">{isDirect(tr) && <span className="mr-1 rounded bg-[#f1d27a]/15 px-1 text-[10px] font-bold text-[#f1d27a]">🔁</span>}{tr.product_id ? productLabel(db, tr.product_id, tr.variant_id) : '—'}{(tr.qty ?? 1) > 1 ? ` ×${tr.qty}` : ''}<div className="font-mono text-[10.5px] text-ink-faint">{tr.new_ticket_no ?? tr.prev_ticket_no ?? ''}</div></td>
                 <td className="px-3 py-2">{who(db, tr.from_user_id)} <span className="text-ink-faint">→</span> {tr.to_user_id ? who(db, tr.to_user_id) : '—'}</td>
                 <td className="px-3 py-2 text-right font-mono">{isDirect(tr) && (tr.asking_price ?? 0) <= 0 ? 'ฟรี' : baht(tr.asking_price)}</td>
-                <td className="px-3 py-2">{dealStatusLabel(tr, st)}{tr.cancel_reason && !['seller', 'buyer_declined'].includes(tr.cancel_reason) ? <div className="text-[10.5px] text-ink-faint">{tr.cancel_reason}</div> : null}</td>
+                <td className="px-3 py-2">{dealStatusLabel(tr, st)}{tr.cancel_reason && !['seller', 'buyer_declined'].includes(tr.cancel_reason) ? <div className="text-[10.5px] text-ink-faint">{tr.cancel_reason}</div> : null}{tr.cancel_reason === 'seller' && tr.cancel_note ? <div className="text-[10.5px] text-ink-faint">เหตุผล: {tr.cancel_note}</div> : null}</td>
                 <td className="px-3 py-2 text-ink-faint">{fmt(tr.updated_at ?? tr.listed_at)}</td>
               </tr>
             ))}
