@@ -23,6 +23,21 @@ function client(): SupabaseClient {
   return supabase;
 }
 
+/** session ปัจจุบัน (เพดาน 1.5 วิ — ห้ามให้ getSession ที่ค้างทำให้ persist ค้างตาม) · null = ไม่มี/ถามไม่ได้ */
+const currentSession = (sb: SupabaseClient) => Promise.race([
+  sb.auth.getSession().then((r) => r.data.session).catch(() => null),
+  new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+]);
+
+/** RLS/permission ปฏิเสธ "เพราะคำขอวิ่งแบบไม่มี session" (token หมดอายุ ต่ออายุไม่ทัน) = ชั่วคราว ไม่ใช่ถูกปฏิเสธถาวร
+ *  (audit 1005 #1: syncTablePatch รู้จักเคสนี้แล้ว แต่ orders/order_items/remaining_payments/coupon_grants ผ่าน syncTable ไม่รู้
+ *   → store ตัดสินว่า "ถาวร" ทิ้งออเดอร์ที่ลูกค้าเพิ่งโอนเงิน) · มี session จริง = ถูกปฏิเสธจริง ส่งต่อตามเดิม */
+async function noSessionError(sb: SupabaseClient, table: string, err: unknown): Promise<unknown> {
+  const msg = (err as { message?: string })?.message ?? '';
+  if (!/row-level security|permission denied/i.test(msg)) return err;
+  return (await currentSession(sb)) ? err : new Error(`${table}: ยังไม่ได้เข้าสู่ระบบ/กำลังต่ออายุการเข้าสู่ระบบ — จะลองใหม่ให้`);
+}
+
 async function syncTable(sb: SupabaseClient, table: string, nextRows: Row[], baseRows: Row[], key = 'id') {
   const baseJson = new Map(baseRows.map((r) => [String(r[key]), JSON.stringify(r)]));
   const nextKeys = new Set(nextRows.map((r) => String(r[key])));
@@ -45,7 +60,7 @@ async function syncTable(sb: SupabaseClient, table: string, nextRows: Row[], bas
     if (error && !firstError) firstError = error;
   }
 
-  if (firstError) throw firstError;
+  if (firstError) throw await noSessionError(sb, table, firstError);
 }
 
 /**
@@ -74,11 +89,7 @@ export async function syncTablePatch(sb: SupabaseClient, table: string, nextRows
     // UPDATE ไม่โดนแถวไหน (review รอบ A): ห้ามนับว่าเซฟแล้ว
     //   · ไม่มี session (token กำลังต่ออายุ → คำขอวิ่งแบบ anon, RLS ซ่อนแถว) → error ชั่วคราว ให้ store ลองใหม่
     //   · มี session แต่ไม่เจอแถว (เช่น flush ก่อนหน้าที่ insert แถวนี้ล้มแล้วย้อนฐาน) → upsert ทั้งแถวแบบเดิม
-    const session = await Promise.race([
-      sb.auth.getSession().then((r) => r.data.session).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), 1500)),
-    ]);
-    if (!session) { if (!firstError) firstError = new Error(`${table}: ยังไม่ได้เข้าสู่ระบบ/กำลังต่ออายุการเข้าสู่ระบบ — จะลองใหม่ให้`); continue; }
+    if (!(await currentSession(sb))) { if (!firstError) firstError = new Error(`${table}: ยังไม่ได้เข้าสู่ระบบ/กำลังต่ออายุการเข้าสู่ระบบ — จะลองใหม่ให้`); continue; }
     const { error: upErr } = await sb.from(table).upsert(row);
     if (upErr && !firstError) firstError = upErr;
   }
@@ -87,7 +98,7 @@ export async function syncTablePatch(sb: SupabaseClient, table: string, nextRows
     const { error } = await sb.from(table).delete().in(key, removed);
     if (error && !firstError) firstError = error;
   }
-  if (firstError) throw firstError;
+  if (firstError) throw await noSessionError(sb, table, firstError);
 }
 
 /** ตารางแบบ "เขียนเพิ่มอย่างเดียว" (ประวัติการกระทำ): upsert เฉพาะแถวใหม่ ไม่แก้ ไม่ลบ.

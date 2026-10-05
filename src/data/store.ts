@@ -4,7 +4,7 @@ import { hasSupabase } from './supabaseClient';
 import { supabaseAdapter } from './supabaseAdapter';
 import { SEED_DATABASE } from './seed';
 import { simActive } from '@/lib/sim';
-import { isTransientPersistError, friendlyPersistError } from './persistErrors';
+import { isTransientPersistError, isSchemaDriftError, friendlyPersistError } from './persistErrors';
 
 /**
  * The central store — the single runtime source of truth.
@@ -48,11 +48,21 @@ export class Store {
   /** Set by the UI to surface a failed background save (e.g. schema drift / RLS) instead of
    *  silently losing data. Called with the backend error message. */
   onPersistError?: (message: string) => void;
+  /** เหตุผล (ภาษาคน) ที่รอบเซฟล่าสุดไม่ผ่านและยังรอลองใหม่อยู่ · ล้างเมื่อเซฟผ่าน/เลิกลอง (ถาวร → โหลดของจริงมาแทน) */
+  private lastFail: string | null = null;
 
   constructor(private adapter: PersistenceAdapter) {}
 
   getState = (): Database => this.db;
   isReady = (): boolean => this.ready;
+  /** มีงานที่เซฟไม่ขึ้นค้างอยู่ (กำลังลองใหม่) → เหตุผลจริง · null = ไม่มีงานค้าง */
+  stuckReason = (): string | null => (this.lastSynced !== this.db || this.pendingSaves > 0) && this.lastFail ? this.lastFail : null;
+  /** ข้อความให้ปุ่มที่ reload({safe:true}) คืน false — บอกว่าอะไรค้างจริงๆ แทนโทษเน็ตลอยๆ
+   *  (audit 1005 #3: ปุ่มจ่าย/เลือกวิธีรับของ/อนุมัติสลิป ขึ้น "เช็คเน็ต" ทั้งที่เน็ตปกติ แค่มีงานอื่นที่เซิร์ฟเวอร์ปฏิเสธค้างอยู่) */
+  reloadFailText = (tail: string): string => {
+    const r = this.stuckReason();
+    return r ? `มีงานก่อนหน้าที่ยังบันทึกไม่ขึ้น (${r}) — ${tail}` : `โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้ว${tail}`;
+  };
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -107,7 +117,7 @@ export class Store {
     let refetch = false;
     const done = this.saving
       .then(() => withTimeout(this.adapter.persist(target, base), PERSIST_TIMEOUT, 'persist'))
-      .then((): string | null => null)
+      .then((): string | null => { this.lastFail = null; return null; })
       .catch((err): string | null => {
         console.error('[store] persist failed', err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -116,16 +126,19 @@ export class Store {
           //   ไม่ย้อนฐาน ไม่วนลองใหม่ → แจ้งครั้งเดียว แล้วโหลดของจริงมาแทน (แถวที่ถูกปฏิเสธกลับเป็นค่าบนเซิร์ฟเวอร์
           //   แถวอื่นในรอบนี้ขึ้นไปแล้ว) · เดิมวนส่งทุก 5 วิตลอดไป = เครื่องค้าง + เขียนค่าเก่าทับงานใหม่ของคนอื่น
           this.onPersistError?.(friendlyPersistError(msg));
+          this.lastFail = null; // ไม่ลองใหม่แล้ว → ไม่มีงานค้าง (reloadIfIdle ข้างล่างดึงของจริงมาแทน)
           refetch = true;
           return msg;
         }
         // rewind so the next change re-attempts these rows instead of treating them as synced
         this.lastSynced = base;
-        this.onPersistError?.(friendlyPersistError(msg));
+        this.lastFail = friendlyPersistError(msg);
+        this.onPersistError?.(this.lastFail);
         // ⚠ ต้องนัดลองใหม่เสมอ — หลัง rewind จะได้ lastSynced !== db ค้างอยู่ ซึ่งทำให้
         //   reloadIfIdle (ตัวรีเฟรชอัตโนมัติ) ถูกบล็อกถาวร → คิวแอดมินหยุดอัปเดตทั้งแท็บ
         //   แล้วแอดมินทำงานบนข้อมูลเก่าโดยไม่รู้ตัว (ต้นตอของเคสอนุมัติซ้ำ) audit concurrency #10
-        this.scheduleFlush(5_000);   // ถอยหลังพอสมควร ไม่ยิงรัวจนแบตหมด
+        // schema ยังไม่พร้อม (เจ้าของยังไม่รัน SQL ของรุ่นนี้) → รอได้เป็นนาที ลองทุก 30 วิ พอ (audit 1005 #2) · อย่างอื่น 5 วิ
+        this.scheduleFlush(isSchemaDriftError(msg) ? 30_000 : 5_000);   // ถอยหลังพอสมควร ไม่ยิงรัวจนแบตหมด
         return msg;
       })
       .finally(() => {

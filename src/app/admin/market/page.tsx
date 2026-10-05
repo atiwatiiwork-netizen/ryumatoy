@@ -222,7 +222,7 @@ function TopupCard({ db, rp, flash }: { db: Database; rp: RemainingPayment; flas
     try {
       // เช็คสถานะล่าสุดจากเซิร์ฟเวอร์ก่อน (audit รอบ C R1-25): เครื่องที่เปิดค้างไว้ อาจยังเห็นสลิปที่อีกเครื่องอนุมัติ/ปฏิเสธไปแล้ว
       //   เดิมกดปฏิเสธ = ลบแถวที่อนุมัติแล้ว (เงินเข้าตั๋วแล้วแต่หลักฐานหาย) · กดอนุมัติ = สลิปที่ถูกปฏิเสธกลับมาเป็นเงินเข้า
-      if (!(await store.reload({ safe: true }))) return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)');
+      if (!(await store.reload({ safe: true }))) return flash(store.reloadFailText('ลองใหม่ (ยังไม่ได้ทำอะไร)'));
       const cur = store.getState().remainingPayments.find((r) => r.id === rp.id);
       if (!cur || cur.status !== 'pending') return flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้');
       dispatch(approve ? approveRemainingPayment(rp.id) : rejectRemainingPayment(rp.id));

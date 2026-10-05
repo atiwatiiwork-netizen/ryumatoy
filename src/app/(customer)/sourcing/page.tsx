@@ -14,6 +14,7 @@ import { submitSourcingRequest, resendSourcingRequest, paySourcing } from '@/dat
 import { sendPush, subsForAdmins, pushEnabled } from '@/lib/push';
 import { notifyAdminLine } from '@/lib/notify';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { sourcingStatusOf, sourcingDaysLeft, sourcingEtaLabel, sourcingEtaConfig, transportLabel, openSourcingCount, MAX_OPEN_REQUESTS } from '@/domain/services/sourcing';
 import { useSmartBack } from '@/lib/nav';
 import type { SourcingRequest } from '@/domain/entities';
@@ -197,7 +198,7 @@ function WatchCard({ r, uid }: { r: SourcingRequest; uid: string }) {
     if (!paid) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — ใบเสนอราคาอาจหมดอายุแล้ว ทักแอดมินได้เลยครับ'); }
     const failed = await store.flush();
     setBusy(false);
-    if (failed) return flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดยืนยันใหม่ (สลิปยังอยู่)');
+    if (failed) return flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดยืนยันใหม่ (สลิปยังอยู่)'));
     // ⚠ push หาแอดมินจากเครื่องลูกค้าส่งไม่ถึงจริง (RLS ทำให้ subsForAdmins ว่างเสมอ — audit #4)
     //   จึงต้องมี LINE เป็นทางหลัก ไม่ใช่ทางสำรอง
     notifyAdminLine(`💸 มัดจำหาของเข้าแล้ว: ${r.character_name} · ${baht((r.deposit ?? 0) * r.qty)} — รอกดเริ่มงาน`);

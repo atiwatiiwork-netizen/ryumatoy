@@ -6,6 +6,7 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth } from '@/state/AuthProvider';
 import { updateUser } from '@/data/mutations';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { Icon } from './Icon';
 import { AddressForm } from './AddressForm';
 import { composeAddress, addressProblem } from '@/domain/services/address';
@@ -105,7 +106,8 @@ export function ProfileGate() {
       line_id: line.trim() || undefined,
     }));
     const failed = await store.flush();
-    flash(failed ? 'บันทึกไว้ในเครื่องแล้ว — กำลังส่งขึ้นระบบให้อัตโนมัติ' : 'บันทึกข้อมูลแล้ว ยินดีต้อนรับ! 🎉');
+    // ถูกปฏิเสธถาวร (เช่นด่าน users) ต้องบอกเหตุผลจริง — ไม่ใช่ "กำลังส่งอัตโนมัติ" ทั้งที่ store เลิกลองแล้ว (audit 1005 #1)
+    flash(failed ? persistFailText(failed, 'บันทึกไว้ในเครื่องแล้ว — กำลังส่งขึ้นระบบให้อัตโนมัติ') : 'บันทึกข้อมูลแล้ว ยินดีต้อนรับ! 🎉');
   };
 
   const inputCls = 'w-full rounded-xl border border-subtle bg-surface-3 px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent';

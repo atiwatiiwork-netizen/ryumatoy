@@ -17,6 +17,7 @@ import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { productLabel, inLiveAuction } from '@/domain/services/catalog';
 import { batchAvailable, availableFor, isPendingHold, pendingHeld, myPendingHold, userTakenInBatch, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { store } from '@/data/store';
+import { isTransientPersistError, persistFailText } from '@/data/persistErrors';
 import { lineDepositForRank } from '@/domain/services/ranks';
 import { livePrice } from '@/domain/services/pricing';
 import { instockCouponsFor, couponDiscount, couponMatchesProduct } from '@/domain/services/coupons';
@@ -269,6 +270,14 @@ export default function CheckoutPage() {
     // ⚠ ต้องรู้ผลเซฟ "ก่อน" เคลียร์ตะกร้า/บอกสำเร็จ/เด้งหน้า — เดิมเคลียร์ก่อนแล้วค่อยเซฟ
     //   ถ้าเซฟไม่ผ่าน ลูกค้าโอนเงินไปแล้ว แต่ไม่มีทั้งออเดอร์และตะกร้าให้กดใหม่ (audit persist #1/#12)
     const failed = await store.flush();
+    if (failed && !isTransientPersistError(failed)) {
+      // เซิร์ฟเวอร์ปฏิเสธ "ถาวร" (แต้มไม่พอ / คูปองใช้ไม่ได้ / ด่าน DB) — store ไม่ลองใหม่ และดึงของจริงมาแทนแล้ว
+      //   = ออเดอร์ที่เพิ่งสร้างหายไปจากเครื่อง → ต้องเก็บตะกร้า + สลิป + hold ไว้ บอกเหตุผลจริง ให้ลูกค้าแก้แล้วกดส่งใหม่ได้
+      //   (audit 1005 #1: เดิมเข้ากิ่งล่าง ล้างตะกร้าแล้วบอก "กำลังลองส่งอัตโนมัติ ห้ามกดซ้ำ" ทั้งที่ไม่มีอะไรจะส่ง = โอนแล้วรอเก้อ)
+      //   hold ยัง paid อยู่ = ของยังกันให้คนนี้ · กดส่งซ้ำผ่าน ryuma_reserve_pay ได้ (กดซ้ำ = ผ่าน)
+      setBusy(false);
+      return flash(`${persistFailText(failed, '')} — ตะกร้าและสลิปยังอยู่ แก้แล้วกดส่งใหม่ได้ · ถ้าโอนเงินไปแล้วแต่ส่งไม่ผ่าน ทักแอดมินพร้อมสลิปได้เลยครับ`);
+    }
     if (failed) {
       // ⚠ ห้ามบอกให้ "กดส่งใหม่" (audit 2026-07-30 · high): ออเดอร์ถูกสร้างใน store ไปแล้ว และ
       //   store จะ retry เซฟให้เองอัตโนมัติทุก 5 วิ — ถ้าลูกค้ากดส่งซ้ำจะได้ออเดอร์ 2 ใบจากเงินก้อนเดียว

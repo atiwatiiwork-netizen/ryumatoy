@@ -51,7 +51,7 @@ export default function OrdersHubPage() {
     setRpBusy('group');
     try {
       // สถานะล่าสุดก่อน (audit รอบ C R1-25): สลิปที่อีกเครื่องปฏิเสธไปแล้ว ห้ามกลับมาเป็นเงินเข้า
-      if (!(await store.reload({ safe: true }))) { flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)'); return; }
+      if (!(await store.reload({ safe: true }))) { flash(store.reloadFailText('ลองใหม่ (ยังไม่ได้ทำอะไร)')); return; }
       const fresh = store.getState().remainingPayments;
       const rps = rps0.filter((r) => fresh.some((x) => x.id === r.id && x.status === 'pending'));
       if (rps.length === 0) { flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้'); return; }
@@ -94,7 +94,7 @@ export default function OrdersHubPage() {
     setRpBusy('group');
     try {
       // สถานะล่าสุดก่อน (audit รอบ C R1-25): สลิปที่อีกเครื่องอนุมัติไปแล้ว ห้ามถูกลบทิ้ง (เซิร์ฟเวอร์ v76 ก็ปฏิเสธเช่นกัน)
-      if (!(await store.reload({ safe: true }))) { flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ทำอะไร)'); return; }
+      if (!(await store.reload({ safe: true }))) { flash(store.reloadFailText('ลองใหม่ (ยังไม่ได้ทำอะไร)')); return; }
       const fresh = store.getState().remainingPayments;
       const rps = rps0.filter((r) => fresh.some((x) => x.id === r.id && x.status === 'pending'));
       if (rps.length === 0) { flash('สลิปนี้ถูกจัดการไปแล้ว (อีกเครื่อง/แท็บ) — ดูสถานะล่าสุดในหน้านี้'); return; }

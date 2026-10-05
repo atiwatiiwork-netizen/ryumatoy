@@ -58,8 +58,12 @@ export function paidByUser(db: Database, uid: string): number {
     const item = tr.order_item_id ?? (tr.ticket_id?.startsWith('t-') ? tr.ticket_id.slice(2) : undefined);
     if (addItem(item)) sum += myItems.get(item!)!;
   }
+  // สลิปของใบที่มองไม่เห็นนับได้ "เฉพาะใบที่ขายออกไปจากเครื่องนี้" (ดีลจบ) เท่านั้น — ไม่ใช่ทุกใบที่มองไม่เห็น:
+  //   ตั๋วที่แอดมินลบ (คืนเงิน/ใบซ้ำ) สลิปยังค้างอยู่โดย ticket_id = null (FK v62) → เดิมถูกนับเป็น "จ่ายแล้ว" ทั้งที่มัดจำของใบนั้นไม่นับ
+  //   (audit 1005 #4: History/Customer 360 โชว์ยอดเกินจริงหลังลบตั๋ว)
+  const soldAway = new Set(done.filter((tr) => tr.from_user_id === uid && tr.ticket_id && !visible.has(tr.ticket_id)).map((tr) => tr.ticket_id));
   for (const r of db.remainingPayments) {
-    if (r.status === 'approved' && r.user_id === uid && (tradedIds.has(r.ticket_id) || !visible.has(r.ticket_id))) sum += r.amount ?? 0;
+    if (r.status === 'approved' && r.user_id === uid && r.ticket_id && (tradedIds.has(r.ticket_id) || soldAway.has(r.ticket_id))) sum += r.amount ?? 0;
   }
   return sum;
 }

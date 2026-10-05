@@ -7,6 +7,7 @@ import { useToast } from '@/state/ToastProvider';
 import { useAuth, useCurrentUserId, canLogin } from '@/state/AuthProvider';
 import { updateUser } from '@/data/mutations';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { AddressForm } from '@/components/AddressForm';
 import { shippingInfoOf, composeAddress, addressProblem } from '@/domain/services/address';
 import type { User, ShippingInfo } from '@/domain/entities';
@@ -159,7 +160,7 @@ function ShippingCard({ me }: { me: User }) {
     dispatch(updateUser(me.id, { shipping_info: info, shipping_address: composeAddress(info), line_id: line.trim() || undefined }));
     const failed = await store.flush();
     setBusy(false);
-    flash(failed ? 'เน็ตสะดุด — บันทึกไว้ในเครื่องแล้ว ระบบกำลังส่งขึ้นระบบให้อัตโนมัติ' : 'บันทึกที่อยู่แล้ว ✓');
+    flash(failed ? persistFailText(failed, 'เน็ตสะดุด — บันทึกไว้ในเครื่องแล้ว ระบบกำลังส่งขึ้นระบบให้อัตโนมัติ') : 'บันทึกที่อยู่แล้ว ✓');
     setEditing(false);
   };
   const i = me.shipping_info;

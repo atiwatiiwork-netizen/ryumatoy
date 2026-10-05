@@ -115,7 +115,7 @@ function PayInner() {
       // สลิปเดียวต้อง "ครบทุกใบหรือไม่ส่งเลย" (audit รอบ E R3-11: เดิมใบที่ถูกล็อก/เปลี่ยนมือระหว่างทางหลุด
       //   ได้แถวครึ่งเดียว ยอดในสลิปไม่ตรงกับที่แอดมินเห็น และลูกค้าส่งใหม่ไม่ได้)
       //   1) โหลดสถานะล่าสุด  2) ลองทำบนสำเนาก่อน ถ้าไม่ครบทุกใบ = ไม่ทำเลย
-      if (!(await store.reload({ safe: true }))) { setBusy(false); return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่ (ยังไม่ได้ส่ง)'); }
+      if (!(await store.reload({ safe: true }))) { setBusy(false); return flash(store.reloadFailText('ลองใหม่ (ยังไม่ได้ส่ง)')); }
       const fresh = store.getState();
       const stale = tickets.filter((t) => { const x = fresh.tickets.find((y) => y.id === t.id); return !x || x.owner_id !== uid || !ticketSelectable(fresh, x) || ticketDue(x) !== ticketDue(t); });
       if (stale.length) { setBusy(false); return flash(`ใบ ${stale.map((t) => t.ticket_no).join(', ')} เปลี่ยนไปแล้ว (ล็อก/เปลี่ยนมือ/ยอดเปลี่ยน) — ยังไม่ได้ส่ง กลับไปเลือกใหม่แล้วโอนตามยอดใหม่`); }

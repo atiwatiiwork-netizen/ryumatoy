@@ -43,7 +43,7 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
     setBusy(true);
     const fresh = await store.reload({ safe: true });
     setBusy(false);
-    if (!fresh) { flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่'); return; }
+    if (!fresh) { flash(store.reloadFailText('รอสักครู่แล้วลองใหม่')); return; }
     const nowDb = store.getState();
     const cur = nowDb.tickets.find((x) => x.id === live.id);
     if (!cur || cur.owner_id !== t.owner_id) { flash('ตั๋วใบนี้เปลี่ยนเจ้าของไปแล้ว — ปิดหน้าต่างแล้วเปิดใหม่'); return; }

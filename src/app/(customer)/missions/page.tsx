@@ -12,6 +12,7 @@ import { submitMission } from '@/data/mutations';
 import { uploadImage } from '@/lib/upload';
 import { enablePush, pushSupported } from '@/lib/push';
 import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 
 export default function MissionsPage() {
   const db = useDatabase();
@@ -56,7 +57,7 @@ export default function MissionsPage() {
     const failed = await store.flush(); // ส่งจริงถึง DB ก่อนบอกว่า "ส่งแล้ว" — กัน split flush ทำใบสมัครหาย (DNA rule 7)
     setBusy(false);
     if (!sent) return flash('ส่งไม่สำเร็จ — อาจส่งไปแล้ว หรือกิจกรรมปิดไปแล้ว');
-    if (failed) return flash('บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่ (รูปยังอยู่)');
+    if (failed) return flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — เช็คเน็ตแล้วกดส่งใหม่ (รูปยังอยู่)'));
     flash('ส่งภารกิจแล้ว 🎉 รอแอดมินตรวจสอบ');
   };
 

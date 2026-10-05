@@ -143,7 +143,7 @@ export default function TicketDetailPage() {
     if (after === before) { setBusy(false); return flash('ส่งสลิปไม่สำเร็จ — อาจมีสลิปรอตรวจอยู่แล้ว หรือยอดนี้จ่ายครบแล้ว'); }
     const failed = await store.flush();
     setBusy(false);
-    if (failed) return flash('บันทึกไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (สลิปยังอยู่)');
+    if (failed) return flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — อย่าเพิ่งปิดหน้านี้ เช็คเน็ตแล้วกดส่งใหม่ (สลิปยังอยู่)'));
     notifyAdminLine(`💸 สลิปส่วนต่างใหม่: ${ticket.ticket_no} · ${payable.toLocaleString()} บาท`);
     flash('ส่งสลิปส่วนต่างแล้ว · รอ Admin ตรวจสอบ');
     setPaying(false); setSlip(null); setCouponGrantId('');
@@ -389,7 +389,7 @@ function DeliverySection({ ticket }: { ticket: PreorderTicket }) {
     setBusy(true);
     // สถานะล่าสุดก่อน: ใบที่เพิ่งถูกส่งข้อเสนอ/ลงขายจากอีกเครื่อง เซิร์ฟเวอร์จะคืนค่าเดิมเงียบๆ
     //   → ต้องรู้ก่อน ไม่งั้นขึ้น "ส่งคำขอแล้ว" + LINE แอดมิน ทั้งที่ไม่ได้บันทึก (audit รอบ E R3-14)
-    if (!(await store.reload({ safe: true }))) { setBusy(false); return flash('โหลดสถานะล่าสุดไม่สำเร็จ — เช็คเน็ตแล้วลองใหม่'); }
+    if (!(await store.reload({ safe: true }))) { setBusy(false); return flash(store.reloadFailText('ลองใหม่')); }
     if (marketLocked(store.getState(), ticket.id)) { setBusy(false); return flash('ใบนี้อยู่ระหว่างเปลี่ยนใบ/ลงขาย — จบดีลหรือถอนก่อน แล้วค่อยเลือกวิธีรับของ'); }
     // delivery.address เก็บเป็นข้อความประกอบแล้ว (ที่อยู่ + จังหวัด + ไปรษณีย์) — ใบปะหน้า/คิวแอดมินอ่านช่องเดิม
     dispatch(chooseDelivery(ticket.id, CURRENT_USER_ID, method,

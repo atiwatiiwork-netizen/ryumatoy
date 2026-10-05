@@ -288,7 +288,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
       : `มัดจำต้องอยู่ระหว่าง 0–${baht(total)}`);
     if (dep === t.deposit_paid) { setEditId(null); return; }
     // โหลดของจริงก่อนแก้ (audit รอบ A R2A-02/R2B-01): หน้าที่เปิดค้างไว้ก่อนดีลเกิดจะไม่รู้ว่าใบนี้ลงขาย/เปลี่ยนมือแล้ว
-    if (!(await store.reload({ safe: true }))) return flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่');
+    if (!(await store.reload({ safe: true }))) return flash(store.reloadFailText('รอสักครู่แล้วลองใหม่'));
     const nowDb = store.getState();
     const cur = nowDb.tickets.find((x) => x.id === t.id);
     if (!cur || cur.owner_id !== t.owner_id || cur.deposit_paid !== t.deposit_paid || cur.remaining_paid !== t.remaining_paid)
@@ -327,7 +327,7 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
     if (hasMarketHistory(db, t)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — ใบนี้มีประวัติซื้อขายในตลาดใบพรี (ต้องเก็บเป็นหลักฐาน)`);
     if (!confirm(`ลบตั๋ว ${t.ticket_no} (${product?.series_name ?? ''}) ออกถาวร?\nจะตัดออกจากระบบจริง${product?.is_stock ? ' + คืนสต๊อกสินค้า' : ' (ยอดจองของสินค้านี้จะลดลง)'}`)) return;
     // โหลดของจริงก่อนลบ (audit รอบ A R2A-02): หน้าที่เปิดค้างไว้ก่อนดีลเกิด ลบตั๋วที่เพิ่งลงขาย/เปลี่ยนมือได้
-    if (!(await store.reload({ safe: true }))) return flash('โหลดข้อมูลล่าสุดไม่สำเร็จ หรือยังมีงานที่บันทึกไม่ขึ้น — รอสักครู่แล้วลองใหม่');
+    if (!(await store.reload({ safe: true }))) return flash(store.reloadFailText('รอสักครู่แล้วลองใหม่'));
     const nowDb = store.getState();
     const cur = nowDb.tickets.find((x) => x.id === t.id);
     if (!cur) return flash(`ตั๋ว ${t.ticket_no} ไม่อยู่แล้ว`);

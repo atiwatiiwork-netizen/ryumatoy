@@ -11,12 +11,13 @@
     "lint": "next lint",
     "audit:market": "npx --yes tsx scripts/audit/market-audit.ts",
     "audit:points": "npx --yes tsx scripts/audit/points-audit.ts && npx --yes tsx scripts/audit/points-redeem-audit.ts && npx --yes tsx scripts/audit/payments-audit.ts && npx --yes tsx scripts/audit/coupon-points-audit.ts && npx --yes tsx scripts/audit/points-scenarios-audit.ts",
-    "audit:sql": "npx --yes tsx scripts/audit/sql/roundA-audit.ts && npx --yes tsx scripts/audit/sql/roundB-audit.ts && npx --yes tsx scripts/audit/sql/roundC-audit.ts && npx --yes tsx scripts/audit/sql/roundD-audit.ts && npx --yes tsx scripts/audit/sql/roundE-audit.ts && npx --yes tsx scripts/audit/sql/ownerfb-audit.ts",
+    "audit:sql": "npx --yes tsx scripts/audit/sql/roundA-audit.ts && npx --yes tsx scripts/audit/sql/roundB-audit.ts && npx --yes tsx scripts/audit/sql/roundC-audit.ts && npx --yes tsx scripts/audit/sql/roundD-audit.ts && npx --yes tsx scripts/audit/sql/roundE-audit.ts && npx --yes tsx scripts/audit/sql/ownerfb-audit.ts && npx --yes tsx scripts/audit/sql/round1-audit.ts",
     "audit:roundA": "npx --yes tsx scripts/audit/roundA-audit.ts",
     "audit:roundB": "npx --yes tsx scripts/audit/roundB-audit.ts",
     "audit:roundC": "npx --yes tsx scripts/audit/roundC-audit.ts",
     "audit:roundD": "npx --yes tsx scripts/audit/roundD-audit.ts",
-    "audit:roundE": "npx --yes tsx scripts/audit/roundE-audit.ts"
+    "audit:roundE": "npx --yes tsx scripts/audit/roundE-audit.ts",
+    "audit:round1": "npx --yes tsx scripts/audit/round1-audit.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

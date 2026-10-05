@@ -46,7 +46,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       'preorder_tickets: no healthy upstream', 'orders: The network connection was lost.', 'users: error code: 520', 'orders: the database system is starting up', 'x: canceling statement due to statement timeout'];
     ok('E5 error เซิร์ฟเวอร์ชั่วคราวที่ไม่รู้จัก (PGRST000/deadlock/520/…) = ลองใหม่ ไม่ทิ้งงาน', transient.every(isTransientPersistError), transient.filter((m) => !isTransientPersistError(m)));
     ok('E6 ด่าน ryuma: ที่มีตัวเลข 502/503/504 ในข้อความ (เช่นแต้มคงเหลือ) ยังเป็นถาวร', !isTransientPersistError('remaining_payments: ryuma: แต้มไม่พอ (คงเหลือ 503 แต้ม)'));
-    ok('E7 duplicate key / column ไม่มี = ถาวร', !isTransientPersistError('preorder_tickets: duplicate key value violates unique constraint "preorder_tickets_ticket_no_key"') && !isTransientPersistError('users: column "x" does not exist'));
+    ok('E7 duplicate key = ถาวร · column ไม่มี (ยังไม่รัน SQL) = ชั่วคราว ลองใหม่ช้าๆ (audit 1005 รอบ 1 #2)', !isTransientPersistError('preorder_tickets: duplicate key value violates unique constraint "preorder_tickets_ticket_no_key"') && isTransientPersistError('users: column "x" does not exist'));
     ok('E8 persistFailText: ถาวร = "ไม่ได้บันทึก — เหตุผลจริง" · ชั่วคราว = ข้อความลองใหม่เดิม',
       persistFailText('preorder_tickets: ryuma: ตั๋ว A อยู่ระหว่างซื้อขาย', 'R') === 'ไม่ได้บันทึก — ตั๋ว A อยู่ระหว่างซื้อขาย' && persistFailText('x: Failed to fetch', 'R') === 'R');
   }
