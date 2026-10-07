@@ -22,10 +22,12 @@ const REFRESH_MS = 40_000; // ให้ตรงจังหวะกับ poll
 
 export interface LiveItem { key: string; productId: string; batchId?: string }
 
-export function useLiveStockMap(items: LiveItem[]): Record<string, number> {
+/** `max` = เพดานจำนวนที่ถามต่อรอบ (ค่าเดิม 24 สำหรับกริดหน้าร้าน) — หน้าไลน์ส่งค่าสูงกว่า เพราะตัวที่ไม่ได้ถาม
+ *  จะตกไปใช้สูตร local ที่ฝั่งลูกค้านับขายแล้วไม่ครบ (RLS) แล้วขึ้น "พร้อมส่ง" บนของที่หมด */
+export function useLiveStockMap(items: LiveItem[], max = MAX_ASK): Record<string, number> {
   const [map, setMap] = useState<Record<string, number>>({});
   // ผูก effect กับ "รายการที่จะถาม" เป็นสตริง ไม่ใช่ตัว array (สร้างใหม่ทุก render)
-  const sig = items.slice(0, MAX_ASK).map((i) => `${i.productId}|${i.batchId ?? ''}`).join(',');
+  const sig = items.slice(0, max).map((i) => `${i.productId}|${i.batchId ?? ''}`).join(',');
 
   useEffect(() => {
     if (!sig) { setMap({}); return; }

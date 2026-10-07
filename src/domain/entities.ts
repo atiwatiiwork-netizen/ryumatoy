@@ -141,6 +141,36 @@ export interface BoardCloseLog {
 }
 
 /**
+ * ไลน์ (พรียกไลน์ · v81 · memory ryuma-line-spec) — รูปหมู่ของค่ายหนึ่งรูป + รายชื่อตัวละครในไลน์
+ * ไลน์ = เรื่อง × ค่าย (แยกค่าย = แยกไลน์) · ลำดับใน members = เลข 1, 2, 3 บนรูปและในรายการ
+ *
+ * ⚠ ไม่มีคอลัมน์ "สถานะ" ของไลน์/สมาชิก — ป้ายทุกอันคำนวณสดจากสินค้า/สต๊อก/รอบพิเศษ/ตั๋ว (domain/services/lines.ts)
+ *   แอดมินเปลี่ยนสถานะสินค้าที่ไหน ป้ายบนรูปเปลี่ยนตามเอง · ข้อยกเว้นเดียว = manual_state ของตัวที่ยังไม่มีสินค้าในระบบ
+ */
+export type LineManualState = 'preorder' | 'stock' | 'sourcing';
+export interface LineMember {
+  id: string;
+  name: string;                // ชื่อตัวละคร (โชว์ในป้าย/รายการ)
+  image_url?: string;          // รูปย่อ (ไม่บังคับ) — ไม่มี = ใช้รูปสินค้าที่ผูก
+  product_ids: string[];       // สินค้าในระบบที่ผูก (ใบพรี / SKU พร้อมส่ง) · id ที่ถูกลบไปแล้ว = ข้ามเอง
+  manual_state?: LineManualState; // ใช้เฉพาะตอนยังไม่ผูกสินค้า (แอดมิน Add เอง) — ไม่มี = ลูกค้าไม่เห็นตัวนี้
+  pin_x?: number;              // ตำแหน่งป้ายบนรูปปก เป็น % ของรูป (0–100) · ไม่มี = ไม่วางป้าย (ยังอยู่ในรายการ)
+  pin_y?: number;
+}
+export interface ProductLine {
+  id: string;
+  maker_id: string;            // ค่าย (บังคับ — แยกค่ายแยกไลน์)
+  franchise_id?: string | null; // เรื่อง (ไม่บังคับ — ใช้กรองในหน้าร้าน)
+  name: string;                // ชื่อไลน์ เช่น "กองโจรเงามายา"
+  cover_url?: string | null;   // รูปหมู่ของค่าย = ปก + พื้นที่วางป้าย
+  note?: string | null;
+  members: LineMember[];
+  active: boolean;             // false = ร่าง (ลูกค้าไม่เห็นแม้เปิดสวิตช์ใหญ่แล้ว)
+  created_at: string;
+  updated_at?: string;
+}
+
+/**
  * A re-opened sale of leftover/surplus stock on the SAME base product (SKU) — a
  * separate lot with its own price/deposit/qty. Existing pre-order buyers are
  * unaffected (their price is snapshotted). `status` 'open' = offered on the shop.
@@ -732,6 +762,7 @@ export interface Database {
   auctionWatch: AuctionWatch[];
   auctionEntries: AuctionEntry[];
   pointLedger: PointLedgerEntry[]; // สมุดคะแนนสะสม (v66) — บวก/ลบ ไม่แก้แถวเก่า
+  productLines: ProductLine[];     // ไลน์ (พรียกไลน์ · v81) — ยังไม่รัน migration = [] (ไม่ทำให้แอปโหลดพัง)
   settings: ShopSettings;
 }
 

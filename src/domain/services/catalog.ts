@@ -80,6 +80,14 @@ export function inClosedBoard(db: Database, p: Product): boolean {
   return !!p.board_id && db.boards.some((b) => b.id === p.board_id && b.status !== 'open');
 }
 
+/** พรีกระดานหลัก "ยังรับจองอยู่จริง": ไม่ใช่ของพร้อมส่ง + status 'open' + ไม่อยู่ในกระดานที่ปิดไปแล้ว.
+ *  ⚠ ด่านเดียวของทุกจุดที่ตัดสินว่าสั่งได้ไหม (หน้าสินค้า · ตะกร้า · checkout · นัดชำระ · submitOrder · ไลน์)
+ *  review 2026-10-07: เดิมเช็คแค่ status === 'open' → สินค้าในกระดานที่ปิดแล้ว (ยังไม่ถูกย้ายไปผลิต — แถวเก่า/
+ *  อีกเครื่องเพิ่มสินค้าเข้ากระดานที่เพิ่งปิด) หน้าร้านซ่อนไปแล้ว แต่เข้าลิงก์ตรง/ชิป "ดูทั้งไลน์" แล้วยังกดสั่งได้ */
+export function preorderOpenForOrder(db: Database, p: Product): boolean {
+  return !p.is_stock && p.status === 'open' && !inClosedBoard(db, p);
+}
+
 /** Tickets that still owe money (unfinished pre-orders) for a product. */
 export function outstandingTickets(db: Database, productId: string): number {
   return db.tickets.filter((t) => t.product_id === productId && (t.remaining_amount - t.remaining_paid) > 0).length;
@@ -88,6 +96,13 @@ export function outstandingTickets(db: Database, productId: string): number {
  *  leftover surplus, and NO ticket is still unpaid (the whole round is settled). */
 export function canConvertToInStock(db: Database, p: Product): boolean {
   return !p.is_stock && (p.status === 'arrived' || p.status === 'delivered') && (p.surplus_qty ?? 0) > 0 && outstandingTickets(db, p.id) === 0;
+}
+
+/** "ตัวเดียวกัน" ในคลังพร้อมส่ง: x เป็น SKU พร้อมส่ง + ค่ายเดียวกับ p + ชื่อตัวละครเดียวกัน.
+ *  ⚠ กฎนี้ต้องมีที่เดียว — ตอนแปลงพรีเป็นสต๊อก/เพิ่มสต๊อก (mutations: รวมของเข้า SKU เดิม) กับ
+ *  ไลน์ (หา "ของในมือ" ของตัวในไลน์ที่ผูกไว้แค่ใบพรี) ต้องเห็นคู่เดียวกันเสมอ ห้ามเขียนเงื่อนไขซ้ำที่อื่น */
+export function isStockTwin(x: Product, p: Product): boolean {
+  return x.is_stock && x.manufacturer_id === p.manufacturer_id && (x.character_name ?? x.series_name) === (p.character_name ?? p.series_name);
 }
 
 /** Series under a franchise (optionally further limited to those a maker carries). */

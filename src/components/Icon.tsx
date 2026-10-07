@@ -8,7 +8,7 @@ export type IconName =
   | 'chevronRight' | 'arrowLeft' | 'arrowRight' | 'heart' | 'share' | 'cart'
   | 'plus' | 'minus' | 'truck' | 'ticket' | 'qr' | 'copy' | 'camera' | 'tag'
   | 'x' | 'check' | 'dashboard' | 'box' | 'swap' | 'settings' | 'logout'
-  | 'bolt' | 'chat' | 'warning' | 'verified' | 'payments';
+  | 'bolt' | 'chat' | 'warning' | 'verified' | 'payments' | 'group';
 
 const P: Record<IconName, string> = {
   home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
@@ -44,6 +44,8 @@ const P: Record<IconName, string> = {
   warning: 'M12 3l9 16H3zM12 10v4M12 17v0',
   verified: 'M12 2l2.4 1.8 3 .3 1 2.8 2.2 2-1 2.8.4 3-2.6 1.5-1.4 2.6-3-.4-2.6 1.5-2.6-1.5-3 .4-1.4-2.6L2.4 16l1-2.8-2.2-2 2.2-2-1-2.8 3-.3zM9 12l2 2 4-4',
   payments: 'M2 7h16v9H2zM2 11h16M6 19h16v-9M9 11.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z',
+  // ไลน์ (พรียกไลน์) — คนหลายคนยืนเรียงกัน
+  group: 'M9 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM2.5 20a6.5 6.5 0 0113 0M16 4.5a3 3 0 010 6M18 14.5a5.5 5.5 0 013.5 5.5',
 };
 
 export function Icon({

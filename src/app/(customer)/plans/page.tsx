@@ -8,7 +8,7 @@ import { useCurrentUserId } from '@/state/AuthProvider';
 import { closePaymentPlan } from '@/data/mutations';
 import { livePrice } from '@/domain/services/pricing';
 import { lineDepositForRank } from '@/domain/services/ranks';
-import { lineImage, productLabel } from '@/domain/services/catalog';
+import { lineImage, productLabel, preorderOpenForOrder } from '@/domain/services/catalog';
 import { availableFor, batchAvailable } from '@/domain/services/reservations';
 import { useSmartBack } from '@/lib/nav';
 import { baht } from '@/lib/theme';
@@ -176,5 +176,5 @@ function soldOut(db: Database, i: PaymentPlan['items'][number]): boolean {
     return i.qty > batchAvailable(db, b);
   }
   if (p.is_stock) return i.qty > availableFor(db, p);
-  return p.status !== 'open'; // พรีปกติ: ปิดรับจองแล้ว = จ่ายไม่ได้
+  return !preorderOpenForOrder(db, p); // พรีปกติ: ปิดรับจองแล้ว (รวมกระดานที่ปิดแล้ว) = จ่ายไม่ได้
 }

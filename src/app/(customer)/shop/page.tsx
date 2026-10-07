@@ -7,6 +7,7 @@ import { Icon, type IconName } from '@/components/Icon';
 import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
+import { LineStrip } from '@/components/lines/LineStrip';
 import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
 import { batchAvailable } from '@/domain/services/reservations';
 import { store } from '@/data/store';
@@ -195,6 +196,8 @@ function ShopInner() {
               );
             })()}
           </div>
+          {/* ไลน์ (พรียกไลน์ v81) — เฉพาะมุมมอง "ทั้งหมด" · ลูกค้าไม่เห็นจนกว่าแอดมินเปิดสวิตช์ (คอมโพเนนต์ตัดสินเอง) */}
+          {category === null && <LineStrip makerId={manufacturerId} franchiseId={franchiseId} query={query} />}
           {openBatches.length > 0 && (
             <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
               {openBatches.map((b) => <BatchCard key={b.id} batch={b} liveAvail={liveMap[liveKey(b.product_id, b.id)]} />)}

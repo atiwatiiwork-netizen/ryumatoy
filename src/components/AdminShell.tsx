@@ -161,6 +161,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/instock', 'store', 'In-Stock', undefined, 'ของพร้อมส่ง'),
       it('/admin/stock', 'bolt', 'สต๊อกใบพรี', undefined, 'รอบพิเศษ + วงจรของ'),
       it('/admin/production', 'swap', 'ปิดรอบ / กระดาน', undefined, 'ปิดยอด + โพสต์กระดาน'),
+      it('/admin/lines', 'group', 'ไลน์ (พรียกไลน์)', undefined, 'รูปหมู่ + ป้ายสถานะ · ลองก่อนเปิด'),
       it('/admin/auctions', 'tag', 'ประมูล', auctionJobs, 'ห้องประมูล + ลองเล่นก่อนเปิด'),
     ] },
     { title: 'ลูกค้า', items: [

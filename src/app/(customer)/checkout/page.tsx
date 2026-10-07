@@ -14,7 +14,7 @@ import { Button, BackBar, QrPanel, cx } from '@/components/ui';
 import { CouponTicket } from '@/components/CouponTicket';
 import { submitOrder, markPlanPaid } from '@/data/mutations';
 import { canBuySpecialWithLines } from '@/domain/services/tickets';
-import { productLabel, inLiveAuction } from '@/domain/services/catalog';
+import { productLabel, inLiveAuction, preorderOpenForOrder } from '@/domain/services/catalog';
 import { batchAvailable, availableFor, isPendingHold, pendingHeld, myPendingHold, userTakenInBatch, BATCH_MAX_PER_USER } from '@/domain/services/reservations';
 import { store } from '@/data/store';
 import { isTransientPersistError, persistFailText } from '@/data/persistErrors';
@@ -119,7 +119,7 @@ export default function CheckoutPage() {
       return l.qty > batchAvailable(db, b) + ownHeldHere(l.batchId, p.id);
     }
     if (p.is_stock) return l.qty > availableFor(db, p) + ownHeldHere(undefined, p.id);
-    return p.status !== 'open';                                             // พรีปกติปิดรับจองแล้ว
+    return !preorderOpenForOrder(db, p);                                    // พรีปกติปิดรับจองแล้ว (รวมกระดานที่ปิดแล้ว)
   });
   // ตะกร้ามีของ แต่สินค้าถูกลบออกจากร้านหมดแล้ว → ต้องบล็อกเหมือนของหมด
   // (เดิมหลุดทุกด่าน: validLines ว่าง → ยอด 0 → เข้าโหมด "ไม่ต้องโอน" → กดยืนยันได้ตั๋วเปล่า) audit ลูกค้า #3

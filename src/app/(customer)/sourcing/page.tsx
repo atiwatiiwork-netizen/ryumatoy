@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useDatabase, useDispatch, useReady } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId, useAuth, canLogin } from '@/state/AuthProvider';
 import { uploadImage } from '@/lib/upload';
@@ -17,18 +18,50 @@ import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
 import { sourcingStatusOf, sourcingDaysLeft, sourcingEtaLabel, sourcingEtaConfig, transportLabel, openSourcingCount, MAX_OPEN_REQUESTS } from '@/domain/services/sourcing';
 import { useSmartBack } from '@/lib/nav';
+import { sourcingPrefill, type SourcingPrefill } from '@/domain/services/lines';
 import type { SourcingRequest } from '@/domain/entities';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
 const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '—');
 
-/** ระบบหาของ — ส่งเรื่อง / ตั๋วหาของ / watchlist (ryuma-sourcing-spec). */
+/** ระบบหาของ — ส่งเรื่อง / ตั๋วหาของ / watchlist (ryuma-sourcing-spec).
+ *  useSearchParams ต้องอยู่ใต้ Suspense (ไม่งั้น next build พังตอน prerender) — แบบเดียวกับหน้าช็อป */
 export default function SourcingPage() {
+  return <Suspense fallback={null}><SourcingInner /></Suspense>;
+}
+
+function SourcingInner() {
   const db = useDatabase();
+  const ready = useReady();
   const uid = useCurrentUserId();
   const { isLoggedIn } = useAuth();
   const goBack = useSmartBack('/profile');
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [showForm, setShowForm] = useState(false);
+  // ปุ่ม "หาของให้" จากหน้าไลน์ (v81): ?line=&m=&src= → เปิดฟอร์มพร้อมเติมค่าให้ (ครั้งเดียว · หลังข้อมูลจริงมาถึง —
+  //   render แรกเป็นข้อมูล seed ที่ยังไม่มีไลน์/สินค้า) · เรื่องค้างเต็มโควตา = ไม่เปิดเอง (ปุ่มบอกเหตุผลอยู่แล้ว)
+  const qSrc = params.get('src');
+  const qLine = params.get('line');
+  const qM = params.get('m');
+  const prefill = useMemo(
+    () => (ready && (qSrc || qLine) ? sourcingPrefill(db, uid, { src: qSrc, line: qLine, m: qM }) : null),
+    [ready, db, uid, qSrc, qLine, qM],
+  );
+  const open = openSourcingCount(db, uid);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!prefill || autoOpened.current) return;
+    autoOpened.current = true;
+    if (open < MAX_OPEN_REQUESTS) setShowForm(true);
+  }, [prefill, open]);
+  // ปิด/ส่งฟอร์มแล้ว → ล้าง ?line=&m=&src= ออกจากลิงก์ (replace ไม่เพิ่มประวัติ) — ไม่งั้นกดเปิดฟอร์มใหม่
+  //   จะได้ตัวเดิมเติมมาอีกรอบ ชวนส่งเรื่องซ้ำ (review 2026-10-07)
+  const closeForm = () => {
+    setShowForm(false);
+    if (qSrc || qLine || qM) router.replace(pathname, { scroll: false });
+  };
   if (canLogin && !isLoggedIn) return <AuthScreen />;
 
   const mine = db.sourcingRequests.filter((r) => r.user_id === uid).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -37,7 +70,6 @@ export default function SourcingPage() {
   const tickets = mine.filter((r) => st(r) === 'paid' || st(r) === 'working');
   const watchlist = mine.filter((r) => st(r) === 'quoted' || st(r) === 'unavailable');
   const history = mine.filter((r) => st(r) === 'expired');
-  const open = openSourcingCount(db, uid);
 
   return (
     <div className="mx-auto max-w-[640px]">
@@ -48,7 +80,7 @@ export default function SourcingPage() {
 
       {/* ① ส่งเรื่องหาของ */}
       {showForm ? (
-        <RequestForm uid={uid} onDone={() => setShowForm(false)} />
+        <RequestForm uid={uid} prefill={prefill} onDone={closeForm} />
       ) : (
         <button onClick={() => setShowForm(true)} disabled={open >= MAX_OPEN_REQUESTS}
           className="mb-5 flex w-full items-center justify-center gap-2 rounded-xl bg-cta py-3.5 text-sm font-bold text-white disabled:opacity-50">
@@ -261,7 +293,7 @@ function HistoryCard({ r, open }: { r: SourcingRequest; open: number }) {
 }
 
 /** ฟอร์มส่งเรื่อง — ค่าย/เรื่องเลือกจากระบบ หรือ "อื่นๆ" พิมพ์เอง · รูปบังคับ 1 (สูงสุด 3) */
-function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
+function RequestForm({ uid, onDone, prefill }: { uid: string; onDone: () => void; prefill?: SourcingPrefill | null }) {
   const db = useDatabase();
   const dispatch = useDispatch();
   const { flash } = useToast();
@@ -277,6 +309,20 @@ function RequestForm({ uid, onDone }: { uid: string; onDone: () => void }) {
   // เลือกจากสินค้าที่เคยมีในระบบ (concept 2026-07-23: พรีเก่า = ฐานข้อมูลหาของ) — เติมค่าให้อัตโนมัติ
   const [srcQ, setSrcQ] = useState('');
   const [srcId, setSrcId] = useState('');
+  // เติมค่าจากลิงก์ (ปุ่ม "หาของให้" ในหน้าไลน์) — ครั้งเดียวต่อการเปิดฟอร์ม ไม่ทับสิ่งที่ลูกค้าพิมพ์แก้ทีหลัง
+  //   ค่าย/เรื่องที่ไม่รู้ (ไลน์ไม่ได้ระบุเรื่อง · ค่ายถูกลบ) → "อื่นๆ (พิมพ์เอง)" ให้ลูกค้าเลือกเอง
+  //   ห้ามปล่อยค่าเริ่มต้น (ตัวแรกในรายการ) ค้างไว้ — ฟอร์มที่เติมให้แล้วลูกค้าเชื่อ กดส่ง = ได้เรื่องผิด (review 2026-10-07)
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (!prefill || prefilled.current) return;
+    prefilled.current = true;
+    setMakerId(prefill.makerId && db.manufacturers.some((m) => m.id === prefill.makerId) ? prefill.makerId : '__other');
+    setFrId(prefill.frId && db.franchises.some((f) => f.id === prefill.frId) ? prefill.frId : '__other');
+    if (prefill.cname) setCname(prefill.cname);
+    if (prefill.images.length) setImages(prefill.images.slice(0, 3));
+    if (prefill.srcId) { setSrcId(prefill.srcId); setSrcQ(db.products.find((p) => p.id === prefill.srcId)?.series_name ?? ''); }
+    if (prefill.note) setNote(prefill.note);
+  }, [prefill, db]);
   const srcMatches = srcQ.trim().length >= 2
     ? db.products.filter((p) => p.series_name.toLowerCase().includes(srcQ.trim().toLowerCase())).slice(0, 6)
     : [];

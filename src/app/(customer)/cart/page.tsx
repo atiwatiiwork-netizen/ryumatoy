@@ -5,7 +5,7 @@ import { useDatabase } from '@/state/DataProvider';
 import { useCart } from '@/state/CartProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { lineDepositForRank } from '@/domain/services/ranks';
-import { productLabel, inLiveAuction } from '@/domain/services/catalog';
+import { productLabel, inLiveAuction, preorderOpenForOrder } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
 import { userBatchQuota, BATCH_MAX_PER_USER, batchAvailable, availableFor, pendingHeld, myPendingHold } from '@/domain/services/reservations';
 import { useToast } from '@/state/ToastProvider';
@@ -53,7 +53,7 @@ export default function CartPage() {
       return pendingHeld(db, p.id, l.batchId) > 0 ? 'temp' : 'gone';
     }
     if (p.is_stock) return l.qty > availableFor(db, p) + mine ? (pendingHeld(db, p.id) > 0 ? 'temp' : 'gone') : null;
-    return p.status !== 'open' ? 'gone' : null; // พรีปกติ: ปิดรับจองแล้ว = จ่ายไม่ได้
+    return !preorderOpenForOrder(db, p) ? 'gone' : null; // พรีปกติ: ปิดรับจองแล้ว (รวมกระดานที่ปิดแล้ว) = จ่ายไม่ได้
   };
   const deadLines = cart.lines.filter((l) => lineGone(l) !== null);
   const deadCount = deadLines.length;
@@ -105,7 +105,7 @@ export default function CartPage() {
                 {gone && (() => {
                   // บอกให้ตรงเหตุ ไม่ใช่เหมารวมว่า "หมด" (ลูกค้าจะได้รู้ว่าต้องเอาออกหรือรอ)
                   const why = !product ? 'ถูกนำออกจากร้านแล้ว'
-                    : (!l.batchId && !product.is_stock && product.status !== 'open') ? 'ปิดรับจองรอบนี้แล้ว'
+                    : (!l.batchId && !product.is_stock && !preorderOpenForOrder(db, product)) ? 'ปิดรับจองรอบนี้แล้ว'
                     : gone === 'temp' ? '⏳ หมดชั่วคราว · รอของหลุด' : 'สินค้าหมดแล้ว';
                   return (
                     <span className={cx('ml-1.5 mt-1.5 inline-block rounded-md px-2 py-0.5 text-[10.5px] font-bold', gone === 'temp' ? 'animate-blink bg-[#d97706]/20 text-[#fbbf24]' : 'bg-white/[0.08] text-ink-faint')}>

@@ -1,3 +1,4 @@
+import type { ProductLine, LineMember } from '../domain/entities';
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo, RemainingPayment } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
@@ -19,7 +20,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
     return nextTicketNo(db, abbr, when, pending);
   };
 }
-import { franchiseOf, canConvertToInStock, stockRemaining, inLiveAuction } from '../domain/services/catalog';
+import { franchiseOf, canConvertToInStock, stockRemaining, inLiveAuction, isStockTwin, preorderOpenForOrder } from '../domain/services/catalog';
 import { pendingHeld, poolHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
 import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants, isPointsCoupon, couponAlreadyGranted } from '../domain/services/coupons';
@@ -31,6 +32,7 @@ import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pe
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 import { marketLocked, hasMarketHistory, depositGap, ticketTransferred } from '../domain/services/market';
 import { ticketPayer } from '../domain/services/tickets';
+import { LINES_PUBLIC_KEY, cleanLineRow } from '../domain/services/lines';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
 export type CouponApply = { grantId: string; discount: number };
@@ -88,7 +90,8 @@ export function submitOrder(userId: string, lines: CartLine[], slipUrl: string, 
         const b = db.batches.find((x) => x.id === l.batchId);
         return !!b && b.status === 'open' && b.published !== false;
       }
-      return p.is_stock || p.status === 'open';
+      // พรีปกติ: ต้องยังรับจองจริง — status open และไม่อยู่ในกระดานที่ปิดแล้ว (review 2026-10-07)
+      return p.is_stock || preorderOpenForOrder(db, p);
     });
     if (!sellable) return db;
     // บรรทัดประมูล (v61): ต้องเป็นผู้ชนะของห้องนั้นจริง · ห้องปิดแล้ว · ยังไม่เคยมีออเดอร์จ่าย · ชิ้นเดียว
@@ -1962,8 +1965,9 @@ export const bulkCreateProducts = (items: { product: Product; variants: { name: 
 };
 
 // same character + maker already sold in-stock? (used to merge stock instead of duplicating a SKU)
+// กฎ "ตัวเดียวกัน" อยู่ที่ catalog.isStockTwin ที่เดียว — ไลน์ (lines.ts) ใช้ตัวเดียวกันหาของในมือ
 const sameInStock = (products: Product[], p: Product, excludeId?: string) =>
-  products.find((x) => x.is_stock && x.id !== excludeId && x.manufacturer_id === p.manufacturer_id && (x.character_name ?? x.series_name) === (p.character_name ?? p.series_name));
+  products.find((x) => x.id !== excludeId && isStockTwin(x, p));
 
 /** Bulk-create in-stock (พร้อมส่ง) products. If a character already has an in-stock SKU (same ค่าย),
  *  its qty is MERGED into that SKU instead of creating a duplicate. Logs each stock change. */
@@ -2540,6 +2544,33 @@ export const samePayout = (a: PayoutInfo, b: PayoutInfo) =>
 export const setMarketDirect = (enabled: boolean) => (db: Database): Database => ({
   ...db,
   appConfig: [{ key: 'market_direct', value: { enabled, changed_at: new Date().toISOString() } }, ...db.appConfig.filter((c) => c.key !== 'market_direct')],
+});
+
+// ── ไลน์ (พรียกไลน์ · v81 · memory ryuma-line-spec) ─────────────────────────────
+// เขียนได้เฉพาะแอดมิน (RLS product_lines_admin) · ป้ายสถานะไม่ถูกเก็บ — คำนวณสดใน lines.ts
+/** สร้าง/แก้ไลน์ทั้งแถว — cleanLineRow แปลงช่องที่ล้างค่าเป็น null (undefined หายตอน JSON → ค่าเก่าค้างใน DB)
+ *  และจัด members ให้สะอาด (พิกัดอยู่ในกรอบ 0–100 · product_ids ไม่ซ้ำ) */
+export const upsertProductLine = (line: ProductLine) => (db: Database): Database => ({
+  ...db,
+  productLines: upsertById(db.productLines, cleanLineRow({ ...line, updated_at: new Date().toISOString() })),
+});
+/** แก้บางส่วนของไลน์ (ชื่อ/ปก/สมาชิก/ป้าย) — อ่านแถวล่าสุดใน store เสมอ ไม่ใช้สำเนาเก่าจากหน้าจอ */
+export const patchProductLine = (lineId: string, patch: (l: ProductLine) => ProductLine) => (db: Database): Database => {
+  const cur = db.productLines.find((l) => l.id === lineId);
+  if (!cur) return db;
+  return upsertProductLine(patch(cur))(db);
+};
+/** แก้สมาชิกตัวเดียวในไลน์ (ไม่เจอ = ไม่ทำอะไร) */
+export const patchLineMember = (lineId: string, memberId: string, patch: (m: LineMember) => LineMember) =>
+  patchProductLine(lineId, (l) => (l.members.some((m) => m.id === memberId) ? { ...l, members: l.members.map((m) => (m.id === memberId ? patch(m) : m)) } : l));
+export const removeProductLine = (lineId: string) => (db: Database): Database => ({
+  ...db,
+  productLines: db.productLines.filter((l) => l.id !== lineId),
+});
+/** สวิตช์ใหญ่ "ลูกค้าเห็นไลน์" (app_config 'lines_public') — ปิด = แอดมินเห็นคนเดียว · server อ่านแถวเดียวกันผ่าน ryuma_lines_open (RLS) */
+export const setLinesPublic = (enabled: boolean) => (db: Database): Database => ({
+  ...db,
+  appConfig: [{ key: LINES_PUBLIC_KEY, value: { enabled, changed_at: new Date().toISOString() } }, ...db.appConfig.filter((c) => c.key !== LINES_PUBLIC_KEY)],
 });
 
 // ── โหมดทดลอง (ยังไม่รัน v60) ───────────────────────────────────────────────

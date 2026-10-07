@@ -11,7 +11,7 @@ import { baht } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, BackBar, ProductThumb, cx } from '@/components/ui';
-import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining, dimensionLabel } from '@/domain/services/catalog';
+import { variantsOf, manufacturerNameOf, franchiseOf, categoryOf, seriesOf, remaining, dimensionLabel, preorderOpenForOrder } from '@/domain/services/catalog';
 import { depositForRank } from '@/domain/services/ranks';
 import { canBuySpecialWithLines } from '@/domain/services/tickets';
 import { useSmartBack } from '@/lib/nav';
@@ -24,6 +24,7 @@ import { StockCondCard } from '@/components/StockCond';
 import { copyText } from '@/lib/clipboard';
 import { checkAvailable } from '@/lib/reserve';
 import { store } from '@/data/store';
+import { linesOfProduct } from '@/domain/services/lines';
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -62,7 +63,7 @@ export default function ProductDetailPage() {
     if (!product) return;
     // หา "รอบที่หน้าจะขายจริง" แบบเดียวกับ logic ด้านล่าง (linked ?? auto)
     const linked = db.batches.find((b) => b.id === wantedBatchParam && b.product_id === product.id && b.status === 'open' && b.published !== false);
-    const auto = !wantedBatchParam && !product.is_stock && product.status !== 'open'
+    const auto = !wantedBatchParam && !product.is_stock && !preorderOpenForOrder(db, product)
       ? db.batches.find((b) => b.product_id === product.id && b.status === 'open' && b.published !== false)
       : undefined;
     const target = linked ?? auto;
@@ -97,8 +98,8 @@ export default function ProductDetailPage() {
   const linkedBatch = db.batches.find((b) => b.id === params.get('batch') && b.product_id === product.id && b.status === 'open' && b.published !== false);
   // ไม่มี ?batch= ในลิงก์ (เข้าตรง/บุ๊กมาร์ก): ถ้ากระดานหลักปิดรับแล้วแต่มีรอบพิเศษเปิดขายอยู่
   // → โชว์รอบนั้นเลย ไม่งั้นลูกค้าเห็นราคาบอร์ดเก่า + "ปิดรับจองแล้ว" ทั้งที่รอบกำลังขาย (2026-07-28)
-  // กระดานหลักยัง 'open' อยู่ = ขายทางบอร์ดตามเดิม ไม่แย่งกัน
-  const autoBatch = !params.get('batch') && !product.is_stock && product.status !== 'open'
+  // กระดานหลักยังรับจองอยู่จริง = ขายทางบอร์ดตามเดิม ไม่แย่งกัน (กระดานที่ปิดแล้ว = ปิดรับ · review 2026-10-07)
+  const autoBatch = !params.get('batch') && !product.is_stock && !preorderOpenForOrder(db, product)
     ? db.batches.find((b) => b.product_id === product.id && b.status === 'open' && b.published !== false)
     : undefined;
   const batch = linkedBatch ?? autoBatch;
@@ -121,7 +122,7 @@ export default function ProductDetailPage() {
   const series = seriesOf(db, product);
   const seriesLink = product.series_id ? `/shop?franchise=${product.franchise_id}&series=${product.series_id}` : null;
   const seriesMates = product.series_id
-    ? db.products.filter((p) => p.series_id === product.series_id && p.id !== product.id && (p.is_stock || p.status === 'open')).slice(0, 10)
+    ? db.products.filter((p) => p.series_id === product.series_id && p.id !== product.id && (p.is_stock || preorderOpenForOrder(db, p))).slice(0, 10)
     : [];
   // live availability for limited-qty items (in-stock / batch) — reservation-aware
   const limited = batch ? true : product.is_stock;
@@ -150,8 +151,8 @@ export default function ProductDetailPage() {
   const wantedBatch = params.get('batch');
   const batchGone = !!wantedBatch && !batch;
   // สินค้าพรีที่ปิดรับจองแล้ว (ผลิต/เดินทาง/ถึงไทย) ห้ามใส่ตะกร้า — เดิมปุ่มยังกดได้
-  // แล้วไปตายที่ checkout ตอนกดส่ง (audit ลูกค้า #8)
-  const closedForOrder = !product.is_stock && !batch && product.status !== 'open';
+  // แล้วไปตายที่ checkout ตอนกดส่ง (audit ลูกค้า #8) · รวมสินค้าในกระดานที่ปิดแล้ว (review 2026-10-07)
+  const closedForOrder = !product.is_stock && !batch && !preorderOpenForOrder(db, product);
   const addToCart = () => {
     if (batchGone) return flash('รอบพิเศษนี้ปิดไปแล้ว — กลับไปดูรอบที่เปิดอยู่ได้ที่หน้าร้าน');
     if (closedForOrder) return flash('ปิดรับจองรอบนี้แล้ว — รอรอบถัดไปนะครับ 🙏');
@@ -209,6 +210,19 @@ export default function ProductDetailPage() {
           <Icon name="tag" size={13} className="text-primary-soft" /> ซีรีย์ {series.name} · ดูตัวอื่น →
         </Link>
       )}
+      {/* ไลน์ (พรียกไลน์ v81) — สินค้าตัวนี้อยู่ในรูปหมู่ไหนบ้าง · ลูกค้าเห็นเมื่อแอดมินเปิดสวิตช์แล้วเท่านั้น (linesOfProduct ตัดสิน) */}
+      {(() => {
+        const lines = linesOfProduct(db, CURRENT_USER_ID, product.id);
+        return lines.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {lines.map((l) => (
+              <Link key={l.id} href={`/line/${l.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-accent-soft bg-surface-3 px-3 py-1 text-[12px] font-semibold text-ink-muted2">
+                <Icon name="group" size={13} className="text-primary-soft" /> ไลน์ {l.name.trim()} · ดูทั้งไลน์ →
+              </Link>
+            ))}
+          </div>
+        );
+      })()}
       {/* สินค้าหมดไม่โชว์ราคา (เจ้าของ 2026-07-23 — นโยบายเดียวกับการ์ดหน้า shop) */}
       {!soldOut && <div className="my-1.5 text-2xl font-extrabold text-primary-soft">{baht(price)}</div>}
       {dimensionLabel(product) && <div className="mb-1.5 text-[13.5px] font-semibold text-ink-muted">{dimensionLabel(product)}</div>}

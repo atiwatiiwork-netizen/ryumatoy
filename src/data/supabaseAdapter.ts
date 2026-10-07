@@ -158,7 +158,7 @@ async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unkn
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, productLines, settings] =
       await Promise.all([
         fetchAll(sb, 'users'),
         fetchAll(sb, 'categories'),
@@ -204,6 +204,9 @@ export const supabaseAdapter: PersistenceAdapter = {
         fetchAll(sb, 'auction_entries'),
         // คะแนนสะสม (v66 รันแล้ว) — อยู่ใน fatal list: ว่างเพราะโหลดพัง = ให้/ดึงแต้มผิด
         fetchAll(sb, 'point_ledger'),
+        // ไลน์ (v81) — ยังไม่รัน migration = ตารางไม่มี → [] (ไม่อยู่ใน fatal list ไม่ทำให้แอปโหลดพัง)
+        //   RLS: ลูกค้าได้เฉพาะไลน์ที่เปิดแล้ว (สวิตช์ lines_public + active) · แอดมินได้ทุกแถว
+        fetchAll(sb, 'product_lines'),
         fetchAll(sb, 'shop_settings'),
       ]);
 
@@ -270,6 +273,21 @@ export const supabaseAdapter: PersistenceAdapter = {
       auctionWatch: (auctionWatch.data ?? []) as Database['auctionWatch'],
       auctionEntries: (auctionEntries.data ?? []) as Database['auctionEntries'],
       pointLedger: (pointLedger.data ?? []) as Database['pointLedger'],
+      // members เป็น jsonb — กันแถวแก้มือที่ไม่ใช่ object / ไม่มี id·name·product_ids ให้หน้าจอไม่พัง
+      //   (ชื่อหาย = .trim() โยน → หน้าไลน์จอขาวทั้งร้าน · review 2026-10-07)
+      productLines: ((productLines.data ?? []) as Array<Row & { members?: unknown }>).map((r) => ({
+        ...r,
+        name: typeof r.name === 'string' ? r.name : '',
+        members: Array.isArray(r.members)
+          ? (r.members as unknown[])
+            .filter((m): m is Row => !!m && typeof m === 'object' && !Array.isArray(m) && typeof (m as Row).id === 'string')
+            .map((m) => ({
+              ...m,
+              name: typeof m.name === 'string' ? m.name : '',
+              product_ids: Array.isArray(m.product_ids) ? (m.product_ids as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+            }))
+          : [],
+      })) as unknown as Database['productLines'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -322,6 +340,9 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('franchises', () => syncTable(sb, 'franchises', next.franchises as unknown as Row[], base.franchises as unknown as Row[]));
     await step('series', () => syncTable(sb, 'series', next.series as unknown as Row[], base.series as unknown as Row[]));
     await step('products', () => syncTable(sb, 'products', next.products as unknown as Row[], base.products as unknown as Row[]));
+    // ไลน์ (v81): เขียนได้เฉพาะแอดมิน (RLS) — เซสชันลูกค้าไม่เคยแก้ productLines จึงไม่มี diff ไม่มีคำขอ
+    //   คอลัมน์ที่ "ล้างค่า" (cover_url/franchise_id/note) ต้องส่งเป็น null — undefined หายไปตอน JSON → ค่าเก่าค้างใน DB
+    await step('product_lines', () => syncTable(sb, 'product_lines', next.productLines as unknown as Row[], base.productLines as unknown as Row[]));
     await step('preorder_boards', () => syncTable(sb, 'preorder_boards', next.boards as unknown as Row[], base.boards as unknown as Row[]));
     await step('board_close_logs', () => syncTable(sb, 'board_close_logs', next.boardLogs as unknown as Row[], base.boardLogs as unknown as Row[]));
     await step('product_batches', () => syncTable(sb, 'product_batches', next.batches as unknown as Row[], base.batches as unknown as Row[]));
