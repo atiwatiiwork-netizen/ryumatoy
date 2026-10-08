@@ -10,7 +10,7 @@ import { supabase } from '@/data/supabaseClient';
 import { persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
 import { composeCollage } from '@/lib/collage';
-import { sendPush, subsForLine, pushEnabled } from '@/lib/push';
+import { sendPush, subsForLine, subsAll, pushEnabled } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity } from '@/data/mutations';
 import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
@@ -104,6 +104,18 @@ export default function AdminLinesPage() {
     const pf = await store.flush();
     if (pf) { flash(persistFailText(pf, 'บันทึกสวิตช์ไม่สำเร็จ — ระบบจะลองใหม่ให้')); return; }
     flash(isPublic ? 'ปิดไลน์จากฝั่งลูกค้าแล้ว' : 'เปิดไลน์ให้ลูกค้าเห็นแล้ว 🎉');
+    // เปิดสวิตช์ใหญ่ทั้งที่มีไลน์ "แสดง" รออยู่แล้ว = ไลน์พวกนั้นเพิ่งโผล่ให้ลูกค้าครั้งแรก → ถามว่าจะส่ง push รวม 1 ข้อความไหม
+    //   (ไม่ยิงทีละไลน์ กันถล่ม · ลำดับกดจะเป็น "แสดงก่อนเปิดสวิตช์" หรือ "เปิดสวิตช์ก่อนแสดง" ก็ได้แจ้งเตือนทั้งคู่)
+    if (!isPublic && pushEnabled(db, 'line_new')) {
+      const live = db.productLines.filter((l) => l.active && !!l.cover_url);
+      if (live.length === 0) return;
+      const subs = subsAll(db);
+      if (!window.confirm(`มีไลน์ที่แสดงอยู่ ${live.length} ไลน์ เพิ่งเปิดให้ลูกค้าเห็นครั้งแรก\nส่งแจ้งเตือนรวม 1 ข้อความไป ${subs.length} เครื่องที่เปิดกระดิ่งไหม?`)) return;
+      const names = live.slice(0, 3).map((l) => l.name.trim()).filter(Boolean).join(' · ');
+      sendPush(subs, { title: '🧩 ไลน์อัปมาแล้ว', body: `${names}${live.length > 3 ? ` และอีก ${live.length - 3} ไลน์` : ''} — ดูทั้งชุดแล้วเลือกพรีได้เลย`, url: '/lines' }, dispatch).catch(() => {});
+      dispatch(logActivity(uid, 'line_push', `แจ้งเปิดไลน์อัป ${live.length} ไลน์ (${subs.length} เครื่อง)`));
+      flash(`ส่งแจ้งเตือนแล้ว ${subs.length} เครื่อง`);
+    }
   };
 
   const editing = editId ? db.productLines.find((l) => l.id === editId) : undefined;
