@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { layoutPins, pinLabelWidth, PIN_EDGE_INSET, type LineTone, type PinPlacement } from '@/domain/services/lines';
+import { layoutPins, pinLabelWidth, PIN_EDGE_INSET, PIN_STEM_SHORT, type LineTone, type PinPlacement } from '@/domain/services/lines';
 import { cx } from '@/components/ui';
 import { TONE_HEX } from './lineUi';
 
@@ -103,11 +103,19 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
     );
   }
   const shift = pl.align === 'center' ? '-50%' : pl.align === 'left' ? `-${PIN_EDGE_INSET}px` : `calc(-100% + ${PIN_EDGE_INSET}px)`;
+  // ระยะจากจุดที่แตะ (ยอดหัว) ถึงขอบป้าย — ป้ายนั่งชิดหัว มีหางสามเหลี่ยมชี้ลง ไม่มีจุด/เส้น (เจ้าของ 2026-10-08: "เส้นชี้ดูไม่สวย")
+  // เส้นบางๆ โผล่เฉพาะตอนป้ายถูกยกหนีป้ายข้างๆ จนห่างหัวมาก (ไม่งั้นไม่รู้ว่าป้ายของใคร)
+  const gap = pl.stem - 2;
+  const lifted = pl.stem > PIN_STEM_SHORT + 12;
+  const bg = 'rgba(10,10,14,.82)';
   return (
     <div className="absolute h-0 w-0" style={{ left: `${pl.x}%`, top: `${pl.y}%` }}>
-      {/* จุดกับเส้นไม่รับการแตะเลย — ตอนวางป้าย แตะซ้ำตรงหัวที่มีป้ายแล้วต้องทะลุถึงรูป (review 2026-10-07) */}
-      <span className="pointer-events-none absolute h-[7px] w-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" style={{ boxShadow: '0 0 0 3px rgba(255,255,255,.25)' }} />
-      <span className="pointer-events-none absolute w-px -translate-x-1/2 bg-white/70" style={pl.below ? { top: 3, height: pl.stem } : { bottom: 3, height: pl.stem }} />
+      {/* หาง/เส้นไม่รับการแตะเลย — ตอนวางป้าย แตะซ้ำตรงหัวที่มีป้ายแล้วต้องทะลุถึงรูป (review 2026-10-07) */}
+      {lifted && <span className="pointer-events-none absolute w-px -translate-x-1/2 bg-white/40" style={pl.below ? { top: 2, height: gap } : { bottom: 2, height: gap }} />}
+      <span
+        className="pointer-events-none absolute h-[9px] w-[9px] -translate-x-1/2 rotate-45 border"
+        style={{ ...(pl.below ? { top: gap - 4 } : { bottom: gap - 4 }), background: bg, borderColor: `${color}8c` }}
+      />
       <button
         type="button"
         onClick={tap}
@@ -119,9 +127,9 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
           hi && 'ring-2 ring-white',
         )}
         style={{
-          ...(pl.below ? { top: pl.stem + 4 } : { bottom: pl.stem + 4 }),
+          ...(pl.below ? { top: gap } : { bottom: gap }),
           transform: `translateX(${shift})`,
-          background: 'rgba(10,10,14,.80)',
+          background: bg,
           borderColor: `${color}8c`,
           boxShadow: '0 4px 14px rgba(0,0,0,.55)',
         }}
