@@ -239,6 +239,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   const [pending, setPending] = useState<{ x: number; y: number } | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // 'cover' | member id ที่กำลังอัปรูป
   const [view, setView] = useState<'edit' | 'preview'>('edit');
+  const [phoneW, setPhoneW] = useState(true); // วางป้ายที่ความกว้างมือถือ (343 = 375 − ขอบ 16×2) = เห็นเหมือนลูกค้า
   const guard = () => { if (!canWrite) { flash('ยังแก้ไม่ได้ — กำลังเช็คระบบ หรือยังไม่ได้รัน SQL v81'); return false; } return true; };
   const patch = (fn: (l: ProductLine) => ProductLine) => { if (guard()) dispatch(patchProductLine(line.id, fn)); };
   const patchM = (mid: string, fn: (m: LineMember) => LineMember) => { if (guard()) dispatch(patchLineMember(line.id, mid, fn)); };
@@ -354,6 +355,14 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
 
             <div className="mb-1.5 flex items-center gap-2">
               <span className="text-[13px] font-extrabold">รูปหมู่ (ปก + พื้นที่วางป้าย)</span>
+              {/* ความกว้างที่ใช้วาง: ป้ายจัดตัวเองตามความกว้างจอ — ลูกค้าส่วนใหญ่ใช้มือถือ จึงวางที่ 375px เป็นค่าเริ่มต้น
+                  (เจ้าของ 2026-10-08: "ทำไมรูปแอดมินกับพรีวิวลูกค้าไม่เหมือนกัน" = รูปกว้างไม่เท่ากัน ป้ายเลยเรียงคนละแบบ) */}
+              {line.cover_url && (
+                <div className="flex rounded-lg border border-subtle bg-surface-3 p-0.5 text-[11.5px] font-bold">
+                  <button onClick={() => setPhoneW(true)} className={cx('rounded-md px-2.5 py-1', phoneW ? 'bg-surface-4 text-ink' : 'text-ink-faint')}>📱 มือถือ</button>
+                  <button onClick={() => setPhoneW(false)} className={cx('rounded-md px-2.5 py-1', !phoneW ? 'bg-surface-4 text-ink' : 'text-ink-faint')}>🖥️ จอกว้าง</button>
+                </div>
+              )}
               <div className="flex-1" />
               <label className={cx('cursor-pointer rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold', (!canWrite || busy === 'cover') && 'pointer-events-none opacity-50')}>
                 {busy === 'cover' ? 'กำลังอัปโหลด…' : line.cover_url ? 'เปลี่ยนรูป' : '+ ใส่รูปหมู่'}
@@ -363,7 +372,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
             </div>
             {line.cover_url ? (
               <>
-                <div className="relative">
+                <div className={cx('relative', phoneW && 'mx-auto w-[343px] max-w-full')}>
                   <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
                   {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
                   {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
