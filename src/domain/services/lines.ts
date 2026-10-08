@@ -268,6 +268,14 @@ export function shopLines(db: Database, uid: string, f: { makerId?: string | nul
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
+/** สินค้าที่ "อยู่ในไลน์ที่ผู้ใช้คนนี้เห็น" (ผูกตรง + ของคู่) — หน้าช็อปมุมมอง "ทั้งหมด" ยุบตัวพวกนี้ออกจากกริด
+ *  ให้เหลือการ์ดไลน์ใบเดียว (เจ้าของ 2026-10-08 "เอาแบบยุบ") · ค้นหา/กรอง/หมวด ยังเห็นตัวเดี่ยวครบ (ผู้เรียกตัดสิน) */
+export function productsInVisibleLines(db: Database, uid: string): Set<string> {
+  const out = new Set<string>();
+  for (const l of shopLines(db, uid)) for (const m of l.members) for (const p of memberProducts(db, m).all) out.add(p.id);
+  return out;
+}
+
 /** ไลน์ล่าสุด N ไลน์สำหรับหน้าแรก (เรียงตามวันที่สร้าง ใหม่สุดก่อน — shopLines เรียงให้แล้ว) */
 export const homeLines = (db: Database, uid: string, n = 3): ProductLine[] => shopLines(db, uid).slice(0, n);
 /** ป้าย "ใหม่" = สร้างภายใน 7 วัน */

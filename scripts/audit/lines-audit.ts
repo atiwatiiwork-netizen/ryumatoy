@@ -13,7 +13,7 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
+  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, productsInVisibleLines, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
@@ -360,6 +360,12 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     const c = lineToneCounts(states);
     ok('L2 ตัวนับตามสี นับเฉพาะตัวที่ลูกค้าเห็น', c.blue === 1 && c.green === 1 && c.amber === 1 && c.purple === 0 && states[3].state.visible === false, c);
     ok('L3 เลขลำดับ = ตำแหน่งใน members (1,2,3…)', states.map((s) => s.no).join() === '1,2,3,4');
+    // ยุบไลน์ในช็อป (เจ้าของ 2026-10-08): ตัวที่อยู่ในไลน์ที่ลูกค้าเห็น (ผูกตรง + ของคู่) หายจากกริด ทั้งหมด · สวิตช์ปิด = ไม่ยุบ
+    const col = L([M('a', ['pre'])]);
+    let cdb = base({ products: [P('pre', { status: 'production', character_name: 'K' }), P('twin', { is_stock: true, stock_qty: 1, character_name: 'K' }), P('open')], productLines: [col] });
+    ok('L4 สวิตช์ปิด: ลูกค้าไม่ยุบอะไร · แอดมินยุบ (เห็นไลน์อยู่แล้ว)', productsInVisibleLines(cdb, 'uA').size === 0 && [...productsInVisibleLines(cdb, 'uAdm')].sort().join() === 'pre,twin');
+    cdb = setLinesPublic(true)(cdb);
+    ok('L5 สวิตช์เปิด: ลูกค้ายุบ pre+ของคู่ twin · open ไม่อยู่ในไลน์ยังอยู่', [...productsInVisibleLines(cdb, 'uA')].sort().join() === 'pre,twin' && !productsInVisibleLines(cdb, 'uA').has('open'));
   }
 
   // ── 12. แก้ตามผลตรวจของ reviewer 2 ชุด (2026-10-07) ──────────────────────────────────────────

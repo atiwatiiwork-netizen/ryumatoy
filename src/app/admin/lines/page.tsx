@@ -15,6 +15,8 @@ import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity } from '@/data/mutations';
 import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
 import { availableFor } from '@/domain/services/reservations';
+import { preorderOpenForOrder } from '@/domain/services/catalog';
+import { baht } from '@/lib/theme';
 import type { Database, LineManualState, LineMember, Product, ProductLine, ProductStatus } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
@@ -112,7 +114,7 @@ export default function AdminLinesPage() {
       const subs = subsAll(db);
       if (!window.confirm(`มีไลน์ที่แสดงอยู่ ${live.length} ไลน์ เพิ่งเปิดให้ลูกค้าเห็นครั้งแรก\nส่งแจ้งเตือนรวม 1 ข้อความไป ${subs.length} เครื่องที่เปิดกระดิ่งไหม?`)) return;
       const names = live.slice(0, 3).map((l) => l.name.trim()).filter(Boolean).join(' · ');
-      sendPush(subs, { title: '🧩 ไลน์อัปมาแล้ว', body: `${names}${live.length > 3 ? ` และอีก ${live.length - 3} ไลน์` : ''} — ดูทั้งชุดแล้วเลือกพรีได้เลย`, url: '/lines' }, dispatch).catch(() => {});
+      sendPush(subs, { title: '🧩 ไลน์อัปมาแล้ว', body: `ไลน์ ${names}${live.length > 3 ? ` และอีก ${live.length - 3} ไลน์` : ''} ได้ถูกอัปเดตแล้ว — กดดูทั้งชุด`, url: '/lines' }, dispatch).catch(() => {});
       dispatch(logActivity(uid, 'line_push', `แจ้งเปิดไลน์อัป ${live.length} ไลน์ (${subs.length} เครื่อง)`));
       flash(`ส่งแจ้งเตือนแล้ว ${subs.length} เครื่อง`);
     }
@@ -344,18 +346,33 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
       const pf = await store.flush();
       if (pf) return flash(persistFailText(pf, 'บันทึกแล้วจะลองใหม่ให้ — ยังไม่ส่งแจ้งเตือน'));
       const subs = subsForLine(db, line);
-      sendPush(subs, { title: '🧩 ไลน์อัปใหม่', body: `${line.name.trim()} · ${lineWho()} — ดูทั้งไลน์แล้วเลือกพรีได้เลย`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+      sendPush(subs, { title: '🧩 ไลน์อัปใหม่', body: `ไลน์ ${line.name.trim()} (${lineWho()}) เปิดแล้ว — กดดูทั้งไลน์`, url: `/line/${line.id}` }, dispatch).catch(() => {});
       flash(`แสดงให้ลูกค้าแล้ว · ส่งแจ้งเตือนไลน์ใหม่ไป ${subs.length} เครื่อง`);
     }
   };
   // แอดมินกดเองเมื่อมีอัปเดตสำคัญ (ค่ายเปิดตัวใหม่ / ของเข้า) — ไม่ยิงอัตโนมัติทุกครั้งที่แก้ ไม่งั้นลูกค้าโดนถล่ม
+  // เพิ่มสินค้าเข้าไลน์ที่ลูกค้าเห็นอยู่ → แจ้ง "ชื่อรายการ (ชื่อไลน์) เปิดพรีแล้ว" อัตโนมัติ (เจ้าของ 2026-10-08) — wording เดียวกับสินค้าเข้าใหม่
+  //   เฉพาะของที่สั่งได้จริงตอนนี้ (พรีเปิด / พร้อมส่ง) · เซฟให้ขึ้นก่อนค่อยยิง · ไลน์ร่าง/สวิตช์ปิด = เงียบ (ลูกค้ายังไม่เห็นอยู่แล้ว)
+  const announceItem = async (p: Product) => {
+    if (!lineOpenToCustomers(db, line) || !pushEnabled(db, 'line_item')) return;
+    if (!(p.is_stock || preorderOpenForOrder(db, p))) return;
+    const pf = await store.flush();
+    if (pf) return;
+    const subs = subsForLine(db, line);
+    sendPush(subs, {
+      title: p.is_stock ? '🟢 พร้อมส่งเข้าใหม่' : '🆕 เปิดพรีใหม่',
+      body: `${productName(p)} (${line.name.trim()}) ${p.is_stock ? 'พร้อมส่งแล้ว' : 'ได้เปิดพรีแล้ว'} · ${baht(p.price_total)}${p.is_stock ? '' : ` · มัดจำ ${baht(p.deposit_amount)}`}`,
+      url: `/line/${line.id}`,
+    }, dispatch).catch(() => {});
+    flash(`แจ้งเตือน "${productName(p)} (${line.name.trim()})" ไป ${subs.length} เครื่อง`);
+  };
   const notifyUpdate = () => {
     if (!guard()) return;
     if (!lineOpenToCustomers(db, line)) return flash('ลูกค้ายังมองไม่เห็นไลน์นี้ — เปิดสวิตช์ใหญ่ + กดแสดงให้ลูกค้าก่อน');
     if (!pushEnabled(db, 'line_update')) return flash('แจ้งเตือน "ไลน์อัปมีอัปเดต" ถูกปิดไว้ที่หน้า Push Control');
     const subs = subsForLine(db, line);
     if (!window.confirm(`ส่งแจ้งเตือน "ไลน์ ${line.name.trim()} มีอัปเดต" ไป ${subs.length} เครื่อง?\n\nลูกค้าที่ปิดค่าย/เรื่องนี้ไว้จะไม่ได้รับ`)) return;
-    sendPush(subs, { title: '📣 ไลน์อัปมีอัปเดต', body: `${line.name.trim()} · ${lineWho()} — มีตัวใหม่/สถานะใหม่ เข้าไปดูได้เลย`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+    sendPush(subs, { title: '📣 ไลน์อัปมีอัปเดต', body: `ไลน์ ${line.name.trim()} ได้ถูกอัปเดตแล้ว — กดดูทั้งไลน์`, url: `/line/${line.id}` }, dispatch).catch(() => {});
     dispatch(logActivity(uid, 'line_push', `แจ้งอัปเดตไลน์ ${line.name.trim()} (${subs.length} เครื่อง)`, { targetId: line.id, targetLabel: line.name.trim() }));
     flash(`ส่งแจ้งเตือนแล้ว ${subs.length} เครื่อง`);
   };
@@ -490,7 +507,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
               {line.members.length === 0 && <div className="rounded-card border border-dashed border-subtle p-5 text-center text-[12.5px] text-ink-faint">ยังไม่มีตัวในไลน์ — ติ๊กจากในระบบด้านล่าง หรือ Add ตัวที่ยังไม่มีในระบบ</div>}
             </div>
             <AddCustomMember onAdd={(name, state) => patch((l) => ({ ...l, members: [...l.members, { id: genId('lm'), name, product_ids: [], manual_state: state || undefined }] }))} canWrite={canWrite} />
-            <SystemPicker db={db} line={line} canWrite={canWrite} onPatch={patch} />
+            <SystemPicker db={db} line={line} canWrite={canWrite} onPatch={patch} onLinked={(p) => void announceItem(p)} />
           </div>
         </div>
       )}
@@ -630,7 +647,7 @@ function AddCustomMember({ onAdd, canWrite }: { onAdd: (name: string, state: '' 
 
 /** ติ๊กจากในระบบ: สินค้าของค่ายไลน์นี้ — ติ๊ก = เพิ่มเป็นตัวใหม่ · เอาติ๊กออก = เลิกผูก (ตัวที่ไม่เหลืออะไรถูกเอาออก) ·
  *  ของพร้อมส่งชื่อเดียวกับใบพรีที่ผูกแล้ว = รวมให้อัตโนมัติ (ติ๊กซ้ำไม่ได้ ไม่งั้นได้ตัวซ้ำ 2 แถว) */
-function SystemPicker({ db, line, canWrite, onPatch }: { db: Database; line: ProductLine; canWrite: boolean; onPatch: (fn: (l: ProductLine) => ProductLine) => void }) {
+function SystemPicker({ db, line, canWrite, onPatch, onLinked }: { db: Database; line: ProductLine; canWrite: boolean; onPatch: (fn: (l: ProductLine) => ProductLine) => void; onLinked: (p: Product) => void }) {
   const [q, setQ] = useState('');
   const [onlyFr, setOnlyFr] = useState(true);
   const linkedIdx = new Map<string, number>();
@@ -653,6 +670,7 @@ function SystemPicker({ db, line, canWrite, onPatch }: { db: Database; line: Pro
     const at = linkedIdx.get(p.id);
     if (at === undefined) {
       onPatch((l) => ({ ...l, members: [...l.members, { id: genId('lm'), name: productName(p), product_ids: [p.id] }] }));
+      onLinked(p);
       return;
     }
     const m = line.members[at];
@@ -670,6 +688,7 @@ function SystemPicker({ db, line, canWrite, onPatch }: { db: Database; line: Pro
   const attachTo = (p: Product, memberId: string) => {
     if (!canWrite || !memberId) return;
     onPatch((l) => ({ ...l, members: l.members.map((x) => (x.id === memberId ? { ...x, product_ids: [...x.product_ids, p.id] } : x)) }));
+    onLinked(p);
   };
 
   return (

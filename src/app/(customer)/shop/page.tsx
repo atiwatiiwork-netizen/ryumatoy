@@ -8,6 +8,8 @@ import { Chip, cx } from '@/components/ui';
 import { ProductCard } from '@/components/ProductCard';
 import { BatchCard } from '@/components/BatchCard';
 import { LineStrip } from '@/components/lines/LineStrip';
+import { productsInVisibleLines } from '@/domain/services/lines';
+import { useCurrentUserId } from '@/state/AuthProvider';
 import { filterProducts, seriesForFranchise, makersOfCategory, categoryOf, groupByMakerSeries, type ProductFilter } from '@/domain/services/catalog';
 import { batchAvailable } from '@/domain/services/reservations';
 import { store } from '@/data/store';
@@ -29,6 +31,7 @@ const PAGE_SIZE = 24; // products rendered per "โหลดเพิ่ม" ste
 
 function ShopInner() {
   const db = useDatabase();
+  const uid = useCurrentUserId();
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -70,7 +73,12 @@ function ShopInner() {
     [db, category, categoryId, franchiseId, manufacturerId, seriesId, status, query],
   );
   // "พรีรอบพิเศษ" is its own category → hide normal products there; batches are the only cards.
-  const results = category === 'special' ? [] : filtered;
+  // ยุบไลน์ (เจ้าของ 2026-10-08): มุมมอง "ทั้งหมด" ที่ไม่ได้ค้น/กรองอะไร → ตัวที่อยู่ในไลน์ (ที่ลูกค้าเห็น) หายจากกริด
+  //   เหลือการ์ดไลน์ใบเดียวในแถบด้านบน · ค้นหา · กรองค่าย/เรื่อง/ซีรีย์/สถานะ · หมวด Pre-Order/In-Stock ยังเห็นตัวเดี่ยวครบ
+  //   (สินค้าต้องหาเจอเสมอ) · productsInVisibleLines ใช้กติกาเดียวกับแถบไลน์ (สวิตช์ปิด = ไม่ยุบ)
+  const collapseLines = category === null && !query && !manufacturerId && !franchiseId && !seriesId && !status && !categoryId;
+  const inLines = useMemo(() => (collapseLines ? productsInVisibleLines(db, uid) : new Set<string>()), [collapseLines, db, uid]);
+  const results = category === 'special' ? [] : filtered.filter((p) => !inLines.has(p.id));
 
   // special-round batches (สต๊อกใบพรี) shown as their own cards — in the "พรีรอบพิเศษ" category and the "all" view
   const showBatches = category === null || category === 'special';
