@@ -141,7 +141,7 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
         // พรีวิวในแอดมิน: ปุ่มหน้าตาเหมือนจริงแต่ไม่พาออกจากหน้าแก้ไข
         ? <span className={btnCls}>{cta.label}</span>
         : quick && inCart
-          ? <Link href="/cart" className="shrink-0 rounded-[10px] border border-[#16a34a]/50 bg-[#16a34a]/15 px-3 py-2 text-center text-[11.5px] font-extrabold leading-tight text-[#4ade80]">อยู่ในตะกร้าแล้ว ✓<br /><span className="font-semibold text-[#4ade80]/80">ไปชำระ →</span></Link>
+          ? <Link href="/cart" className="shrink-0 rounded-[10px] border border-[#16a34a]/50 bg-[#16a34a]/15 px-3 py-2 text-[12px] font-extrabold text-[#4ade80]">อยู่ในตะกร้าแล้ว ✓</Link>
         : quick
           ? <button onClick={() => void addNow()} disabled={checking} className={cx(btnCls, 'disabled:animate-none disabled:opacity-60')}>{checking ? 'เช็คของ…' : cta.label}</button>
         : cta.external

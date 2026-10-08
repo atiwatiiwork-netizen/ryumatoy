@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useDatabase, useReady } from '@/state/DataProvider';
@@ -24,6 +24,9 @@ import { PreviewSwitcher } from './PreviewSwitcher';
 /** Desktop admin frame: 230px side nav + main (HANDOFF.md §Admin Dashboard). */
 export function AdminShell({ children }: { children: ReactNode }) {
   const path = usePathname();
+  // ลิ้นชักเมนูบนมือถือ — ปิดเองเมื่อเปลี่ยนหน้า (hook ต้องอยู่ก่อน early return ด้านล่าง)
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => { setMenuOpen(false); }, [path]);
   const db = useDatabase();
   const { isAdmin, isLoggedIn, authReady, signInFacebook } = useAuth();
   const adminId = useCurrentUserId();
@@ -183,9 +186,13 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // ใหม่: ทุกแถวบรรทัดเดียวความสูงเท่ากัน (h-9) → กวาดตาเป็นคอลัมน์เดียว · คำอธิบายย้ายไป tooltip (title)
   //   · active เบาลง (แดงจางโปร่ง + แถบ accent ซ้าย) ไม่ตะโกนกลบเมนูอื่น
   //   · หัวกลุ่มโชว์ "ยอดรวมงานค้าง" ชิดขวา (graft จากแนว C) + จุด live ที่กลุ่ม "ทำวันนี้"
+  // มือถือ (เจ้าของ 2026-10-08 "สลับไปหน้าแอดมินแล้วเละ"): เมนูข้างซ่อน → แถบบน + ปุ่ม ☰ เปิดลิ้นชักเมนูเดียวกัน
+  //   เนื้อหาเต็มจอ ตารางกว้างเลื่อนซ้ายขวาได้ · ลิ้นชักปิดเองเมื่อเปลี่ยนหน้า
+  const currentTitle = groups.flatMap((g) => g.items).find((n) => n.active)?.label ?? 'แอดมิน';
+  const totalJobs = groups[0].items.reduce((s, i) => s + (i.badge ?? 0), 0);
   return (
     <div className="flex min-h-screen bg-base font-sans text-ink">
-      <aside className="sticky top-0 flex h-screen w-[230px] shrink-0 flex-col border-r border-subtle bg-sidebar">
+      <aside className="sticky top-0 hidden h-screen w-[230px] shrink-0 flex-col border-r border-subtle bg-sidebar lg:flex">
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
           <img src="/ryuma-logo.png" alt="Ryuma" width={36} height={36} className="rounded-[9px]" />
           <div className="leading-tight">
@@ -193,47 +200,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <div className="text-[10px] tracking-[0.14em] text-ink-faint">ADMIN PANEL</div>
           </div>
         </div>
-
-        <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 pb-3">
-          {groups.map((g, gi) => {
-            const groupBadge = g.items.reduce((s, i) => s + (i.badge ?? 0), 0);
-            return (
-              <div key={g.title ?? gi}>
-                {g.title && (
-                  <div className="mb-1 flex items-center gap-1.5 px-2.5">
-                    {gi === 0 && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary-bright" aria-hidden />}
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">{g.title}</span>
-                    {groupBadge > 0 && <span className="ml-auto text-[10px] font-bold tabular-nums text-ink-faint">{groupBadge}</span>}
-                  </div>
-                )}
-                <ul className="space-y-0.5">
-                  {g.items.map((n) => (
-                    <li key={n.label}>
-                      <Link
-                        href={n.href}
-                        title={n.sub}
-                        aria-current={n.active ? 'page' : undefined}
-                        className={cx(
-                          'group relative flex h-9 items-center gap-2.5 rounded-[10px] pl-3 pr-2 text-[13.5px] transition-colors',
-                          n.active ? 'bg-primary/[0.14] font-semibold text-ink' : 'font-medium text-ink-muted2 hover:bg-surface-2 hover:text-ink',
-                        )}
-                      >
-                        {/* แถบ accent ซ้าย (โผล่เฉพาะ active) — ใช้ opacity เพื่อ layout ไม่ขยับตอนสลับ */}
-                        <span aria-hidden className={cx('absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full bg-primary-bright transition-opacity', n.active ? 'opacity-100' : 'opacity-0')} />
-                        <Icon name={n.icon} size={18} className={cx('shrink-0', n.active ? 'text-primary-soft' : 'text-ink-muted2 group-hover:text-ink')} />
-                        <span className="flex-1 truncate">{n.label}</span>
-                        {n.badge ? (
-                          <span className="ml-auto grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-full bg-primary-bright px-1.5 text-[11px] font-bold leading-none tabular-nums text-white">{n.badge}</span>
-                        ) : null}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </nav>
-
+        <NavList groups={groups} />
         <div className="m-2.5 mt-auto flex items-center gap-2.5 rounded-xl border border-subtle bg-surface-2 p-3">
           <div className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-primary font-bold text-white">R</div>
           <div className="text-xs leading-tight">
@@ -243,9 +210,86 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-x-hidden px-[30px] py-[26px]">{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* แถบบนมือถือ */}
+        <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-subtle bg-sidebar px-3 py-2 lg:hidden">
+          <button onClick={() => setMenuOpen(true)} aria-label="เมนูแอดมิน" className="relative grid h-10 w-10 place-items-center rounded-xl border border-subtle bg-surface-2 text-ink">
+            <span className="block h-[2px] w-[18px] rounded bg-current shadow-[0_-6px_0_currentColor,0_6px_0_currentColor]" />
+            {totalJobs > 0 && <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-primary-bright px-1 text-[10px] font-bold text-white">{totalJobs}</span>}
+          </button>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-[14px] font-extrabold">{currentTitle}</div>
+            <div className="text-[10px] tracking-[0.12em] text-ink-faint">RYUMA ADMIN</div>
+          </div>
+          <Link href="/" className="rounded-lg border border-subtle bg-surface-2 px-2.5 py-1.5 text-[12px] font-bold text-ink-muted2">หน้าร้าน</Link>
+        </header>
+        {menuOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+            <button aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} className="absolute inset-0 bg-black/60" />
+            <aside className="absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col border-r border-subtle bg-sidebar shadow-2xl">
+              <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+                <img src="/ryuma-logo.png" alt="Ryuma" width={32} height={32} className="rounded-[9px]" />
+                <div className="flex-1 leading-tight">
+                  <div className="text-[15px] font-extrabold">Ryuma</div>
+                  <div className="text-[10px] tracking-[0.14em] text-ink-faint">ADMIN PANEL</div>
+                </div>
+                <button onClick={() => setMenuOpen(false)} aria-label="ปิด" className="grid h-9 w-9 place-items-center rounded-full border border-subtle text-ink"><Icon name="x" size={16} /></button>
+              </div>
+              <NavList groups={groups} />
+              <Link href="/" className="m-2.5 mt-auto rounded-xl border border-subtle bg-surface-2 py-2.5 text-center text-[13px] font-bold">← กลับหน้าร้าน</Link>
+            </aside>
+          </div>
+        )}
+        {/* มือถือ: overflow-x-auto ให้ตารางกว้างเลื่อนได้แทนที่จะถูกตัด · จอคอมเหมือนเดิม */}
+        <main className="min-w-0 flex-1 overflow-x-auto px-4 py-4 lg:overflow-x-hidden lg:px-[30px] lg:py-[26px]">{children}</main>
+      </div>
       <PreviewSwitcher />
     </div>
+  );
+}
+
+/** รายการเมนู — ตัวเดียวใช้ทั้งเมนูข้าง (จอคอม) และลิ้นชัก (มือถือ) */
+function NavList({ groups }: { groups: { title?: string; items: { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string }[] }[] }) {
+  return (
+    <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 pb-3">
+      {groups.map((g, gi) => {
+        const groupBadge = g.items.reduce((s, i) => s + (i.badge ?? 0), 0);
+        return (
+          <div key={g.title ?? gi}>
+            {g.title && (
+              <div className="mb-1 flex items-center gap-1.5 px-2.5">
+                {gi === 0 && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary-bright" aria-hidden />}
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">{g.title}</span>
+                {groupBadge > 0 && <span className="ml-auto text-[10px] font-bold tabular-nums text-ink-faint">{groupBadge}</span>}
+              </div>
+            )}
+            <ul className="space-y-0.5">
+              {g.items.map((n) => (
+                <li key={n.label}>
+                  <Link
+                    href={n.href}
+                    title={n.sub}
+                    aria-current={n.active ? 'page' : undefined}
+                    className={cx(
+                      'group relative flex h-10 items-center gap-2.5 rounded-[10px] pl-3 pr-2 text-[13.5px] transition-colors lg:h-9',
+                      n.active ? 'bg-primary/[0.14] font-semibold text-ink' : 'font-medium text-ink-muted2 hover:bg-surface-2 hover:text-ink',
+                    )}
+                  >
+                    {/* แถบ accent ซ้าย (โผล่เฉพาะ active) — ใช้ opacity เพื่อ layout ไม่ขยับตอนสลับ */}
+                    <span aria-hidden className={cx('absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full bg-primary-bright transition-opacity', n.active ? 'opacity-100' : 'opacity-0')} />
+                    <Icon name={n.icon} size={18} className={cx('shrink-0', n.active ? 'text-primary-soft' : 'text-ink-muted2 group-hover:text-ink')} />
+                    <span className="flex-1 truncate">{n.label}</span>
+                    {n.badge ? (
+                      <span className="ml-auto grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-full bg-primary-bright px-1.5 text-[11px] font-bold leading-none tabular-nums text-white">{n.badge}</span>
+                    ) : null}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </nav>
   );
 }
 

@@ -109,15 +109,16 @@ export default function AdminLinesPage() {
 
   return (
     <div className="mx-auto max-w-[1100px]">
-      <div className="mb-4 flex flex-wrap items-start gap-3">
+      {/* มือถือ: หัวข้อกับสวิตช์ซ้อนกันเป็นแถว (เดิม flex-wrap ทำให้หัวข้อถูกบีบเหลือคอลัมน์แคบจนตัวอักษรเรียงลงเป็นแท่ง) */}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
-          <div className="text-[22px] font-extrabold">ไลน์ (พรียกไลน์)</div>
+          <div className="text-[20px] font-extrabold sm:text-[22px]">ไลน์ (พรียกไลน์)</div>
           <div className="text-[12.5px] text-ink-muted2">รูปหมู่ของค่าย + ป้ายสถานะบนหัวตัวละคร · ป้ายคำนวณสดจากสินค้า/สต๊อก/รอบพิเศษ — เปลี่ยนสถานะสินค้าที่หน้าไหน ป้ายเปลี่ยนตามเอง</div>
         </div>
         <button
           onClick={() => void toggle()}
           disabled={probe === 'missing' || probe === 'checking'}
-          className={cx('flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[13px] font-bold disabled:opacity-40', isPublic ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}
+          className={cx('flex items-center gap-2.5 self-start rounded-xl border px-4 py-2.5 text-[13px] font-bold disabled:opacity-40', isPublic ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}
         >
           <span className={cx('relative h-5 w-9 rounded-full transition-colors', isPublic ? 'bg-[#16a34a]' : 'bg-white/15')}>
             <span className={cx('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all', isPublic ? 'left-[18px]' : 'left-0.5')} />
@@ -359,9 +360,9 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
           </div>
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-          {/* ซ้าย: ข้อมูลไลน์ + รูปหมู่ + วางป้าย */}
-          <div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+          {/* ซ้าย: ข้อมูลไลน์ + รูปหมู่ + วางป้าย · min-w-0 ที่ลูกของ grid: ไม่งั้นบนมือถือคอลัมน์ขยายตาม max-content ของแถวปุ่ม (408px) แล้วทั้งหน้าเลื่อนข้างได้ */}
+          <div className="min-w-0">
             <div className="mb-3 grid gap-2.5 sm:grid-cols-3">
               <label className="sm:col-span-3"><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">ชื่อไลน์</span>
                 <input className={inputCls} value={line.name} onChange={(e) => patch((l) => ({ ...l, name: e.target.value }))} placeholder="เช่น กองโจรเงามายา" />
@@ -380,7 +381,8 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
               </label>
             </div>
 
-            <div className="mb-1.5 flex items-center gap-2">
+            {/* flex-wrap: บนมือถือแถวนี้ (หัวข้อ+สลับจอ+ปุ่มรูป) เคยกว้าง 408px ดันทั้งหน้าให้เลื่อนข้างได้ */}
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
               <span className="text-[13px] font-extrabold">รูปหมู่ (ปก + พื้นที่วางป้าย)</span>
               {/* ความกว้างที่ใช้วาง: ป้ายจัดตัวเองตามความกว้างจอ — ลูกค้าส่วนใหญ่ใช้มือถือ จึงวางที่ 375px เป็นค่าเริ่มต้น
                   (เจ้าของ 2026-10-08: "ทำไมรูปแอดมินกับพรีวิวลูกค้าไม่เหมือนกัน" = รูปกว้างไม่เท่ากัน ป้ายเลยเรียงคนละแบบ) */}
@@ -440,7 +442,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
           </div>
 
           {/* ขวา: ตัวละครในไลน์ + ติ๊กจากระบบ + Add เอง */}
-          <div>
+          <div className="min-w-0">
             <div className="mb-1.5 text-[13px] font-extrabold">ตัวในไลน์ ({line.members.length}) <span className="font-normal text-ink-faint">· เลข = ลำดับบนรูปและในรายการ</span></div>
             <div className="mb-4 flex flex-col gap-2">
               {line.members.map((m, i) => (
