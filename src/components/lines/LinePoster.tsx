@@ -112,7 +112,9 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
         type="button"
         onClick={tap}
         className={cx(
-          'absolute left-0 flex items-center gap-1.5 whitespace-nowrap rounded-full border py-[3px] pl-1 pr-2.5 text-[11px] font-semibold text-white backdrop-blur-md',
+          'absolute left-0 flex items-center whitespace-nowrap rounded-full border font-semibold text-white backdrop-blur-md',
+          // โหมดย่อ (dense) ต้องแคบลง ≈ PIN_DENSE_SCALE ของปกติ — จอมือถือ 5 ป้ายจะได้พอดีแถวเดียวแทนสลับชั้น
+          pl.dense ? 'gap-[3px] py-[2px] pl-[2px] pr-1.5 text-[10px]' : 'gap-1.5 py-[3px] pl-1 pr-2.5 text-[11px]',
           editing && 'pointer-events-none',
           hi && 'ring-2 ring-white',
         )}
@@ -124,7 +126,7 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
           boxShadow: '0 4px 14px rgba(0,0,0,.55)',
         }}
       >
-        <span className="grid h-[17px] w-[17px] shrink-0 place-items-center rounded-full text-[10.5px] font-extrabold text-[#0b0b0e]" style={{ background: color }}>{p.no}</span>
+        <span className={cx('grid shrink-0 place-items-center rounded-full font-extrabold text-[#0b0b0e]', pl.dense ? 'h-[15px] w-[15px] text-[9.5px]' : 'h-[17px] w-[17px] text-[10.5px]')} style={{ background: color }}>{p.no}</span>
         {p.text}
       </button>
     </div>

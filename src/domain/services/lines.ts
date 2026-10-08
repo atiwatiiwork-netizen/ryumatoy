@@ -280,19 +280,25 @@ export interface PinPlacement {
   id: string;
   x: number;               // % ของรูป
   y: number;
-  stem: number;            // px ความยาวเส้นชี้
+  stem: number;            // px ความยาวเส้นชี้ (= ชั้น + ส่วนต่าง snap)
+  tier: number;            // ชั้นความสูง 0 = ต่ำสุด (แถวเดียว) · 1, 2 = ยกขึ้นเลี่ยงชน
   align: 'center' | 'left' | 'right'; // ป้ายชิดขอบรูปไม่ให้ล้นออก
   below: boolean;          // จุดอยู่ใกล้ขอบบน → ป้ายลงด้านล่างแทน
   compact: boolean;
+  /** ป้ายย่อ (ฟอนต์/ช่องไฟเล็กลง ~15%) — ใช้เมื่อย่อแล้วทุกป้ายพอดีแถวเดียว ดีกว่าสลับชั้นขึ้นลง (เจ้าของ 2026-10-08) */
+  dense: boolean;
 }
+/** อัตราย่อป้ายโหมด dense — ต้องตรงกับ CSS ใน LinePoster (ฟอนต์ 10px · วงเลข 15px · ช่องไฟแคบลง) */
+export const PIN_DENSE_SCALE = 0.8;
 /** ความสูงป้าย (px) + ระยะเผื่อ — ใช้ตัดสินว่าป้ายด้านบนจะล้นขอบรูปไหม */
 const PIN_LABEL_ROOM = 34;
 /** ระยะจากจุดถึงขอบป้ายตอนชิดซ้าย/ขวา (px) — ต้องตรงกับ LinePoster */
 export const PIN_EDGE_INSET = 14;
-/** ความกว้างป้ายโดยประมาณ (px) ที่ฟอนต์ 11px: วงเลข+ช่องไฟ ~36 + ~6.4/ตัวอักษร (สระบน-ล่าง/วรรณยุกต์ไทยไม่กินที่) */
+/** ความกว้างป้ายโดยประมาณ (px) ที่ฟอนต์ 11px: วงเลข+ช่องไฟ ~38 + ~6.4/ตัวอักษร (สระบน-ล่าง/วรรณยุกต์ไทยไม่กินที่)
+ *  วัดจริง 2026-10-08: "เปิดพรี" = 70px (ประมาณต้องไม่ต่ำกว่าของจริง ไม่งั้นบอกว่าพอดีแต่จริงทับ) */
 export function pinLabelWidth(text: string): number {
   const visible = [...text].filter((ch) => !/[ัิ-ฺ็-๎]/.test(ch)).length;
-  return 36 + visible * 6.4;
+  return 38 + visible * 6.4;
 }
 /**
  * จัดวางป้าย: เรียงตามแนวนอน แล้วเลือกเส้นสั้น/ยาวที่ "ชนป้ายข้างๆ น้อยที่สุด" (ฝั่งเดียวกัน) ·
@@ -323,7 +329,18 @@ function snapRows(pins: { id: string; y: number; below: boolean }[], H: number):
   }
   return ref;
 }
+/**
+ * ลำดับการเลือกเมื่อป้ายแถวเดียวไม่พอ (เจ้าของ 2026-10-08 "ระดับไม่เท่ากัน"): 1) ลองย่อป้าย ~15% — ถ้าพอดีแถวเดียวใช้แบบนั้น
+ * (ระเบียบกว่าสลับชั้น) 2) ไม่พอค่อยสลับชั้นสั้น/ยาว · รู้ขนาดรูปเท่านั้นถึงลองย่อ (ไม่รู้ = วางแบบเดิม)
+ */
 export function layoutPins(pins: { id: string; x: number; y: number; w?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
+  const normal = layoutPinsAt(pins, heightPx, widthPx, false);
+  if (!(widthPx && widthPx > 0) || pins.length > PIN_COMPACT_OVER || pins.every((p) => !p.w)) return normal;
+  if (normal.every((p) => p.tier === 0)) return normal;
+  const dense = layoutPinsAt(pins.map((p) => ({ ...p, w: (p.w ?? 0) * PIN_DENSE_SCALE })), heightPx, widthPx, true);
+  return dense.every((p) => p.tier === 0) ? dense : normal;
+}
+function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], heightPx: number | undefined, widthPx: number | undefined, dense: boolean): PinPlacement[] {
   const compact = pins.length > PIN_COMPACT_OVER;
   const sorted = [...pins].sort((a, b) => a.x - b.x || a.y - b.y);
   const out: PinPlacement[] = [];
@@ -351,14 +368,14 @@ export function layoutPins(pins: { id: string; x: number; y: number; w?: number 
     const overlap = (tier: number) => taken[side]
       .filter((q) => q.tier === tier)
       .reduce((s, q) => s + (W && w
-        ? Math.max(0, Math.min(hi, q.hi) - Math.max(lo, q.lo) + 6)  // พิกเซลที่ทับกัน (+ช่องไฟ 6px)
-        : Math.max(0, 20 - Math.abs(p.x - q.x))), 0);                // ไม่รู้ขนาด: ใกล้กว่า 20% = ชน
+        ? Math.max(0, Math.min(hi, q.hi) - Math.max(lo, q.lo) + (dense ? 3 : 6))  // พิกเซลที่ทับกัน (+ช่องไฟ · โหมดย่อยอมชิดกว่า)
+        : Math.max(0, 20 - Math.abs(p.x - q.x))), 0);                               // ไม่รู้ขนาด: ใกล้กว่า 20% = ชน
     // ชั้นที่ใช้ได้ = เส้น+ป้ายยังอยู่ในรูป (ชั้นแรกใช้ได้เสมอ) → เลือกชั้นต่ำสุดที่ไม่ชนเลย ไม่มีเลย = ชั้นที่ชนน้อยสุด
     const usable = PIN_STEMS.map((s, i) => i).filter((i) => i === 0 || PIN_STEMS[i] + PIN_LABEL_ROOM <= room);
     const free = usable.find((i) => overlap(i) === 0);
     const tier = free ?? usable.reduce((best, i) => (overlap(i) < overlap(best) ? i : best), usable[0]);
     taken[side].push({ x: p.x, lo, hi, tier });
-    out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEMS[tier] + Math.round(snap), align, below, compact });
+    out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEMS[tier] + Math.round(snap), tier, align, below, compact, dense });
   }
   return out;
 }

@@ -302,6 +302,20 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
       Math.abs(top(sb.a) - top(sb.b)) < 1 && sb.a.stem === PIN_STEM_SHORT && sb.b.stem === PIN_STEM_SHORT + 20 && sb.c.stem === PIN_STEM_SHORT, snap);
     const noH = layoutPins([{ id: 'a', x: 10, y: 40 }, { id: 'b', x: 40, y: 45 }]);
     ok('P10 ไม่รู้ขนาดรูป → ไม่ snap (เส้นปกติ)', noH.every((p) => p.stem === PIN_STEM_SHORT));
+    // เจ้าของ 2026-10-08 "ระดับไม่เท่ากัน": มือถือ 343px · 5 ป้าย "เปิดพรี" (68px) แถวเดียวไม่พอ → ย่อป้าย 16% แล้วพอดีแถวเดียว ไม่สลับชั้น
+    // ขนาดจริงที่วัดในเบราว์เซอร์ (รูป 341×227 · หัว y ไม่เท่ากัน) และจอเล็กกว่านั้นอีกหน่อย (320px)
+    const realY = [46, 41, 39, 41, 40];
+    for (const [W, H] of [[343, 229], [341, 227]] as const) {
+      const phone = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('เปิดพรี') })), H, W);
+      ok(`P11 มือถือ ${W}px: 5 ป้ายแถวเดียวไม่พอ → ใช้โหมดย่อ ทุกป้ายชั้น 0 ระดับเดียวกัน`, phone.every((p) => p.dense && p.tier === 0), phone.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}`));
+    }
+    // จอเล็กมาก (iPhone SE 320px → รูป 304px): ย่อแล้วก็ยังไม่พอ → สลับชั้นเป็นระเบียบ 0/1/0/1/0 ขนาดปกติ (ไม่ย่อครึ่งๆ กลางๆ)
+    const se = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('เปิดพรี') })), 203, 304);
+    ok('P11b จอ 304px: ย่อยังไม่พอ → สลับชั้น 0/1/0/1/0 ป้ายขนาดปกติ', se.map((p) => p.tier).join() === '0,1,0,1,0' && se.every((p) => !p.dense), se.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}`));
+    const wide = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('เปิดพรี') })), 380, 580);
+    ok('P12 จอกว้างพอ → ไม่ย่อ (ป้ายขนาดปกติ แถวเดียว)', wide.every((p) => !p.dense && p.tier === 0), wide);
+    const tight = layoutPins([10, 22, 34, 46, 58].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('Pakunoda Black Suite') })), 229, 343);
+    ok('P13 ย่อแล้วยังไม่พอ (ชื่อยาว 5 อันในครึ่งรูป) → กลับไปสลับชั้นแบบเดิม ไม่ย่อ', tight.every((p) => !p.dense) && tight.some((p) => p.tier > 0), tight);
     ok('P2 ห่างกัน → เส้นสั้นปกติ · ชิดขอบขวา/ซ้ายไม่ล้นรูป · ใกล้ขอบบนกลับหัวลงล่าง', by.d.stem === PIN_STEM_SHORT && by.d.align === 'right' && by.e.align === 'left' && by.e.below === true && by.a.below === false);
     ok('P3 ≤6 ป้าย = โหมดเต็ม · 7 ป้าย = โหมดย่อ (เลขอย่างเดียว)', !pins[0].compact && layoutPins(Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, x: i * 14, y: 50 }))).every((p) => p.compact));
     const flat = layoutPins([{ id: 'q', x: 50, y: 40 }], 120);  // รูปเตี้ย 120px: 40% = 48px ไม่พอเส้นยาว+ป้าย
@@ -316,7 +330,7 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
       rb['1'].align === 'left' && layoutPins([{ id: 'r', x: 95, y: 50, w: 120 }], H, W)[0].align === 'right' && rb['3'].align === 'center');
     const apart = layoutPins([{ id: 'a', x: 20, y: 50, w: pinLabelWidth('Feitan') }, { id: 'b', x: 45, y: 50, w: pinLabelWidth('Machi') }], H, 1000);
     ok('P7 รูปกว้าง (เดสก์ท็อป) ชื่อสั้นห่าง 25% → ไม่ชน ทั้งคู่เส้นสั้น', apart.every((p) => p.stem === PIN_STEM_SHORT), apart);
-    ok('P8 ความกว้างป้ายไทยไม่นับสระบน/ล่าง/วรรณยุกต์', pinLabelWidth('ปิดพรีแล้ว') < pinLabelWidth('abcdefghij') && pinLabelWidth('ปิดพรีแล้ว') === 36 + 7 * 6.4); // 10 ตัวอักษร − สระอิ/อี/ไม้โท 3 ตัว = 7 ที่กินที่
+    ok('P8 ความกว้างป้ายไทยไม่นับสระบน/ล่าง/วรรณยุกต์ · "เปิดพรี" ≥ 70px ที่วัดจริง', pinLabelWidth('ปิดพรีแล้ว') < pinLabelWidth('abcdefghij') && pinLabelWidth('ปิดพรีแล้ว') === 38 + 7 * 6.4 && pinLabelWidth('เปิดพรี') >= 70); // 10 ตัวอักษร − สระอิ/อี/ไม้โท 3 ตัว = 7 ที่กินที่
   }
 
   // ── 11. ของที่ต้องถามเลขจริงจาก server + ตัวนับ ─────────────────────────────────────────────────
