@@ -13,7 +13,7 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx,
+  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
@@ -293,6 +293,15 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     ok('P1b 5 ป้ายชื่อยาวติดกัน → กระจาย 3 ชั้น ไม่มีคู่ไหนทับกัน', !clash, five);
     const flatRoom = layoutPins([{ id: 'a', x: 30, y: 30, w: 80 }, { id: 'b', x: 36, y: 30, w: 80 }, { id: 'c', x: 42, y: 30, w: 80 }], 300, 400);
     ok('P1c ชั้นที่ 3 ใช้ได้เฉพาะเมื่อมีที่พอเหนือหัว (รูปเตี้ย 30% ของ 300px = 90px → ไม่พอ 62+34) → ไม่เกินชั้น 2', flatRoom.every((p) => p.stem <= PIN_STEM_TALL), flatRoom);
+    // Snap (เจ้าของ 2026-10-08): หัวสูงไล่เลี่ยกัน (ต่างไม่เกิน 36px) → ป้ายอยู่แถวเดียวกัน = เส้นของคนที่หัวต่ำกว่ายาวขึ้นเท่าส่วนต่าง
+    const SH = 400, SW = 1000;
+    const snap = layoutPins([{ id: 'a', x: 10, y: 40, w: 60 }, { id: 'b', x: 40, y: 45, w: 60 }, { id: 'c', x: 70, y: 70, w: 60 }], SH, SW);
+    const sb = Object.fromEntries(snap.map((p) => [p.id, p]));
+    const top = (p: PinPlacement) => (p.y / 100) * SH - p.stem; // ตำแหน่งขอบล่างป้าย (px) ฝั่งบน
+    ok('P9 Snap: หัว 40% กับ 45% (ต่าง 20px) → ป้ายระดับเดียวกัน · หัว 70% ห่างเกิน → แถวของตัวเอง',
+      Math.abs(top(sb.a) - top(sb.b)) < 1 && sb.a.stem === PIN_STEM_SHORT && sb.b.stem === PIN_STEM_SHORT + 20 && sb.c.stem === PIN_STEM_SHORT, snap);
+    const noH = layoutPins([{ id: 'a', x: 10, y: 40 }, { id: 'b', x: 40, y: 45 }]);
+    ok('P10 ไม่รู้ขนาดรูป → ไม่ snap (เส้นปกติ)', noH.every((p) => p.stem === PIN_STEM_SHORT));
     ok('P2 ห่างกัน → เส้นสั้นปกติ · ชิดขอบขวา/ซ้ายไม่ล้นรูป · ใกล้ขอบบนกลับหัวลงล่าง', by.d.stem === PIN_STEM_SHORT && by.d.align === 'right' && by.e.align === 'left' && by.e.below === true && by.a.below === false);
     ok('P3 ≤6 ป้าย = โหมดเต็ม · 7 ป้าย = โหมดย่อ (เลขอย่างเดียว)', !pins[0].compact && layoutPins(Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, x: i * 14, y: 50 }))).every((p) => p.compact));
     const flat = layoutPins([{ id: 'q', x: 50, y: 40 }], 120);  // รูปเตี้ย 120px: 40% = 48px ไม่พอเส้นยาว+ป้าย

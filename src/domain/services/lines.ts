@@ -304,19 +304,42 @@ export function pinLabelWidth(text: string): number {
 /** ชั้นความสูงของป้าย (px ของเส้นชี้) — 3 ชั้น: หัวติดกัน 3 ตัว (เช่น 5 คนยืนเรียงกลางรูป) ยังไม่ทับกัน
  *  (เจ้าของ 2026-10-08: "กล่องข้อความเบียดกัน" — เดิมมี 2 ชั้น ป้ายที่ 3 ต้องเลือกทับอันใดอันหนึ่ง) */
 export const PIN_STEMS = [PIN_STEM_SHORT, PIN_STEM_TALL, 62] as const;
+/** หัวที่สูงต่างกันไม่เกินนี้ (px) ถือว่า "แถวเดียวกัน" → ป้ายจัดให้อยู่ระดับเดียวกัน (เจ้าของ 2026-10-08: "ให้ Snap กัน") */
+export const PIN_SNAP_PX = 36;
+/**
+ * จัดกลุ่มหัวที่สูงไล่เลี่ยกัน (ฝั่งเดียวกัน) แล้วคืน "ระดับอ้างอิง" ของกลุ่ม = หัวที่สูงที่สุดในกลุ่ม (ฝั่งบน) /
+ * ต่ำที่สุด (ฝั่งล่าง) — ป้ายของทุกคนในกลุ่มยึดระดับนี้ เส้นชี้ของคนที่หัวต่ำกว่ายาวขึ้นเท่าส่วนต่าง จุดยังอยู่บนหัวจริง
+ */
+function snapRows(pins: { id: string; y: number; below: boolean }[], H: number): Map<string, number> {
+  const ref = new Map<string, number>();
+  for (const below of [false, true]) {
+    const side = pins.filter((p) => p.below === below).sort((a, b) => (below ? b.y - a.y : a.y - b.y));
+    let anchor: number | null = null;
+    for (const p of side) {
+      const px = (p.y / 100) * H;
+      if (anchor === null || Math.abs(px - anchor) > PIN_SNAP_PX) anchor = px;
+      ref.set(p.id, anchor);
+    }
+  }
+  return ref;
+}
 export function layoutPins(pins: { id: string; x: number; y: number; w?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
   const compact = pins.length > PIN_COMPACT_OVER;
   const sorted = [...pins].sort((a, b) => a.x - b.x || a.y - b.y);
   const out: PinPlacement[] = [];
   const W = widthPx && widthPx > 0 ? widthPx : 0;
   const H = heightPx && heightPx > 0 ? heightPx : 0;
-  const taken: Record<'up' | 'down', { x: number; lo: number; hi: number; stem: number }[]> = { up: [], down: [] };
+  const belowOf = (p: { y: number }) => (H ? (p.y / 100) * H < PIN_STEM_TALL + PIN_LABEL_ROOM : p.y < 22);
+  const rows = H ? snapRows(sorted.map((p) => ({ id: p.id, y: p.y, below: belowOf(p) })), H) : null;
+  const taken: Record<'up' | 'down', { x: number; lo: number; hi: number; tier: number }[]> = { up: [], down: [] };
   for (const p of sorted) {
     const roomUp = H ? (p.y / 100) * H : Infinity;
     const roomDown = H ? ((100 - p.y) / 100) * H : Infinity;
-    const below = H ? roomUp < PIN_STEM_TALL + PIN_LABEL_ROOM : p.y < 22;
+    const below = belowOf(p);
     const side = below ? 'down' : 'up';
-    const room = below ? roomDown : roomUp;
+    // ส่วนต่างระหว่างหัวคนนี้กับระดับอ้างอิงของแถว (px) — บวกเข้าเส้นชี้ให้ป้ายอยู่แถวเดียวกัน
+    const snap = rows ? Math.abs((p.y / 100) * H - rows.get(p.id)!) : 0;
+    const room = (below ? roomDown : roomUp) - snap;
     const X = (p.x / 100) * W;
     const w = p.w ?? 0;
     // ชิดขอบ: รู้ขนาด = ป้ายกลางล้นขอบรูปไหม · ไม่รู้ = ใช้ % เดิม
@@ -325,17 +348,17 @@ export function layoutPins(pins: { id: string; x: number; y: number; w?: number 
       : (p.x < 14 ? 'left' : p.x > 86 ? 'right' : 'center');
     const lo = align === 'center' ? X - w / 2 : align === 'left' ? X - PIN_EDGE_INSET : X + PIN_EDGE_INSET - w;
     const hi = lo + w;
-    const overlap = (stem: number) => taken[side]
-      .filter((q) => q.stem === stem)
+    const overlap = (tier: number) => taken[side]
+      .filter((q) => q.tier === tier)
       .reduce((s, q) => s + (W && w
         ? Math.max(0, Math.min(hi, q.hi) - Math.max(lo, q.lo) + 6)  // พิกเซลที่ทับกัน (+ช่องไฟ 6px)
         : Math.max(0, 20 - Math.abs(p.x - q.x))), 0);                // ไม่รู้ขนาด: ใกล้กว่า 20% = ชน
     // ชั้นที่ใช้ได้ = เส้น+ป้ายยังอยู่ในรูป (ชั้นแรกใช้ได้เสมอ) → เลือกชั้นต่ำสุดที่ไม่ชนเลย ไม่มีเลย = ชั้นที่ชนน้อยสุด
-    const usable = PIN_STEMS.filter((s, i) => i === 0 || s + PIN_LABEL_ROOM <= room);
-    const free = usable.find((s) => overlap(s) === 0);
-    const stem = free ?? usable.reduce((best, s) => (overlap(s) < overlap(best) ? s : best), usable[0]);
-    taken[side].push({ x: p.x, lo, hi, stem });
-    out.push({ id: p.id, x: p.x, y: p.y, stem, align, below, compact });
+    const usable = PIN_STEMS.map((s, i) => i).filter((i) => i === 0 || PIN_STEMS[i] + PIN_LABEL_ROOM <= room);
+    const free = usable.find((i) => overlap(i) === 0);
+    const tier = free ?? usable.reduce((best, i) => (overlap(i) < overlap(best) ? i : best), usable[0]);
+    taken[side].push({ x: p.x, lo, hi, tier });
+    out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEMS[tier] + Math.round(snap), align, below, compact });
   }
   return out;
 }

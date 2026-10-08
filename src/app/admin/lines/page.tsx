@@ -304,7 +304,8 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
     onClose();
   };
 
-  const posterPins: PosterPin[] = states.filter((s) => hasPin(s.member)).map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.member.name.trim() || `ตัวที่ ${s.no}` }));
+  // ป้ายในหน้าแก้ไข = ป้ายเดียวกับที่ลูกค้าเห็น (ข้อความสถานะ ไม่ใช่ชื่อ) — เจ้าของ 2026-10-08: "ไม่ต้องสลับโหมดไปมา"
+  const posterPins: PosterPin[] = states.filter((s) => hasPin(s.member)).map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.state.pinLabel }));
 
   return (
     <div>
@@ -363,7 +364,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
             {line.cover_url ? (
               <>
                 <div className="relative">
-                  <LinePoster src={line.cover_url} pins={posterPins} editing numbersOnly onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
+                  <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
                   {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
                   {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
                 </div>

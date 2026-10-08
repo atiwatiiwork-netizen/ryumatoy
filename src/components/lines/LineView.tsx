@@ -3,6 +3,11 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useDatabase } from '@/state/DataProvider';
+import { useCart } from '@/state/CartProvider';
+import { useToast } from '@/state/ToastProvider';
+import { useCurrentUserId } from '@/state/AuthProvider';
+import { useLiveStock } from '@/lib/useLiveStock';
+import { myPendingHold } from '@/domain/services/reservations';
 import { useLiveStockMap, liveKey } from '@/lib/liveStockMap';
 import { isAdminUser } from '@/domain/services/admins';
 import {
@@ -101,9 +106,26 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
 }
 
 function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMember; no: number; state: LineMemberState; thumb?: string; hi: boolean; preview: boolean }) {
+  const db = useDatabase();
+  const cart = useCart();
+  const { flash } = useToast();
+  const meId = useCurrentUserId();
+  const { checking, ensure } = useLiveStock();
   const strong = state.kind === 'stock' || state.kind === 'special' || state.kind === 'preorder';
-  const btnCls = cx('shrink-0 rounded-[10px] px-3.5 py-2 text-[12.5px] font-extrabold', strong ? 'bg-cta text-white shadow-cta' : 'border border-subtle bg-surface-3 text-ink');
+  const btnCls = cx('shrink-0 rounded-[10px] px-3.5 py-2 text-[12.5px] font-extrabold', strong ? 'animate-pulseRed bg-cta text-white shadow-cta' : 'border border-subtle bg-surface-3 text-ink');
   const cta = state.cta;
+  // กดพรี/ซื้อ = ใส่ตะกร้าเลย ไม่เด้งไปหน้าอื่น แล้วปุ่มกลายเป็น "อยู่ในตะกร้าแล้ว" กันกดซ้ำ (เจ้าของ 2026-10-08)
+  //   ทำได้เฉพาะของที่ไม่ต้องเลือกอะไรเพิ่ม: พรีกระดานหลัก / ของพร้อมส่ง ที่ไม่มีแบบ A/B — รอบพิเศษ (มีด่านใบพรี+โควตา)
+  //   และสินค้าที่มีแบบ ยังพาไปหน้าสินค้าเหมือนเดิม
+  const p = state.product;
+  const quick = !preview && !!p && !p.has_variants && (state.kind === 'preorder' || state.kind === 'stock');
+  const inCart = !!p && cart.lines.some((l) => l.productId === p.id && !l.batchId && !l.variantId);
+  const addNow = async () => {
+    if (!p) return;
+    if (p.is_stock && !(await ensure(p.id, undefined, myPendingHold(db, meId, p.id)))) return;
+    cart.add({ productId: p.id, depositEach: p.is_stock ? p.price_total : p.deposit_amount, priceEach: p.price_total });
+    flash(p.is_stock ? 'ใส่ตะกร้าแล้ว ✓ ไปจ่ายเงินได้ที่ตะกร้า' : 'ใส่ตะกร้าแล้ว ✓ พรีต่อตัวอื่นได้เลย แล้วค่อยไปชำระที่ตะกร้า');
+  };
   return (
     <div id={`lm-${member.id}`} className={cx('flex items-center gap-3 rounded-card border bg-surface-2 p-2.5 transition-colors', hi ? 'border-white/50 bg-surface-4' : 'border-subtle')}>
       <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px] font-extrabold text-[#0b0b0e]" style={{ background: TONE_HEX[state.tone] }}>{no}</span>
@@ -118,6 +140,10 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
       {cta && (preview
         // พรีวิวในแอดมิน: ปุ่มหน้าตาเหมือนจริงแต่ไม่พาออกจากหน้าแก้ไข
         ? <span className={btnCls}>{cta.label}</span>
+        : quick && inCart
+          ? <Link href="/cart" className="shrink-0 rounded-[10px] border border-[#16a34a]/50 bg-[#16a34a]/15 px-3 py-2 text-center text-[11.5px] font-extrabold leading-tight text-[#4ade80]">อยู่ในตะกร้าแล้ว ✓<br /><span className="font-semibold text-[#4ade80]/80">ไปชำระ →</span></Link>
+        : quick
+          ? <button onClick={() => void addNow()} disabled={checking} className={cx(btnCls, 'disabled:animate-none disabled:opacity-60')}>{checking ? 'เช็คของ…' : cta.label}</button>
         : cta.external
           ? <a href={cta.href} target="_blank" rel="noreferrer" className={btnCls}>{cta.label}</a>
           : <Link href={cta.href} className={btnCls}>{cta.label}</Link>)}
