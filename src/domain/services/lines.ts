@@ -134,7 +134,7 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   // ── ยังไม่มีสินค้าในระบบ (หรือสินค้าที่ผูกถูกลบหมด) → สถานะที่แอดมินตั้งเอง ──
   if (all.length === 0) {
     switch (m.manual_state) {
-      case 'preorder': return make({ kind: 'manual_preorder', tone: 'blue', label: 'เปิดพรี', detail: 'ค่ายเปิดพรีแล้ว · สั่งผ่านร้าน', cta: lineOaCta(ctx.lineOa) });
+      case 'preorder': return make({ kind: 'manual_preorder', tone: 'blue', label: 'Pre-Order', detail: 'ค่ายเปิดพรีแล้ว · สั่งผ่านร้าน', cta: lineOaCta(ctx.lineOa) });
       case 'stock': return make({ kind: 'manual_stock', tone: 'green', label: 'มีของ', detail: 'ร้านมีของ · สั่งผ่านร้าน', cta: lineOaCta(ctx.lineOa) });
       case 'sourcing': return make({ kind: 'manual_sourcing', tone: 'amber', label: 'หาของ', detail: 'ของออกแล้ว · ส่งเรื่องให้ร้านหาให้', cta: { label: 'หาของให้', href: sourcingHref(line, m) } });
       default: return make({ kind: 'hidden', tone: 'gray', label: 'ยังไม่ตั้งสถานะ', detail: 'ยังไม่ผูกสินค้า + ไม่ได้ตั้งสถานะ — ลูกค้าไม่เห็นตัวนี้', visible: false });
@@ -167,14 +167,14 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
       const fullPay = b.deposit_amount >= b.price_total;
       return fullPay
         ? make({ kind: 'special', tone: 'green', label: 'พร้อมส่ง', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'} · จ่ายเต็ม`, cta: { label: 'ซื้อเลย', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b })
-        : make({ kind: 'special', tone: 'blue', label: 'เปิดพรี', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, cta: { label: 'พรีเลย', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b });
+        : make({ kind: 'special', tone: 'blue', label: 'Pre-Order', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, cta: { label: 'พรีเลย', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b });
     }
   }
   // 3 กระดานหลักเปิดรับพรี (ไม่อยู่ในกระดานที่ปิดแล้ว · ไม่ติดประมูล) — ด่านเดียวกับหน้าสินค้า/ตะกร้า/submitOrder
   for (const p of sellable) {
     if (!preorderOpenForOrder(db, p)) continue;
     const { price, from } = priceOf(db, p);
-    return make({ kind: 'preorder', tone: 'blue', label: 'เปิดพรี', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · เปิดรับพรี`, cta: { label: 'พรีเลย', href: `/shop/${p.id}` }, product: p });
+    return make({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · เปิดรับพรี`, cta: { label: 'พรีเลย', href: `/shop/${p.id}` }, product: p });
   }
   // 4 ติดห้องประมูล — หน้าร้านซ่อนอยู่ (ขายซ้อนไม่ได้) ห้ามตกไป "หาของ" ทั้งที่ร้านมีของ
   const inAuction = all.find((p) => inLiveAuction(db, p.id));
@@ -282,7 +282,8 @@ export interface PinPlacement {
   y: number;
   stem: number;            // px ความยาวเส้นชี้ (= ชั้น + ส่วนต่าง snap)
   tier: number;            // ชั้นความสูง 0 = ต่ำสุด (แถวเดียว) · 1, 2 = ยกขึ้นเลี่ยงชน
-  align: 'center' | 'left' | 'right'; // ป้ายชิดขอบรูปไม่ให้ล้นออก
+  align: 'center' | 'left' | 'right'; // ป้ายชิดขอบรูปไม่ให้ล้นออก (ใช้เฉพาะโหมดสลับชั้น)
+  dx: number;              // px ที่ป้ายถูกขยับออกจากหัว (โหมดจัดแถว — หางยังชี้หัว) · 0 = ตรงหัว
   below: boolean;          // จุดอยู่ใกล้ขอบบน → ป้ายลงด้านล่างแทน
   compact: boolean;
   /** ป้ายย่อ (ฟอนต์/ช่องไฟเล็กลง ~15%) — ใช้เมื่อย่อแล้วทุกป้ายพอดีแถวเดียว ดีกว่าสลับชั้นขึ้นลง (เจ้าของ 2026-10-08) */
@@ -329,18 +330,53 @@ function snapRows(pins: { id: string; y: number; below: boolean }[], H: number):
   }
   return ref;
 }
+/** ความกว้างวงเลขโหมดย่อ (compact · >6 ป้าย) — ใช้จัดแถวเดียวได้เหมือนป้ายปกติ */
+const PIN_COMPACT_W = 22;
+/** หางป้ายต้องอยู่ในตัวป้าย: ขยับป้ายออกจากหัวได้ไม่เกิน (กว้าง/2 − ค่านี้) */
+const PIN_TAIL_INSET = 10;
 /**
- * ลำดับการเลือกเมื่อป้ายแถวเดียวไม่พอ (เจ้าของ 2026-10-08 "ระดับไม่เท่ากัน"): 1) ลองย่อป้าย ~15% — ถ้าพอดีแถวเดียวใช้แบบนั้น
- * (ระเบียบกว่าสลับชั้น) 2) ไม่พอค่อยสลับชั้นสั้น/ยาว · รู้ขนาดรูปเท่านั้นถึงลองย่อ (ไม่รู้ = วางแบบเดิม)
+ * จัดแถวเดียว (เจ้าของ 2026-10-08 "มือถือให้เรียงแบบ PC"): ป้ายทุกอันอยู่ชั้นเดียวกัน แล้ว "ขยับซ้าย/ขวา" หนีกัน
+ * (หางยังชี้หัวตัวเอง) แทนการยกขึ้นลง — เรียงซ้าย→ขวา ดันอันที่ชนไปทางขวา ล้นขอบขวาค่อยดันกลับซ้ายทั้งแถว
+ * คืน null ถ้าความกว้างรวมเกินรูป หรือหางจะหลุดออกนอกป้าย (ป้ายถูกดันไกลจากหัวเกิน)
+ */
+function packRow(items: { id: string; X: number; w: number }[], W: number, gapPx: number): Map<string, number> | null {
+  const sorted = [...items].sort((a, b) => a.X - b.X);
+  const lo: number[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const want = sorted[i].X - sorted[i].w / 2;
+    lo[i] = Math.max(4, want, i > 0 ? lo[i - 1] + sorted[i - 1].w + gapPx : -Infinity);
+  }
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const maxLo = (i < sorted.length - 1 ? lo[i + 1] - gapPx : W - 4) - sorted[i].w;
+    if (lo[i] > maxLo) lo[i] = maxLo;
+  }
+  if (lo.length && lo[0] < 4) return null;
+  const out = new Map<string, number>();
+  for (let i = 0; i < sorted.length; i++) {
+    const dx = lo[i] + sorted[i].w / 2 - sorted[i].X;
+    if (Math.abs(dx) > Math.max(0, sorted[i].w / 2 - PIN_TAIL_INSET)) return null;
+    out.set(sorted[i].id, Math.round(dx));
+  }
+  return out;
+}
+/**
+ * ลำดับการเลือก: 1) แถวเดียว ป้ายขนาดปกติ ขยับซ้ายขวาเลี่ยงชน 2) แถวเดียว ป้ายย่อ 20% 3) ไม่พอจริงๆ (จอแคบ+ป้ายยาว)
+ * ค่อยสลับชั้นสั้น/ยาว · รู้ขนาดรูปเท่านั้นถึงจัดแถวได้ (ไม่รู้ = สลับชั้นแบบเดิม)
  */
 export function layoutPins(pins: { id: string; x: number; y: number; w?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
-  const normal = layoutPinsAt(pins, heightPx, widthPx, false);
-  if (!(widthPx && widthPx > 0) || pins.length > PIN_COMPACT_OVER || pins.every((p) => !p.w)) return normal;
-  if (normal.every((p) => p.tier === 0)) return normal;
-  const dense = layoutPinsAt(pins.map((p) => ({ ...p, w: (p.w ?? 0) * PIN_DENSE_SCALE })), heightPx, widthPx, true);
-  return dense.every((p) => p.tier === 0) ? dense : normal;
+  const compact = pins.length > PIN_COMPACT_OVER;
+  const sized = compact ? pins.map((p) => ({ ...p, w: PIN_COMPACT_W })) : pins;
+  if (widthPx && widthPx > 0 && sized.every((p) => p.w)) {
+    const packed = layoutPinsAt(sized, heightPx, widthPx, false, true);
+    if (packed) return packed;
+    if (!compact) {
+      const dense = layoutPinsAt(sized.map((p) => ({ ...p, w: (p.w ?? 0) * PIN_DENSE_SCALE })), heightPx, widthPx, true, true);
+      if (dense) return dense;
+    }
+  }
+  return layoutPinsAt(sized, heightPx, widthPx, false, false)!;
 }
-function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], heightPx: number | undefined, widthPx: number | undefined, dense: boolean): PinPlacement[] {
+function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], heightPx: number | undefined, widthPx: number | undefined, dense: boolean, pack: boolean): PinPlacement[] | null {
   const compact = pins.length > PIN_COMPACT_OVER;
   const sorted = [...pins].sort((a, b) => a.x - b.x || a.y - b.y);
   const out: PinPlacement[] = [];
@@ -349,6 +385,17 @@ function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], 
   const belowOf = (p: { y: number }) => (H ? (p.y / 100) * H < PIN_STEM_TALL + PIN_LABEL_ROOM : p.y < 22);
   const rows = H ? snapRows(sorted.map((p) => ({ id: p.id, y: p.y, below: belowOf(p) })), H) : null;
   const taken: Record<'up' | 'down', { x: number; lo: number; hi: number; tier: number }[]> = { up: [], down: [] };
+  // โหมดจัดแถว: ทุกป้ายชั้น 0 ขยับซ้ายขวาแทน — แยกจัดฝั่งบน/ล่าง (คนละแถว)
+  let dxOf: Map<string, number> | null = null;
+  if (pack) {
+    dxOf = new Map();
+    for (const below of [false, true]) {
+      const side = sorted.filter((p) => belowOf(p) === below).map((p) => ({ id: p.id, X: (p.x / 100) * W, w: p.w ?? 0 }));
+      const r = packRow(side, W, dense ? 3 : 6);
+      if (!r) return null;
+      r.forEach((v, k) => dxOf!.set(k, v));
+    }
+  }
   for (const p of sorted) {
     const roomUp = H ? (p.y / 100) * H : Infinity;
     const roomDown = H ? ((100 - p.y) / 100) * H : Infinity;
@@ -359,6 +406,10 @@ function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], 
     const room = (below ? roomDown : roomUp) - snap;
     const X = (p.x / 100) * W;
     const w = p.w ?? 0;
+    if (dxOf) {
+      out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEM_SHORT + Math.round(snap), tier: 0, align: 'center', dx: dxOf.get(p.id) ?? 0, below, compact, dense });
+      continue;
+    }
     // ชิดขอบ: รู้ขนาด = ป้ายกลางล้นขอบรูปไหม · ไม่รู้ = ใช้ % เดิม
     const align: PinPlacement['align'] = W && w
       ? (X - w / 2 < 4 ? 'left' : X + w / 2 > W - 4 ? 'right' : 'center')
@@ -375,7 +426,7 @@ function layoutPinsAt(pins: { id: string; x: number; y: number; w?: number }[], 
     const free = usable.find((i) => overlap(i) === 0);
     const tier = free ?? usable.reduce((best, i) => (overlap(i) < overlap(best) ? i : best), usable[0]);
     taken[side].push({ x: p.x, lo, hi, tier });
-    out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEMS[tier] + Math.round(snap), tier, align, below, compact, dense });
+    out.push({ id: p.id, x: p.x, y: p.y, stem: PIN_STEMS[tier] + Math.round(snap), tier, align, dx: 0, below, compact, dense });
   }
   return out;
 }

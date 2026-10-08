@@ -66,7 +66,7 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
   // ── 1. ลำดับการเช็ค (กับดักที่รู้อยู่แล้ว) ───────────────────────────────────────────────
   {
     const db = base({ products: [P('open'), P('conv', { is_stock: true, status: 'open', stock_qty: 2 })] });
-    ok('K1 พรีเปิดรับ → เปิดพรี (ฟ้า) ปุ่มพรีเลย → หน้าสินค้า', (() => { const s = st(db, [M('a', ['open'])], 'a'); return s.kind === 'preorder' && s.tone === 'blue' && s.cta?.href === '/shop/open' && s.label === 'เปิดพรี'; })());
+    ok('K1 พรีเปิดรับ → เปิดพรี (ฟ้า) ปุ่มพรีเลย → หน้าสินค้า', (() => { const s = st(db, [M('a', ['open'])], 'a'); return s.kind === 'preorder' && s.tone === 'blue' && s.cta?.href === '/shop/open' && s.label === 'Pre-Order'; })());
     const conv = st(db, [M('a', ['conv'])], 'a');
     ok('K2 กับดัก: พรีที่แปลงเป็นสต๊อก (status open + is_stock) → พร้อมส่ง ไม่ใช่ "พรีเลย"', conv.kind === 'stock' && conv.cta?.label === 'ซื้อเลย', conv);
     const both = st(db, [M('a', ['open', 'conv'])], 'a');
@@ -307,11 +307,15 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     const realY = [46, 41, 39, 41, 40];
     for (const [W, H] of [[343, 229], [341, 227]] as const) {
       const phone = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('เปิดพรี') })), H, W);
-      ok(`P11 มือถือ ${W}px: 5 ป้ายแถวเดียวไม่พอ → ใช้โหมดย่อ ทุกป้ายชั้น 0 ระดับเดียวกัน`, phone.every((p) => p.dense && p.tier === 0), phone.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}`));
+      ok(`P11 มือถือ ${W}px: 5 ป้าย 'เปิดพรี' แถวเดียวไม่พอ → ย่อป้ายแล้วจัดแถวเดียว ทุกป้ายชั้น 0`, phone.every((p) => p.dense && p.tier === 0), phone.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}dx${p.dx}`));
     }
     // จอเล็กมาก (iPhone SE 320px → รูป 304px): ย่อแล้วก็ยังไม่พอ → สลับชั้นเป็นระเบียบ 0/1/0/1/0 ขนาดปกติ (ไม่ย่อครึ่งๆ กลางๆ)
     const se = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('เปิดพรี') })), 203, 304);
-    ok('P11b จอ 304px: ย่อยังไม่พอ → สลับชั้น 0/1/0/1/0 ป้ายขนาดปกติ', se.map((p) => p.tier).join() === '0,1,0,1,0' && se.every((p) => !p.dense), se.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}`));
+    ok('P11b จอ 304px: ย่อแล้วขยับซ้ายขวาเล็กน้อย → ยังแถวเดียว (dx ไม่เป็น 0 บางอัน · หางยังอยู่ในป้าย)', se.every((p) => p.dense && p.tier === 0) && se.some((p) => p.dx !== 0) && se.every((p) => Math.abs(p.dx) <= pinLabelWidth('เปิดพรี') * 0.8 / 2 - 10), se.map((p) => `${p.id}:t${p.tier}${p.dense ? 'D' : ''}dx${p.dx}`));
+    // ป้ายจริงตอนนี้ = 'Pre-Order' (96px): มือถือ 343 → 5 ป้ายรวม 480 แม้ย่อ (384) ก็เกิน 335 → สลับชั้น (คนละแถวแต่ระดับคงที่) · จอ 580 → แถวเดียว
+    const po343 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order') })), 229, 343);
+    const po580 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order') })), 387, 580);
+    ok('P11c Pre-Order ×5: มือถือ 343 ย่อแล้วยังเกิน → สลับชั้น 0/1/0/1/0 · จอ 580 แถวเดียว', po343.map((p) => p.tier).join() === '0,1,0,1,0' && po580.every((p) => p.tier === 0 && !p.dense), { po343: po343.map((p) => p.tier), po580: po580.map((p) => p.tier) });
     const wide = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('เปิดพรี') })), 380, 580);
     ok('P12 จอกว้างพอ → ไม่ย่อ (ป้ายขนาดปกติ แถวเดียว)', wide.every((p) => !p.dense && p.tier === 0), wide);
     const tight = layoutPins([10, 22, 34, 46, 58].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('Pakunoda Black Suite') })), 229, 343);
@@ -325,11 +329,11 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     const W = 520, H = 300;
     const real = layoutPins([{ id: '1', x: 8, y: 45, w: pinLabelWidth('Luffy Gear 5') }, { id: '2', x: 28, y: 45, w: pinLabelWidth('Zoro') }, { id: '3', x: 68, y: 45, w: pinLabelWidth('Pakunoda') }], H, W);
     const rb = Object.fromEntries(real.map((p) => [p.id, p]));
-    ok('P5 ป้ายชื่อยาวที่ทับกันจริง (คิดเป็นพิกเซล) → อันถัดไปใช้เส้นยาว · อันที่ห่างจริงใช้เส้นสั้น', rb['1'].stem === PIN_STEM_SHORT && rb['2'].stem === PIN_STEM_TALL && rb['3'].stem === PIN_STEM_SHORT, real);
-    ok('P6 ชิดขอบจากความกว้างป้ายจริง: ป้ายกลางจะล้นซ้าย → ชิดซ้าย · ล้นขวา → ชิดขวา · กลางรูป → กลาง',
-      rb['1'].align === 'left' && layoutPins([{ id: 'r', x: 95, y: 50, w: 120 }], H, W)[0].align === 'right' && rb['3'].align === 'center');
+    ok('P5 ป้ายชื่อยาวที่ทับกัน (คิดเป็นพิกเซล) → ยังแถวเดียว: ป้าย 1 ชิดขอบซ้ายถูกดันขวา · ป้าย 2 ถูกดันต่อ · ป้าย 3 ห่างพอ dx=0', real.every((p) => p.tier === 0) && rb['1'].dx > 0 && rb['2'].dx > 0 && rb['3'].dx === 0, real.map((p) => `${p.id}:dx${p.dx}`));
+    const edgeR = layoutPins([{ id: 'r', x: 95, y: 50, w: 120 }], H, W)[0]; const edgeL = layoutPins([{ id: 'l', x: 5, y: 50, w: 120 }], H, W)[0];
+    ok('P6 ป้ายล้นขอบรูป → ถูกดันเข้าใน (ขวา dx<0 · ซ้าย dx>0) หางยังอยู่ในป้าย', edgeR.dx < 0 && edgeR.dx >= -50 && edgeL.dx > 0 && edgeL.dx <= 50, { edgeR, edgeL });
     const apart = layoutPins([{ id: 'a', x: 20, y: 50, w: pinLabelWidth('Feitan') }, { id: 'b', x: 45, y: 50, w: pinLabelWidth('Machi') }], H, 1000);
-    ok('P7 รูปกว้าง (เดสก์ท็อป) ชื่อสั้นห่าง 25% → ไม่ชน ทั้งคู่เส้นสั้น', apart.every((p) => p.stem === PIN_STEM_SHORT), apart);
+    ok('P7 รูปกว้าง (เดสก์ท็อป) ชื่อสั้นห่าง 25% → ไม่ชน เส้นสั้น ไม่ต้องขยับ', apart.every((p) => p.stem === PIN_STEM_SHORT && p.dx === 0), apart);
     ok('P8 ความกว้างป้ายไทยไม่นับสระบน/ล่าง/วรรณยุกต์ · "เปิดพรี" ≥ 70px ที่วัดจริง', pinLabelWidth('ปิดพรีแล้ว') < pinLabelWidth('abcdefghij') && pinLabelWidth('ปิดพรีแล้ว') === 38 + 7 * 6.4 && pinLabelWidth('เปิดพรี') >= 70); // 10 ตัวอักษร − สระอิ/อี/ไม้โท 3 ตัว = 7 ที่กินที่
   }
 

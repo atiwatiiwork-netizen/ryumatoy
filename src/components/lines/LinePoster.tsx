@@ -94,15 +94,16 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
           type="button"
           onClick={tap}
           aria-label={`${p.no} ${p.text}`}
-          className={cx('absolute grid h-[22px] w-[22px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 text-[11px] font-extrabold', editing && 'pointer-events-none', hi && 'ring-2 ring-white')}
-          style={{ background: 'rgba(10,10,14,.85)', borderColor: color, color }}
+          className={cx('absolute grid h-[22px] w-[22px] place-items-center rounded-full border-2 text-[11px] font-extrabold', editing && 'pointer-events-none', hi && 'ring-2 ring-white')}
+          style={{ background: 'rgba(10,10,14,.85)', borderColor: color, color, transform: `translate(calc(-50% + ${pl.dx}px), -50%)` }}
         >
           {p.no}
         </button>
       </div>
     );
   }
-  const shift = pl.align === 'center' ? '-50%' : pl.align === 'left' ? `-${PIN_EDGE_INSET}px` : `calc(-100% + ${PIN_EDGE_INSET}px)`;
+  // โหมดจัดแถว: ป้ายขยับออกจากหัว dx px (หางยังอยู่ที่หัว) · โหมดสลับชั้น: ชิดขอบตาม align
+  const shift = pl.dx ? `calc(-50% + ${pl.dx}px)` : pl.align === 'center' ? '-50%' : pl.align === 'left' ? `-${PIN_EDGE_INSET}px` : `calc(-100% + ${PIN_EDGE_INSET}px)`;
   // ระยะจากจุดที่แตะ (ยอดหัว) ถึงขอบป้าย — ป้ายนั่งชิดหัว มีหางสามเหลี่ยมชี้ลง ไม่มีจุด/เส้น (เจ้าของ 2026-10-08: "เส้นชี้ดูไม่สวย")
   // เส้นบางๆ โผล่เฉพาะตอนป้ายถูกยกหนีป้ายข้างๆ จนห่างหัวมาก (ไม่งั้นไม่รู้ว่าป้ายของใคร)
   const gap = pl.stem - 2;

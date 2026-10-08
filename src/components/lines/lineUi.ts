@@ -12,7 +12,7 @@ export const TONE_HEX: Record<LineTone, string> = {
 /** คำอธิบายสี (ตรงกับป้ายบนรูป) — ไม่มีป้าย = ค่ายยังไม่เปิดตัวนั้น */
 export const TONE_LEGEND: { tone: Exclude<LineTone, 'gray'>; label: string }[] = [
   { tone: 'green', label: 'พร้อมส่ง' },
-  { tone: 'blue', label: 'เปิดพรี' },
+  { tone: 'blue', label: 'Pre-Order' },
   { tone: 'purple', label: 'ปิดพรีแล้ว' },
   { tone: 'amber', label: 'ของออกแล้ว · หาของ' },
 ];

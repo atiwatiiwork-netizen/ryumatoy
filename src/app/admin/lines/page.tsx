@@ -9,6 +9,7 @@ import { store } from '@/data/store';
 import { supabase } from '@/data/supabaseClient';
 import { persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
+import { composeCollage } from '@/lib/collage';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity } from '@/data/mutations';
 import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
@@ -240,6 +241,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   const [busy, setBusy] = useState<string | null>(null); // 'cover' | member id ที่กำลังอัปรูป
   const [view, setView] = useState<'edit' | 'preview'>('edit');
   const [phoneW, setPhoneW] = useState(true); // วางป้ายที่ความกว้างมือถือ (343 = 375 − ขอบ 16×2) = เห็นเหมือนลูกค้า
+  const [zoom, setZoom] = useState<1 | 2>(1);
   const guard = () => { if (!canWrite) { flash('ยังแก้ไม่ได้ — กำลังเช็คระบบ หรือยังไม่ได้รัน SQL v81'); return false; } return true; };
   const patch = (fn: (l: ProductLine) => ProductLine) => { if (guard()) dispatch(patchProductLine(line.id, fn)); };
   const patchM = (mid: string, fn: (m: LineMember) => LineMember) => { if (guard()) dispatch(patchLineMember(line.id, mid, fn)); };
@@ -278,6 +280,31 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
     patchM(mid, (m) => ({ ...m, pin_x: pending.x, pin_y: pending.y }));
     setPending(null);
     flash(`วางป้าย "${name}" แล้ว`);
+  };
+  // ขยับป้าย "ทั้งชุด" ทีเดียว (เจ้าของ 2026-10-08: ไม่ต้องไล่กดทีละอัน) — หน่วย % ของรูป · ไม่ให้หลุดกรอบ 0–100
+  const shiftAll = (dx: number, dy: number) => patch((l) => ({
+    ...l,
+    members: l.members.map((m) => (hasPin(m)
+      ? { ...m, pin_x: Math.min(100, Math.max(0, m.pin_x! + dx)), pin_y: Math.min(100, Math.max(0, m.pin_y! + dy)) }
+      : m)),
+  }));
+  // สร้างรูปหมู่เองจากรูปเดี่ยว (เจ้าของ 2026-10-08: บางค่ายไม่มีรูปรวม) → อัปโหลด + วางป้ายให้ทุกช่องอัตโนมัติ
+  const buildCollage = async () => {
+    if (!guard()) return;
+    if (line.members.length === 0) return flash('เพิ่มตัวในไลน์ก่อน แล้วค่อยสร้างรูปรวม');
+    const tiles = line.members.map((m) => ({ id: m.id, src: memberThumb(db, m), label: m.name.trim() || 'ไม่มีชื่อ' }));
+    if (tiles.every((t) => !t.src)) return flash('ยังไม่มีรูปเดี่ยวสักตัว — ใส่รูปที่ตัวละคร หรือผูกสินค้าที่มีรูปก่อน');
+    if (line.cover_url && !window.confirm('มีรูปหมู่อยู่แล้ว — สร้างรูปรวมใหม่ทับ? (ป้ายจะถูกวางใหม่ตามช่องอัตโนมัติ)')) return;
+    setBusy('cover');
+    try {
+      const { blob, pins } = await composeCollage(tiles);
+      const url = await uploadImage(new File([blob], `line-${line.id}.jpg`, { type: 'image/jpeg' }), 'line');
+      const at = new Map(pins.map((p) => [p.id, p]));
+      patch((l) => ({ ...l, cover_url: url, members: l.members.map((m) => (at.has(m.id) ? { ...m, pin_x: at.get(m.id)!.x, pin_y: at.get(m.id)!.y } : m)) }));
+      flash(`สร้างรูปรวม ${tiles.length} ช่อง + วางป้ายให้แล้ว — ขยับได้ด้วยปุ่มเลื่อนทั้งชุด`);
+    } catch (e) {
+      flash(`สร้างรูปรวมไม่สำเร็จ — ${e instanceof Error ? e.message : 'ลองใหม่'}`);
+    } finally { setBusy(null); }
   };
   const move = (i: number, d: -1 | 1) => patch((l) => {
     const j = i + d;
@@ -372,15 +399,43 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
             </div>
             {line.cover_url ? (
               <>
-                <div className={cx('relative', phoneW && 'mx-auto w-[343px] max-w-full')}>
-                  <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
-                  {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
-                  {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
+                {/* ซูม 2 เท่า = รูปกว้างสองเท่าในกรอบเลื่อนได้ ป้ายคำนวณใหม่ตามความกว้าง (เล็งหัวง่ายขึ้น) */}
+                <div className={cx('relative', zoom > 1 ? 'overflow-auto rounded-card border border-subtle' : phoneW && 'mx-auto w-[343px] max-w-full')}>
+                  <div className={cx('relative', zoom > 1 && 'w-[200%]')}>
+                    <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
+                    {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
+                    {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
+                  </div>
                 </div>
                 <PinProgress line={line} pending={!!pending} />
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[12px]">
+                  <span className="font-bold">เลื่อนป้ายทั้งชุด</span>
+                  <div className="flex gap-1">
+                    {([['←', -1, 0], ['→', 1, 0], ['↑', 0, -1], ['↓', 0, 1]] as const).map(([k, dx, dy]) => (
+                      <button key={k} onClick={(e) => shiftAll(dx * (e.shiftKey ? 5 : 1), dy * (e.shiftKey ? 5 : 1))} disabled={!line.members.some(hasPin)} className="h-8 w-9 rounded-md border border-subtle bg-surface-3 text-[14px] font-extrabold disabled:opacity-30" title="กด Shift ค้าง = ขยับทีละ 5%">{k}</button>
+                    ))}
+                  </div>
+                  <span className="text-ink-faint">ทีละ 1% · กด Shift ค้าง = 5%</span>
+                  <div className="flex-1" />
+                  <span className="font-bold">ซูม</span>
+                  <div className="flex rounded-md border border-subtle bg-surface-3 p-0.5 font-bold">
+                    <button onClick={() => setZoom(1)} className={cx('rounded px-2.5 py-1', zoom === 1 ? 'bg-surface-4 text-ink' : 'text-ink-faint')}>1×</button>
+                    <button onClick={() => setZoom(2)} className={cx('rounded px-2.5 py-1', zoom === 2 ? 'bg-surface-4 text-ink' : 'text-ink-faint')}>2×</button>
+                  </div>
+                  <button onClick={() => void buildCollage()} disabled={busy === 'cover'} className="rounded-md border border-subtle bg-surface-3 px-2.5 py-1 font-bold disabled:opacity-50">🧩 สร้างรูปรวมใหม่จากรูปเดี่ยว</button>
+                </div>
               </>
             ) : (
-              <div className="grid aspect-[16/9] place-items-center rounded-card border border-dashed border-subtle bg-surface-2 text-center text-[12.5px] text-ink-faint">ใส่รูปหมู่ของค่าย (แบบที่ค่ายโพสต์) แล้วแตะหัวตัวละครเพื่อวางป้าย</div>
+              <div className="grid aspect-[16/9] place-items-center rounded-card border border-dashed border-subtle bg-surface-2 p-4 text-center text-[12.5px] text-ink-faint">
+                <div>
+                  <div>ใส่รูปหมู่ของค่าย (แบบที่ค่ายโพสต์) แล้วแตะหัวตัวละครเพื่อวางป้าย</div>
+                  <div className="mt-2 text-ink-faint">ค่ายไม่มีรูปรวม?</div>
+                  <button onClick={() => void buildCollage()} disabled={busy === 'cover' || !canWrite} className="mt-1.5 rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-50">
+                    {busy === 'cover' ? 'กำลังสร้าง…' : '🧩 สร้างรูปรวมจากรูปเดี่ยวของแต่ละตัว'}
+                  </button>
+                  <div className="mt-1.5 text-[11px] text-ink-faint">ใช้รูปของตัวละครในไลน์ (รูปที่ใส่เอง หรือรูปสินค้าที่ผูก) เรียงเป็นช่อง แล้ววางป้ายให้ทุกช่องอัตโนมัติ</div>
+                </div>
+              </div>
             )}
           </div>
 

@@ -32,7 +32,7 @@ export function LineCoverCard({ db, line, size = 'wide', admin, isNew, eager }: 
           <div className={cx('truncate font-extrabold text-white', size === 'hero' ? 'text-[18px]' : 'text-[15px]')}>{line.name.trim() || 'ไลน์'}</div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-white/75">
             <span className="truncate">{maker}{fr ? ` · ${fr}` : ''}</span> · <span className="shrink-0">{states.length} ตัว</span>
-            {openN > 0 && <span className="shrink-0 rounded-full bg-[#60a5fa]/25 px-1.5 py-px text-[10px] font-bold text-[#bfdbfe]">เปิดพรี {openN}</span>}
+            {openN > 0 && <span className="shrink-0 rounded-full bg-[#60a5fa]/25 px-1.5 py-px text-[10px] font-bold text-[#bfdbfe]">Pre-Order {openN}</span>}
             {tones.green > 0 && <span className="shrink-0 rounded-full bg-[#34d399]/25 px-1.5 py-px text-[10px] font-bold text-[#a7f3d0]">มีพร้อมส่ง</span>}
             {tones.amber > 0 && openN === 0 && tones.green === 0 && <span className="shrink-0 rounded-full bg-[#fbbf24]/25 px-1.5 py-px text-[10px] font-bold text-[#fde68a]">หาของได้</span>}
           </div>
