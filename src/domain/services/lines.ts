@@ -111,7 +111,7 @@ export interface LineCtx {
 
 const baht = (n: number) => `฿${Math.round(n).toLocaleString('en-US')}`;
 /** คำย่อของป้าย — ใช้เมื่อคำเต็มไม่พอแถวเดียวบนมือถือ (เจ้าของ 2026-10-08: มือถือต้องแถวเดียว) */
-export const PIN_SHORT: Record<string, string> = { 'Pre-Order': 'PRE', 'ปิดพรีแล้ว': 'ปิดพรี', 'พรีแล้ว ✓': 'พรีแล้ว', 'หมดชั่วคราว': 'หมดชั่วคราว' };
+export const PIN_SHORT: Record<string, string> = { 'Pre-Order': 'PRE', 'ปิดพรีแล้ว': 'ปิดพรี', 'พรีแล้ว ✓': 'พรีแล้ว', 'ซื้อแล้ว ✓': 'ซื้อแล้ว', 'หมดชั่วคราว': 'หมดชั่วคราว' };
 export const sourcingHref = (line: ProductLine, m: LineMember, product?: Product) =>
   `/sourcing?line=${encodeURIComponent(line.id)}&m=${encodeURIComponent(m.id)}${product ? `&src=${encodeURIComponent(product.id)}` : ''}`;
 const lineOaCta = (lineOa?: string): LineCta | undefined =>
@@ -126,9 +126,15 @@ const lineOaCta = (lineOa?: string): LineCta | undefined =>
 export function lineMemberState(db: Database, line: ProductLine, m: LineMember, ctx: LineCtx): LineMemberState {
   const { all } = memberProducts(db, m);
   const ids = new Set(all.map((p) => p.id));
-  const mine = !!ctx.uid && db.tickets.some((t) => t.owner_id === ctx.uid && t.status !== 'transferred' && ids.has(t.product_id));
+  // "ของฉันแล้ว" = มีตั๋ว หรือมีออเดอร์ที่ส่งสลิปแล้วรอแอดมินตรวจ (ยังไม่มีตั๋ว) — เจ้าของ 2026-10-08: ต้องเตือนว่าพรีไปแล้ว กันสั่งซ้ำ
+  const mine = !!ctx.uid && (
+    db.tickets.some((t) => t.owner_id === ctx.uid && t.status !== 'transferred' && ids.has(t.product_id))
+    || db.orders.some((o) => o.user_id === ctx.uid && o.status === 'pending_approval' && o.items.some((i) => ids.has(i.product_id)))
+  );
   const make = (s: Omit<LineMemberState, 'mine' | 'pinLabel' | 'pinShort' | 'visible'> & { visible?: boolean }): LineMemberState => {
-    const pinLabel = mine && s.kind === 'closed' ? 'พรีแล้ว ✓' : s.label;
+    // พรีไปแล้ว → ป้ายบนรูปบอก "พรีแล้ว ✓" ทุกสถานะที่เกี่ยวกับการสั่ง (ไม่ใช่แค่ตอนปิดพรี) · ของในมือที่ซื้อแล้ว = "ซื้อแล้ว ✓"
+    const bought = s.kind === 'stock' || (s.kind === 'special' && s.tone === 'green');
+    const pinLabel = mine && (s.kind === 'closed' || s.kind === 'preorder' || s.kind === 'special') ? (bought ? 'ซื้อแล้ว ✓' : 'พรีแล้ว ✓') : mine && bought ? 'ซื้อแล้ว ✓' : s.label;
     return { ...s, mine, visible: s.visible ?? true, pinLabel, pinShort: PIN_SHORT[pinLabel] ?? pinLabel };
   };
 

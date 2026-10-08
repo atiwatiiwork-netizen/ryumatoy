@@ -135,13 +135,21 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-extrabold">{member.name.trim() || `ตัวที่ ${no}`}</div>
         <div className="truncate text-[11.5px] text-ink-muted2">{state.detail}</div>
-        {state.mine && <div className="text-[11px] font-bold text-[#4ade80]">✓ คุณมีตัวนี้แล้ว</div>}
+        {/* พรีไปแล้ว = ป้ายเขียวชัดๆ (เจ้าของ 2026-10-08: ต้องเตือนกันสั่งซ้ำ) · รวมออเดอร์ที่สลิปยังรอตรวจ */}
+        {state.mine && (
+          <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#16a34a]/20 px-2 py-0.5 text-[11px] font-extrabold text-[#4ade80]">
+            {state.pinLabel.startsWith('ซื้อ') ? 'ซื้อแล้ว ✓' : 'พรีแล้ว ✓'} <span className="font-semibold text-[#4ade80]/80">· คุณมีตัวนี้แล้ว</span>
+          </span>
+        )}
       </div>
       {cta && (preview
         // พรีวิวในแอดมิน: ปุ่มหน้าตาเหมือนจริงแต่ไม่พาออกจากหน้าแก้ไข
         ? <span className={btnCls}>{cta.label}</span>
         : quick && inCart
           ? <Link href="/cart" className="shrink-0 rounded-[10px] border border-[#16a34a]/50 bg-[#16a34a]/15 px-3 py-2 text-[12px] font-extrabold text-[#4ade80]">อยู่ในตะกร้าแล้ว ✓</Link>
+        : quick && state.mine
+          // พรีไปแล้ว: ปุ่มหลักไม่กระพริบไม่แดง — สั่งเพิ่มได้แต่ต้องตั้งใจ
+          ? <button onClick={() => void addNow()} disabled={checking} className="shrink-0 rounded-[10px] border border-subtle bg-surface-3 px-3 py-2 text-[12px] font-bold text-ink-muted2 disabled:opacity-60">{checking ? 'เช็คของ…' : 'สั่งเพิ่มอีกตัว'}</button>
         : quick
           ? <button onClick={() => void addNow()} disabled={checking} className={cx(btnCls, 'disabled:animate-none disabled:opacity-60')}>{checking ? 'เช็คของ…' : cta.label}</button>
         : cta.external

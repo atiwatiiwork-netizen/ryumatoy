@@ -84,6 +84,10 @@ export const pushEnabled = (db: Database, key: string): boolean =>
 /** Devices to receive a NEW-PRODUCT broadcast, honoring each customer's ค่าย/เรื่อง preferences.
  *  No pref row (or an empty dimension) = รับทั้งหมด; both dimensions set = AND. Account events
  *  (order approved, parcel, …) are NOT filtered — only these broadcasts are. */
+/** ไลน์ (v81): ผู้รับ = ทุกเครื่องที่เปิดกระดิ่ง ตามตัวกรองค่าย/เรื่องเดียวกับสินค้าใหม่ (ไลน์ไม่ระบุเรื่อง = กรองแค่ค่าย) */
+export const subsForLine = (db: Database, line: { maker_id: string; franchise_id?: string | null }): PushRow[] =>
+  subsForNewProduct(db, { manufacturer_id: line.maker_id, franchise_id: line.franchise_id ?? '' });
+
 export function subsForNewProduct(db: Database, product: { manufacturer_id: string; franchise_id: string }): PushRow[] {
   // OPT-OUT model: maker_ids / franchise_ids are the MUTED lists. Default (no pref row, or a category
   // not in the muted list) = RECEIVE. This makes a NEWLY-added ค่าย/เรื่อง reach everyone automatically —

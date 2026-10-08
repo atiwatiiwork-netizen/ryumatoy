@@ -189,6 +189,13 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     const tr = base({ products: [P('prod', { status: 'production' })], tickets: [T('t1', 'prod', 'uB', { status: 'transferred' })] });
     ok('O3 ตั๋วสถานะ transferred ไม่นับว่าเป็นของฉัน', !st(tr, [M('a', ['prod'])], 'a', { uid: 'uB' }).mine);
     ok('O4 uid ว่าง (ยังไม่ล็อกอิน) → ไม่มีของฉัน', !st(db, [M('a', ['prod'])], 'a', { uid: '' }).mine);
+    // เจ้าของ 2026-10-08: พรีไปแล้วต้องขึ้น "พรีแล้ว" แม้กระดานยังเปิดอยู่ · รวมออเดอร์ที่สลิปรอตรวจ (ยังไม่มีตั๋ว)
+    const openMine = st(base({ products: [P('open')], tickets: [T('t1', 'open', 'uA')] }), [M('a', ['open'])], 'a', { uid: 'uA' });
+    ok('O5 กระดานยังเปิด + มีตั๋วแล้ว → ป้าย "พรีแล้ว ✓" (คำย่อ "พรีแล้ว") แต่ยังเป็น kind preorder (สั่งเพิ่มได้)', openMine.mine && openMine.pinLabel === 'พรีแล้ว ✓' && openMine.pinShort === 'พรีแล้ว' && openMine.kind === 'preorder', openMine);
+    const pendingOrder = base({ products: [P('open')], orders: [{ id: 'o1', user_id: 'uA', total_deposit: 1000, slip_url: 's', status: 'pending_approval', created_at: iso(-1000), items: [{ id: 'oi1', order_id: 'o1', product_id: 'open', qty: 1, deposit_amount: 1000 } as never] } as never] });
+    ok('O6 ส่งสลิปแล้วรอตรวจ (ยังไม่มีตั๋ว) → นับว่าพรีแล้ว (กันสั่งซ้ำ) · คนอื่นไม่เกี่ยว', st(pendingOrder, [M('a', ['open'])], 'a', { uid: 'uA' }).mine && !st(pendingOrder, [M('a', ['open'])], 'a', { uid: 'uB' }).mine);
+    const boughtStock = st(base({ products: [P('stk', { is_stock: true, stock_qty: 3 })], tickets: [T('t1', 'stk', 'uA', { remaining_amount: 0, deposit_paid: 2000 })] }), [M('a', ['stk'])], 'a', { uid: 'uA' });
+    ok('O7 ของพร้อมส่งที่ซื้อแล้ว → ป้าย "ซื้อแล้ว ✓"', boughtStock.mine && boughtStock.pinLabel === 'ซื้อแล้ว ✓' && boughtStock.kind === 'stock', boughtStock);
   }
 
   // ── 6. ตัวที่ยังไม่มีสินค้าในระบบ (Add เอง) / id ที่ถูกลบ ─────────────────────────────────────────

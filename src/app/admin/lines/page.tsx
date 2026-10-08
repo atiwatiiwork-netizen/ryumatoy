@@ -10,6 +10,7 @@ import { supabase } from '@/data/supabaseClient';
 import { persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
 import { composeCollage } from '@/lib/collage';
+import { sendPush, subsForLine, pushEnabled } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity } from '@/data/mutations';
 import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
@@ -318,11 +319,33 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
     if (!window.confirm(`เอา "${m.name || 'ตัวนี้'}" ออกจากไลน์? (สินค้าในระบบไม่ถูกแตะ)`)) return;
     patch((l) => ({ ...l, members: l.members.filter((x) => x.id !== m.id) }));
   };
-  const toggleActive = () => {
+  // ข้อความ push ของไลน์ — DNA push no-qty: ชื่อไลน์ + ค่าย/เรื่อง เท่านั้น ห้ามบอกจำนวน/สต๊อก
+  const lineWho = () => [db.manufacturers.find((m) => m.id === line.maker_id)?.name, line.franchise_id ? db.franchises.find((f) => f.id === line.franchise_id)?.name : undefined].filter(Boolean).join(' · ');
+  const toggleActive = async () => {
     if (!guard()) return;
     if (!line.active && !line.cover_url) return flash('ใส่รูปหมู่ก่อน — ลูกค้าไม่เห็นไลน์ที่ไม่มีรูป');
+    const turningOn = !line.active;
     dispatch(patchProductLine(line.id, (l) => ({ ...l, active: !l.active })));
     dispatch(logActivity(uid, 'line_active', `${line.active ? 'ซ่อน' : 'แสดง'}ไลน์ ${line.name.trim()}`, { targetId: line.id, targetLabel: line.name.trim() }));
+    // แสดงให้ลูกค้าครั้งแรกขณะสวิตช์ใหญ่เปิด = ไลน์ใหม่ → push ทุกคนที่เปิดกระดิ่ง (เจ้าของ 2026-10-08) · เซฟให้ขึ้นก่อนค่อยยิง (DNA: ห้าม push ก่อนเซฟ)
+    if (turningOn && linesPublicEnabled(db) && pushEnabled(db, 'line_new')) {
+      const pf = await store.flush();
+      if (pf) return flash(persistFailText(pf, 'บันทึกแล้วจะลองใหม่ให้ — ยังไม่ส่งแจ้งเตือน'));
+      const subs = subsForLine(db, line);
+      sendPush(subs, { title: '🧩 ไลน์อัปใหม่', body: `${line.name.trim()} · ${lineWho()} — ดูทั้งไลน์แล้วเลือกพรีได้เลย`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+      flash(`แสดงให้ลูกค้าแล้ว · ส่งแจ้งเตือนไลน์ใหม่ไป ${subs.length} เครื่อง`);
+    }
+  };
+  // แอดมินกดเองเมื่อมีอัปเดตสำคัญ (ค่ายเปิดตัวใหม่ / ของเข้า) — ไม่ยิงอัตโนมัติทุกครั้งที่แก้ ไม่งั้นลูกค้าโดนถล่ม
+  const notifyUpdate = () => {
+    if (!guard()) return;
+    if (!lineOpenToCustomers(db, line)) return flash('ลูกค้ายังมองไม่เห็นไลน์นี้ — เปิดสวิตช์ใหญ่ + กดแสดงให้ลูกค้าก่อน');
+    if (!pushEnabled(db, 'line_update')) return flash('แจ้งเตือน "ไลน์อัปมีอัปเดต" ถูกปิดไว้ที่หน้า Push Control');
+    const subs = subsForLine(db, line);
+    if (!window.confirm(`ส่งแจ้งเตือน "ไลน์ ${line.name.trim()} มีอัปเดต" ไป ${subs.length} เครื่อง?\n\nลูกค้าที่ปิดค่าย/เรื่องนี้ไว้จะไม่ได้รับ`)) return;
+    sendPush(subs, { title: '📣 ไลน์อัปมีอัปเดต', body: `${line.name.trim()} · ${lineWho()} — มีตัวใหม่/สถานะใหม่ เข้าไปดูได้เลย`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+    dispatch(logActivity(uid, 'line_push', `แจ้งอัปเดตไลน์ ${line.name.trim()} (${subs.length} เครื่อง)`, { targetId: line.id, targetLabel: line.name.trim() }));
+    flash(`ส่งแจ้งเตือนแล้ว ${subs.length} เครื่อง`);
   };
   const deleteLine = () => {
     if (!guard()) return;
@@ -346,9 +369,10 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
         </div>
         <Link href={`/line/${line.id}`} target="_blank" className="text-[12.5px] font-semibold text-primary-soft">เปิดหน้าจริง (แท็บใหม่) →</Link>
         <div className="flex-1" />
-        <button onClick={toggleActive} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', line.active ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-[#fbbf24]')}>
+        <button onClick={() => void toggleActive()} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', line.active ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-[#fbbf24]')}>
           {line.active ? '✓ แสดงให้ลูกค้า' : 'ร่าง — กดเพื่อแสดง'}
         </button>
+        {line.active && <button onClick={notifyUpdate} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold" title="ส่ง push ว่าไลน์นี้มีอัปเดต ให้ทุกคนที่เปิดกระดิ่ง">📣 แจ้งลูกค้า</button>}
         <button onClick={deleteLine} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold text-[#f87171]">ลบไลน์</button>
       </div>
 

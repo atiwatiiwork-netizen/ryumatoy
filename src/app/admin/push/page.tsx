@@ -15,6 +15,8 @@ const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('th-TH
 const TRIGGERS: { key: string; emoji: string; name: string; target: string; note?: string }[] = [
   { key: 'new_preorder', emoji: '🆕', name: 'สินค้าพรีเข้าใหม่', target: 'ทุกเครื่อง (ตามตัวกรองค่าย/เรื่องของลูกค้า)' },
   { key: 'new_instock', emoji: '🟢', name: 'พร้อมส่งเข้าใหม่', target: 'ทุกเครื่อง (ตามตัวกรองค่าย/เรื่องของลูกค้า)' },
+  { key: 'line_new', emoji: '🧩', name: 'ไลน์อัปใหม่ (กดแสดงให้ลูกค้า)', target: 'ทุกเครื่อง (ตามตัวกรองค่าย/เรื่องของลูกค้า)', note: 'ยิงตอนแอดมินกด "แสดงให้ลูกค้า" ขณะสวิตช์ใหญ่เปิดอยู่' },
+  { key: 'line_update', emoji: '📣', name: 'ไลน์อัปมีอัปเดต', target: 'ทุกเครื่อง (ตามตัวกรองค่าย/เรื่องของลูกค้า)', note: 'ยิงเมื่อแอดมินกดปุ่ม "แจ้งลูกค้า" ในหน้าไลน์ (ไม่ยิงเองทุกครั้งที่แก้)' },
   { key: 'lot_shipping', emoji: '🚚', name: 'ล็อตออกเดินทางมาไทย', target: 'เฉพาะคนที่พรีล็อตนั้น', note: 'ชวนเริ่มจ่ายส่วนต่าง' },
   { key: 'lot_arrived', emoji: '📦', name: 'ล็อตถึงไทยแล้ว', target: 'เฉพาะคนที่พรีล็อตนั้น' },
   { key: 'order_approved', emoji: '✅', name: 'อนุมัติออเดอร์ / ออกตั๋ว', target: 'เจ้าของออเดอร์' },
