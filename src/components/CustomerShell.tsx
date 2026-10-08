@@ -24,6 +24,7 @@ import { OnboardGate } from './OnboardGate';
 import { InstallBellNudge } from './InstallBellNudge';
 import { auctionPublicEnabled } from '@/domain/services/auctions';
 import { marketVisibleTo } from '@/domain/services/market';
+import { openBoards } from '@/domain/services/catalog';
 
 const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] = [
   { href: '/', icon: 'home', label: 'หน้าแรก', topLabel: 'หน้าแรก' },
@@ -31,6 +32,9 @@ const TABS: { href: string; icon: IconName; label: string; topLabel: string }[] 
   { href: '/profile', icon: 'user', label: 'โปรไฟล์', topLabel: 'โปรไฟล์' },
 ];
 const MARKET_TAB = { href: '/market', icon: 'swap' as IconName, label: 'ตลาด', topLabel: 'ตลาดใบพรี' };
+/** แท็บ "ปิดพรี" (เจ้าของ 2026-10-08): กระดานปิดพรีย้ายจากหน้าแรกมาเป็นแท็บถัดจากหน้าแรก —
+ *  โผล่เฉพาะตอนมีกระดานเปิดอยู่ (มีเลขบอกจำนวน) · ไม่มีกระดาน = แท็บหายเอง ไม่มีหน้าว่าง */
+const CLOSING_TAB = { href: '/closing', icon: 'bolt' as IconName, label: 'ปิดพรี', topLabel: 'กำลังปิดพรี' };
 
 /**
  * Responsive customer frame (HANDOFF.md §Customer Desktop). Below lg it's a
@@ -95,7 +99,14 @@ export function CustomerShell({ children }: { children: ReactNode }) {
   // → ปุ่มอยู่บนเมนูแล้ว แต่ลูกค้ากดแล้วได้ข้อความ "เร็วๆ นี้"; แอดมินเข้าได้จริงเพื่อทดลอง
   const auctionOpen = auctionPublicEnabled(db) || isAdmin;
   // ตลาดใบพรี (ข้อ 28A: แท็บล่างที่ 4) — ยังไม่เปิด = เห็นเฉพาะแอดมิน ลูกค้าไม่รู้ว่ามี (เจ้าของ 2026-09-23)
-  const tabs = marketVisibleTo(db, CURRENT_USER_ID) || isAdmin ? [TABS[0], TABS[1], MARKET_TAB, TABS[2]] : TABS;
+  const closingN = openBoards(db).length;
+  const tabs = [
+    TABS[0],
+    ...(closingN > 0 ? [CLOSING_TAB] : []),
+    TABS[1],
+    ...(marketVisibleTo(db, CURRENT_USER_ID) || isAdmin ? [MARKET_TAB] : []),
+    TABS[2],
+  ];
   const me = db.users.find((u) => u.id === CURRENT_USER_ID);
   // install-rate: stamp installed_at the first time a logged-in member opens the app in standalone
   // (home-screen). Idempotent mutation → once-only; own-row write is RLS-safe (ryuma-push-adoption).
@@ -146,6 +157,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
                 className={cx('rounded-[9px] px-[15px] py-2 text-sm', isActive(t.href) ? 'bg-surface-4 font-bold text-ink' : 'font-medium text-ink-muted')}
               >
                 {t.topLabel}
+                {t.href === CLOSING_TAB.href && <span className="ml-1.5 rounded-full bg-[#16a34a] px-1.5 text-[10px] font-bold text-white">{closingN}</span>}
               </Link>
             ))}
             {auctionOpen ? (
@@ -205,6 +217,7 @@ export function CustomerShell({ children }: { children: ReactNode }) {
           return (
             <Link key={t.href} href={t.href} className={cx('relative flex flex-1 flex-col items-center gap-[3px]', on ? 'text-primary-bright' : 'text-ink-faint')}>
               <Icon name={t.icon} size={22} fill={on ? 'rgba(220,38,38,.12)' : 'none'} />
+              {t.href === CLOSING_TAB.href && <span className="absolute -top-1 left-1/2 ml-1.5 rounded-full bg-[#16a34a] px-1.5 text-[9px] font-bold text-white">{closingN}</span>}
               <span className={cx('text-[10px]', on ? 'font-bold' : 'font-medium')}>{t.label}</span>
             </Link>
           );

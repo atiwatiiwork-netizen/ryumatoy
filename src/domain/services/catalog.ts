@@ -74,6 +74,10 @@ export function lineImage(db: Database, productId: string, variantId?: string): 
 export function inOpenBoard(db: Database, p: Product): boolean {
   return !!p.board_id && db.boards.some((b) => b.id === p.board_id && b.status === 'open');
 }
+/** กระดานปิดพรีที่กำลังรับจองอยู่และมีโปสเตอร์ — ชุดเดียวที่แท็บ "ปิดพรี" / แถบหน้าแรก / หน้า /closing ใช้ (ต้องตรงกันเสมอ) */
+export function openBoards(db: Database) {
+  return db.boards.filter((b) => b.status === 'open' && !!b.poster_url);
+}
 /** Board round has ended (board closed) but the product hasn't been sent to production yet →
  *  hidden from the shop, and now eligible for ปิดรอบสั่งผลิต to set the final production qty. */
 export function inClosedBoard(db: Database, p: Product): boolean {

@@ -13,9 +13,9 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, type LineCtx,
+  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, homeLines, isNewLine, type LineCtx,
 } from '../../src/domain/services/lines';
-import { isStockTwin, preorderOpenForOrder } from '../../src/domain/services/catalog';
+import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
   setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder,
 } from '../../src/data/mutations';
@@ -365,6 +365,23 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
       okOrder.orders.length === db.orders.length + 1 && badOrder === db && badOrder.orders.length === db.orders.length, { ok: okOrder.orders.length, bad: badOrder.orders.length });
     const s = st(db, [M('a', ['cb'])], 'a');
     ok('G3 ไลน์: ตัวที่อยู่ในกระดานที่ปิดแล้ว = ปิดพรีแล้ว · รอสั่งผลิต (ไม่ใช่เปิดพรี)', s.kind === 'closed' && s.detail.includes('รอสั่งผลิต'), s);
+  }
+
+  // ── 14. หน้าแรก: 3 ไลน์ล่าสุด (เจ้าของ 2026-10-08) + แท็บปิดพรี ───────────────────────────────────────
+  {
+    const mk = (id: string, daysAgo: number, over: Partial<ProductLine> = {}) =>
+      L([M('m', [], { manual_state: 'sourcing' })], { id, created_at: new Date(now - daysAgo * 86_400_000).toISOString(), ...over });
+    let db = base({ productLines: [mk('old', 40), mk('new', 1), mk('mid', 10), mk('draft', 0, { active: false }), mk('mid2', 20)] });
+    ok('H1 สวิตช์ปิด: หน้าแรกลูกค้าไม่มีไลน์ · แอดมินเห็น (แต่ก็แค่ 3 ตามเพดานหน้าแรก)', homeLines(db, 'uA').length === 0 && homeLines(db, 'uAdm').length === 3);
+    db = setLinesPublic(true)(db);
+    ok('H2 เปิดแล้ว: ลูกค้าได้ 3 ไลน์ล่าสุด (ใหม่สุดก่อน · ร่างไม่นับ)', homeLines(db, 'uA').map((l) => l.id).join() === 'new,mid,mid2');
+    ok('H3 ป้าย "ใหม่" = สร้างใน 7 วัน', isNewLine(mk('x', 1), now) && !isNewLine(mk('y', 8), now));
+    const boards = base({ boards: [
+      { id: 'b1', maker_id: MK, title: 'a', poster_url: 'p.jpg', status: 'open', created_at: '' },
+      { id: 'b2', maker_id: MK, title: 'b', status: 'open', created_at: '' },
+      { id: 'b3', maker_id: MK, title: 'c', poster_url: 'p.jpg', status: 'closed', created_at: '' },
+    ] as Database['boards'] });
+    ok('H4 openBoards: เฉพาะกระดานเปิดที่มีโปสเตอร์ (แท็บ "ปิดพรี" + แถบหน้าแรกใช้ชุดเดียวกัน)', openBoards(boards).map((b) => b.id).join() === 'b1');
   }
 
   console.log(`\nlines-audit: ${pass} passed, ${fail} failed`);

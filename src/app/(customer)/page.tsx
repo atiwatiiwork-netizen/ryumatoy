@@ -12,7 +12,10 @@ import { ProductCard } from '@/components/ProductCard';
 import { EventBanner } from '@/components/EventBits';
 import { paidPercent } from '@/domain/services/tickets';
 import { ticketDue } from '@/domain/services/money';
-import { inClosedBoard } from '@/domain/services/catalog';
+import { inClosedBoard, openBoards } from '@/domain/services/catalog';
+import { homeLines, isNewLine, linesPublicEnabled } from '@/domain/services/lines';
+import { isAdminUser } from '@/domain/services/admins';
+import { LineCoverCard } from '@/components/lines/LineCoverCard';
 import { ticketBadgeKey } from '@/domain/services/delivery';
 import { ticketPayable, pendingRpFor } from '@/domain/services/payments';
 
@@ -24,7 +27,9 @@ export default function HomePage() {
   // (a product whose board has closed has ended its round → not sellable anymore)
   const sellable = (p: (typeof db.products)[number]) => (p.is_stock || p.status === 'open') && !inClosedBoard(db, p);
   const promos = db.settings.announcements ?? [];
-  const closingBoards = db.boards.filter((b) => b.status === 'open' && b.poster_url);
+  const closingBoards = openBoards(db);
+  const lineUps = homeLines(db, CURRENT_USER_ID, 3);
+  const isAdmin = isAdminUser(db, CURRENT_USER_ID);
   const myTickets = db.tickets.filter((t) => t.owner_id === CURRENT_USER_ID).slice(0, 3);
   const newest = [...db.products].filter(sellable).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 5);
 
@@ -36,8 +41,26 @@ export default function HomePage() {
       {/* promo / announcement carousel (admin-managed, top of home) */}
       {promos.length > 0 && <PromoCarousel promos={promos} />}
 
-      {/* closing pre-order boards (banner #2) */}
-      {closingBoards.length > 0 && <BoardBanner boards={closingBoards} />}
+      {/* กระดานปิดพรี (เจ้าของ 2026-10-08): โปสเตอร์ใหญ่ย้ายไปแท็บ "ปิดพรี" — หน้าแรกเหลือแถบบรรทัดเดียว */}
+      {closingBoards.length > 0 && (
+        <Link href="/closing" className="mb-4 flex items-center gap-2.5 rounded-xl border border-[#16a34a]/40 bg-[#0e1310] px-3.5 py-2.5 text-[13px] font-bold lg:mb-6">
+          <Icon name="bolt" size={16} className="text-[#4ade80]" /> กำลังปิดพรี
+          <span className="rounded-full bg-[#16a34a] px-2 py-0.5 text-[11px] text-white">{closingBoards.length} กระดาน</span>
+          <span className="ml-auto text-[12.5px] font-semibold text-[#4ade80]">กดดูรายการ →</span>
+        </Link>
+      )}
+
+      {/* ไลน์อัป 3 ล่าสุด (v81 · เจ้าของ 2026-10-08) — ไม่มีฟิลเตอร์ที่นี่ (ไปหน้า /lines) · ลูกค้าเห็นเมื่อเปิดสวิตช์แล้ว (homeLines ตัดสิน) */}
+      {lineUps.length > 0 && (
+        <>
+          <SectionHeader title="🧩 ไลน์อัป" href="/lines" link="ดูทั้งหมด →" tag={isAdmin && !linesPublicEnabled(db) ? 'แอดมินเห็นคนเดียว' : undefined} />
+          <div className="mb-8 flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-4">
+            {lineUps.map((l, i) => (
+              <LineCoverCard key={l.id} db={db} line={l} size={i === 0 ? 'hero' : 'wide'} admin={isAdmin} isNew={isNewLine(l)} eager={i === 0} />
+            ))}
+          </div>
+        </>
+      )}
 
       {/* my pre-order updates */}
       {myTickets.length > 0 && (
@@ -119,47 +142,13 @@ function PromoCarousel({ promos }: { promos: NonNullable<ReturnType<typeof useDa
   );
 }
 
-function BoardBanner({ boards }: { boards: ReturnType<typeof useDatabase>['boards'] }) {
-  const [i, setI] = useState(0);
-  const n = boards.length;
-  useEffect(() => {
-    if (n <= 1) return;
-    const t = setInterval(() => setI((x) => (x + 1) % n), 5000);
-    return () => clearInterval(t);
-  }, [n]);
-  const cur = i % n;
-
-  return (
-    <div className="mb-4 lg:mb-7">
-      <div className="relative overflow-hidden rounded-2xl border border-[#16a34a]/40">
-        <div className="flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${cur * 100}%)` }}>
-          {boards.map((b) => (
-            <Link key={b.id} href={`/board/${b.id}`} className="relative w-full shrink-0">
-              <img src={b.poster_url} alt={b.title} className="block h-auto w-full" />
-              {/* blinking "closing pre-order" strip */}
-              <div className="pointer-events-none absolute left-0 top-0 flex items-center gap-1.5 rounded-br-xl bg-[#16a34a] px-3 py-1.5 text-[11px] font-extrabold tracking-wide text-white [animation:ryuBlink_1.4s_ease-in-out_infinite]">
-                <Icon name="bolt" size={13} /> กำลังปิดพรี · กดดูรายการ
-              </div>
-            </Link>
-          ))}
-        </div>
-        {n > 1 && (
-          <div className="absolute inset-x-0 bottom-2.5 flex justify-center gap-1.5">
-            {boards.map((_, k) => (
-              <button key={k} onClick={() => setI(k)} aria-label={`board ${k + 1}`} className={cx('h-1.5 rounded-full transition-all', k === cur ? 'w-5 bg-white' : 'w-1.5 bg-white/50')} />
-            ))}
-          </div>
-        )}
-      </div>
-      <style>{`@keyframes ryuBlink{0%,100%{opacity:1}50%{opacity:.28}}`}</style>
-    </div>
-  );
-}
-
-function SectionHeader({ title, href, link }: { title: string; href: string; link: string }) {
+function SectionHeader({ title, href, link, tag }: { title: string; href: string; link: string; tag?: string }) {
   return (
     <div className="mb-3 flex items-center justify-between lg:mb-4">
-      <div className="text-[17px] font-extrabold lg:text-xl">{title}</div>
+      <div className="flex items-center gap-2 text-[17px] font-extrabold lg:text-xl">
+        {title}
+        {tag && <span className="rounded-md bg-[#f59e0b]/15 px-2 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">{tag}</span>}
+      </div>
       <Link href={href} className="text-[13.5px] font-semibold text-primary-soft">{link}</Link>
     </div>
   );

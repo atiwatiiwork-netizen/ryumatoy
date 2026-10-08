@@ -261,6 +261,11 @@ export function shopLines(db: Database, uid: string, f: { makerId?: string | nul
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
+/** ไลน์ล่าสุด N ไลน์สำหรับหน้าแรก (เรียงตามวันที่สร้าง ใหม่สุดก่อน — shopLines เรียงให้แล้ว) */
+export const homeLines = (db: Database, uid: string, n = 3): ProductLine[] => shopLines(db, uid).slice(0, n);
+/** ป้าย "ใหม่" = สร้างภายใน 7 วัน */
+export const isNewLine = (l: ProductLine, now = Date.now()): boolean => now - new Date(l.created_at).getTime() < 7 * 86_400_000;
+
 // ── ป้ายบนรูป ─────────────────────────────────────────────────────────────────
 
 /** มีพิกัดครบและอยู่ในกรอบรูป */
