@@ -301,15 +301,22 @@ export function pinLabelWidth(text: string): number {
  *   (เดิมเทียบแค่ห่างกันกี่ % — ป้ายชื่อยาวสองอันห่างกัน 20% ยังทับกันบนจอมือถือ · เจอตอนเทสต์ 2026-10-07)
  *   ไม่รู้ขนาด = ถือว่าห่างกันไม่ถึง 20% คือชน (ค่าประมาณสำหรับเทสต์/ก่อนรูปโหลด)
  */
+/** ชั้นความสูงของป้าย (px ของเส้นชี้) — 3 ชั้น: หัวติดกัน 3 ตัว (เช่น 5 คนยืนเรียงกลางรูป) ยังไม่ทับกัน
+ *  (เจ้าของ 2026-10-08: "กล่องข้อความเบียดกัน" — เดิมมี 2 ชั้น ป้ายที่ 3 ต้องเลือกทับอันใดอันหนึ่ง) */
+export const PIN_STEMS = [PIN_STEM_SHORT, PIN_STEM_TALL, 62] as const;
 export function layoutPins(pins: { id: string; x: number; y: number; w?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
   const compact = pins.length > PIN_COMPACT_OVER;
   const sorted = [...pins].sort((a, b) => a.x - b.x || a.y - b.y);
   const out: PinPlacement[] = [];
   const W = widthPx && widthPx > 0 ? widthPx : 0;
+  const H = heightPx && heightPx > 0 ? heightPx : 0;
   const taken: Record<'up' | 'down', { x: number; lo: number; hi: number; stem: number }[]> = { up: [], down: [] };
   for (const p of sorted) {
-    const below = heightPx && heightPx > 0 ? (p.y / 100) * heightPx < PIN_STEM_TALL + PIN_LABEL_ROOM : p.y < 22;
+    const roomUp = H ? (p.y / 100) * H : Infinity;
+    const roomDown = H ? ((100 - p.y) / 100) * H : Infinity;
+    const below = H ? roomUp < PIN_STEM_TALL + PIN_LABEL_ROOM : p.y < 22;
     const side = below ? 'down' : 'up';
+    const room = below ? roomDown : roomUp;
     const X = (p.x / 100) * W;
     const w = p.w ?? 0;
     // ชิดขอบ: รู้ขนาด = ป้ายกลางล้นขอบรูปไหม · ไม่รู้ = ใช้ % เดิม
@@ -323,7 +330,10 @@ export function layoutPins(pins: { id: string; x: number; y: number; w?: number 
       .reduce((s, q) => s + (W && w
         ? Math.max(0, Math.min(hi, q.hi) - Math.max(lo, q.lo) + 6)  // พิกเซลที่ทับกัน (+ช่องไฟ 6px)
         : Math.max(0, 20 - Math.abs(p.x - q.x))), 0);                // ไม่รู้ขนาด: ใกล้กว่า 20% = ชน
-    const stem = overlap(PIN_STEM_TALL) < overlap(PIN_STEM_SHORT) ? PIN_STEM_TALL : PIN_STEM_SHORT;
+    // ชั้นที่ใช้ได้ = เส้น+ป้ายยังอยู่ในรูป (ชั้นแรกใช้ได้เสมอ) → เลือกชั้นต่ำสุดที่ไม่ชนเลย ไม่มีเลย = ชั้นที่ชนน้อยสุด
+    const usable = PIN_STEMS.filter((s, i) => i === 0 || s + PIN_LABEL_ROOM <= room);
+    const free = usable.find((s) => overlap(s) === 0);
+    const stem = free ?? usable.reduce((best, s) => (overlap(s) < overlap(best) ? s : best), usable[0]);
     taken[side].push({ x: p.x, lo, hi, stem });
     out.push({ id: p.id, x: p.x, y: p.y, stem, align, below, compact });
   }

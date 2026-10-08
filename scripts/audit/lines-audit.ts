@@ -13,7 +13,7 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, homeLines, isNewLine, type LineCtx,
+  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx,
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
@@ -286,7 +286,13 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
   {
     const pins = layoutPins([{ id: 'a', x: 30, y: 50 }, { id: 'b', x: 40, y: 50 }, { id: 'c', x: 45, y: 50 }, { id: 'd', x: 90, y: 50 }, { id: 'e', x: 5, y: 10 }]);
     const by = Object.fromEntries(pins.map((p) => [p.id, p]));
-    ok('P1 ป้ายติดกัน (ฝั่งเดียวกัน) สลับเส้นสั้น/ยาว กันชน', by.a.stem === PIN_STEM_SHORT && by.b.stem === PIN_STEM_TALL && by.c.stem === PIN_STEM_SHORT, pins);
+    ok('P1 ป้ายติดกัน 3 อัน (ฝั่งเดียวกัน) → 3 ชั้น สั้น/ยาว/ยาวสุด ไม่ทับกันเลย', by.a.stem === PIN_STEM_SHORT && by.b.stem === PIN_STEM_TALL && by.c.stem === PIN_STEMS[2], pins);
+    // เคสจริง 2026-10-08: 5 หัวติดกันกลางรูป ชื่อเต็ม "Xxx Black Suite" (รูป 580px) → ต้องไม่มีคู่ไหนทับกันในชั้นเดียวกัน
+    const five = layoutPins(['Feitan', 'Machi', 'Kuroro', 'Pakunoda', 'Shalnark'].map((n, i) => ({ id: n, x: 12 + i * 19, y: 42, w: pinLabelWidth(`${n} Black Suite`) })), 380, 580);
+    const clash = five.some((a) => five.some((b) => a.id < b.id && a.stem === b.stem && Math.abs(a.x - b.x) / 100 * 580 < (pinLabelWidth(`${a.id} Black Suite`) + pinLabelWidth(`${b.id} Black Suite`)) / 2));
+    ok('P1b 5 ป้ายชื่อยาวติดกัน → กระจาย 3 ชั้น ไม่มีคู่ไหนทับกัน', !clash, five);
+    const flatRoom = layoutPins([{ id: 'a', x: 30, y: 30, w: 80 }, { id: 'b', x: 36, y: 30, w: 80 }, { id: 'c', x: 42, y: 30, w: 80 }], 300, 400);
+    ok('P1c ชั้นที่ 3 ใช้ได้เฉพาะเมื่อมีที่พอเหนือหัว (รูปเตี้ย 30% ของ 300px = 90px → ไม่พอ 62+34) → ไม่เกินชั้น 2', flatRoom.every((p) => p.stem <= PIN_STEM_TALL), flatRoom);
     ok('P2 ห่างกัน → เส้นสั้นปกติ · ชิดขอบขวา/ซ้ายไม่ล้นรูป · ใกล้ขอบบนกลับหัวลงล่าง', by.d.stem === PIN_STEM_SHORT && by.d.align === 'right' && by.e.align === 'left' && by.e.below === true && by.a.below === false);
     ok('P3 ≤6 ป้าย = โหมดเต็ม · 7 ป้าย = โหมดย่อ (เลขอย่างเดียว)', !pins[0].compact && layoutPins(Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, x: i * 14, y: 50 }))).every((p) => p.compact));
     const flat = layoutPins([{ id: 'q', x: 50, y: 40 }], 120);  // รูปเตี้ย 120px: 40% = 48px ไม่พอเส้นยาว+ป้าย

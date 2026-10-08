@@ -15,7 +15,7 @@ import { TONE_HEX } from './lineUi';
 export interface PosterPin { id: string; no: number; x: number; y: number; tone: LineTone; text: string }
 
 export function LinePoster({
-  src, pins, onPinTap, onPick, pending, editing, highlightId,
+  src, pins, onPinTap, onPick, pending, editing, highlightId, numbersOnly,
 }: {
   src: string;
   pins: PosterPin[];
@@ -26,6 +26,8 @@ export function LinePoster({
   /** โหมดแก้ไข: ป้ายไม่รับการแตะ (แตะทะลุไปที่รูปเพื่อวางใหม่ได้) */
   editing?: boolean;
   highlightId?: string | null;
+  /** โชว์แค่วงเลขเสมอ (หน้าแอดมินวางป้าย — ชื่อเต็มยาว ซ้อนกันเละ · ชื่ออยู่ในรายการข้างๆ อยู่แล้ว) */
+  numbersOnly?: boolean;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -41,7 +43,8 @@ export function LinePoster({
     return () => ro.disconnect();
   }, [src]);
 
-  const placed = layoutPins(pins.map((p) => ({ id: p.id, x: p.x, y: p.y, w: pinLabelWidth(p.text) })), size.h || undefined, size.w || undefined);
+  const placed = layoutPins(pins.map((p) => ({ id: p.id, x: p.x, y: p.y, w: pinLabelWidth(p.text) })), size.h || undefined, size.w || undefined)
+    .map((pl) => (numbersOnly ? { ...pl, compact: true } : pl));
   const byId = new Map(pins.map((p) => [p.id, p]));
   const pick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (!onPick) return;

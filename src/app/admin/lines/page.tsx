@@ -363,7 +363,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
             {line.cover_url ? (
               <>
                 <div className="relative">
-                  <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
+                  <LinePoster src={line.cover_url} pins={posterPins} editing numbersOnly onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
                   {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
                   {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
                 </div>
