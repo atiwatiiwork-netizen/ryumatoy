@@ -9,15 +9,17 @@ import { store } from '@/data/store';
 import { supabase } from '@/data/supabaseClient';
 import { persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
+import { applyWatermark } from '@/lib/watermark';
 import { composeCollage } from '@/lib/collage';
-import { sendPush, subsForLine, subsAll, pushEnabled } from '@/lib/push';
+import { sendPush, subsForLine, subsAll, subsForNewProduct, pushEnabled } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
-import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity } from '@/data/mutations';
+import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity, createProductsIntoLine } from '@/data/mutations';
 import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
 import { availableFor } from '@/domain/services/reservations';
-import { preorderOpenForOrder } from '@/domain/services/catalog';
+import { preorderOpenForOrder, seriesForFranchise } from '@/domain/services/catalog';
+import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { baht } from '@/lib/theme';
-import type { Database, LineManualState, LineMember, Product, ProductLine, ProductStatus } from '@/domain/entities';
+import type { Database, LineManualState, LineMember, Product, ProductLine, ProductStatus, WcfType } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { LinePoster, type PosterPin } from '@/components/lines/LinePoster';
@@ -504,8 +506,9 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
                   onPatch={(fn) => patchM(m.id, fn)} onMove={(d) => move(i, d)} onRemove={() => removeMember(m)} onImage={(f) => void setMemberImage(m.id, f)}
                 />
               ))}
-              {line.members.length === 0 && <div className="rounded-card border border-dashed border-subtle p-5 text-center text-[12.5px] text-ink-faint">ยังไม่มีตัวในไลน์ — ติ๊กจากในระบบด้านล่าง หรือ Add ตัวที่ยังไม่มีในระบบ</div>}
+              {line.members.length === 0 && <div className="rounded-card border border-dashed border-subtle p-5 text-center text-[12.5px] text-ink-faint">ยังไม่มีตัวในไลน์ — ลงสินค้าพรีใหม่ / ติ๊กจากในระบบ / Add ตัวที่ยังไม่มีในระบบ ได้ด้านล่าง</div>}
             </div>
+            <LineProductAdd db={db} dispatch={dispatch} flash={flash} uid={uid} line={line} canWrite={canWrite} />
             <AddCustomMember onAdd={(name, state) => patch((l) => ({ ...l, members: [...l.members, { id: genId('lm'), name, product_ids: [], manual_state: state || undefined }] }))} canWrite={canWrite} />
             <SystemPicker db={db} line={line} canWrite={canWrite} onPatch={patch} onLinked={(p) => void announceItem(p)} />
           </div>
@@ -641,6 +644,250 @@ function AddCustomMember({ onAdd, canWrite }: { onAdd: (name: string, state: '' 
         </select>
         <button onClick={add} disabled={!canWrite || !name.trim()} className="rounded-lg bg-cta px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-40">เพิ่มตัว</button>
       </div>
+    </div>
+  );
+}
+
+/** 🆕 ลงสินค้าพรีใหม่เข้าระบบ + เข้าไลน์นี้ ในขั้นเดียว (เจ้าของ 2026-10-08: "ไม่งั้นต้องทำงาน 2 ต่อ เพิ่มสินค้าพรี แล้วค่อยมาทำไลน์")
+ *  · ค่าย = ค่ายของไลน์ (ล็อก) · เรื่อง = เรื่องของไลน์ (ไลน์ที่ยังไม่ระบุเรื่อง → เลือกตรงนี้ แล้วตั้งให้ไลน์ด้วย)
+ *  · สูตรเดียวกับหน้า "สินค้า": หยวน → ราคา (priceFromYuan) · มัดจำตามชนิด (depositFor) · ชื่อเต็ม = "ตัวละคร - ซีรีย์"
+ *  · แถวผูกกับ "ตัวที่ Add เองไว้" ได้ (ชิป) → ป้ายที่วางไว้อยู่ที่เดิม ตัวนั้นกลายเป็นสินค้าจริง
+ *  · เซฟ = mutation เดียว (createProductsIntoLine) → รอ flush → ค่อย push ครั้งเดียว (ไลน์เปิดอยู่ = wording ไลน์ · ไม่งั้น = wording สินค้าใหม่ปกติ)
+ *  · ร่างอยู่ใน sessionStorage รายไลน์ (คอมโพเนนต์ถูกถอดตอนสลับ "ดูแบบลูกค้า" — ร่างต้องไม่หาย · DNA react-state) */
+interface PRow { key: string; memberId?: string; image?: string; name: string; cost_yuan: string; price: string }
+interface PShared { franchise_id: string; series_id: string; wcf_type: WcfType; deposit: string; eta_q: string; eta_year: string }
+const PADD_YEARS = Array.from({ length: 5 }, (_, i) => String(new Date().getFullYear() + i));
+const nameFromFile = (n: string) => n.replace(/\.[^.]+$/, '').trim();
+const loadPadd = (key: string): { shared?: PShared; rows?: PRow[] } => { try { const s = readStore('session', key); return s ? JSON.parse(s) : {}; } catch { return {}; } };
+const charKey = (s: string) => s.trim().toLowerCase();
+
+function LineProductAdd({ db, dispatch, flash, uid, line, canWrite }: { db: Database; dispatch: Dispatch; flash: Flash; uid: string; line: ProductLine; canWrite: boolean }) {
+  const key = `ryuma_line_padd_${line.id}`;
+  const st = db.settings;
+  const [open, setOpen] = useState(() => (loadPadd(key).rows?.length ?? 0) > 0);
+  const [shared, setShared] = useState<PShared>(() => loadPadd(key).shared ?? { franchise_id: '', series_id: '', wcf_type: 'wcf', deposit: String(depositFor(st, 'wcf')), eta_q: '', eta_year: '' });
+  const [rows, setRows] = useState<PRow[]>(() => loadPadd(key).rows ?? []);
+  const [busy, setBusy] = useState<string | null>(null); // key ของแถวที่กำลังอัปรูป | 'multi' | 'save'
+  useEffect(() => { if (rows.length || open) writeStore('session', key, JSON.stringify({ shared, rows })); }, [shared, rows, open, key]);
+
+  const makerName = db.manufacturers.find((m) => m.id === line.maker_id)?.name ?? '—';
+  const frId = line.franchise_id || shared.franchise_id;
+  const frName = db.franchises.find((f) => f.id === frId)?.name;
+  const seriesOpts = seriesForFranchise(db, frId, line.maker_id);
+  const deposit = Number(shared.deposit) || 0;
+  const rowPrice = (r: PRow) => (r.price !== '' ? Number(r.price) || 0 : r.cost_yuan ? priceFromYuan(st, Number(r.cost_yuan) || 0) : 0);
+  // ชื่อซ้ำกับสินค้าของค่ายนี้ที่มีอยู่แล้ว → เตือน (ตัวเดียวกันควร "ติ๊กจากในระบบ" ไม่ใช่ลงซ้ำ)
+  const dupOf = (name: string) => (charKey(name) ? db.products.find((p) => p.manufacturer_id === line.maker_id && charKey(p.character_name?.trim() || p.series_name) === charKey(name)) : undefined);
+  // ตัวที่ Add เองไว้ (ยังไม่มีสินค้า) → ลงสินค้าให้ตัวนั้นได้เลย ป้ายอยู่ที่เดิม
+  const unlinked = line.members.filter((m) => memberProducts(db, m).all.length === 0);
+  const liveLine = linesPublicEnabled(db) && line.active && !!line.cover_url; // หลังลงแล้วไลน์นี้ลูกค้าเห็นแน่ (ตัวใหม่เป็นตัวที่มองเห็นเสมอ)
+
+  const addRow = (over: Partial<PRow> = {}) => setRows((rs) => [...rs, { key: genId('pr'), name: '', cost_yuan: '', price: '', ...over }]);
+  const setRow = (k: string, fn: (r: PRow) => PRow) => setRows((rs) => rs.map((r) => (r.key === k ? fn(r) : r)));
+  const toggleMember = (m: LineMember) => {
+    if (rows.some((r) => r.memberId === m.id)) setRows((rs) => rs.filter((r) => r.memberId !== m.id));
+    else addRow({ memberId: m.id, name: m.name, image: m.image_url });
+  };
+  const setType = (t: WcfType) => setShared((s) => ({ ...s, wcf_type: t, deposit: String(depositFor(st, t)) }));
+  const setImage = async (k: string, file?: File) => {
+    if (!file || !canWrite) return;
+    setBusy(k);
+    try { const url = await uploadImage(await applyWatermark(file), 'product'); setRow(k, (r) => ({ ...r, image: url })); flash('ใส่รูป + ลายน้ำแล้ว'); }
+    catch (e) { flash(`อัปโหลดรูปไม่สำเร็จ — ${e instanceof Error ? e.message : 'ลองใหม่'}`); }
+    finally { setBusy(null); }
+  };
+  const addImages = async (files?: FileList | null) => {
+    if (!files?.length || !canWrite) return;
+    setBusy('multi');
+    const out: PRow[] = [];
+    for (const f of Array.from(files)) {
+      try { out.push({ key: genId('pr'), image: await uploadImage(await applyWatermark(f), 'product'), name: nameFromFile(f.name), cost_yuan: '', price: '' }); }
+      catch (e) { flash(`อัปโหลด ${f.name} ไม่สำเร็จ — ${e instanceof Error ? e.message : 'ลองใหม่'}`); }
+    }
+    setRows((rs) => [...rs, ...out]);
+    setBusy(null);
+  };
+
+  const save = async () => {
+    if (!canWrite) return flash('ยังแก้ไม่ได้ — กำลังเช็คระบบ หรือยังไม่ได้รัน SQL v81');
+    if (busy) return;
+    if (!frId) return flash('เลือกเรื่องก่อน (ไลน์นี้ยังไม่ระบุเรื่อง)');
+    if (rows.length === 0) return flash('เพิ่มแถวสินค้าก่อน');
+    if (rows.some((r) => !r.name.trim())) return flash('กรอกชื่อตัวละครทุกแถว');
+    if (deposit <= 0) return flash('มัดจำต้องมากกว่า 0 (ออเดอร์ 0 บาทเซฟตั๋วไม่ขึ้น)');
+    for (const r of rows) {
+      const price = rowPrice(r);
+      if (!(price > 0)) return flash(`"${r.name.trim()}" ยังไม่มีราคา — กรอกหยวน หรือราคาเต็ม`);
+      if (deposit > price) return flash(`"${r.name.trim()}" มัดจำ ${baht(deposit)} มากกว่าราคาเต็ม ${baht(price)}`);
+    }
+    const names = new Set<string>();
+    for (const r of rows) { const k = charKey(r.name); if (names.has(k)) return flash(`ชื่อ "${r.name.trim()}" ซ้ำกันในชุดนี้ — ลบแถวที่ซ้ำ`); names.add(k); }
+    const dups = rows.filter((r) => dupOf(r.name));
+    if (dups.length && !window.confirm(`มีชื่อซ้ำกับสินค้าของค่ายนี้ในระบบแล้ว ${dups.length} ตัว: ${dups.slice(0, 3).map((r) => r.name.trim()).join(' · ')}\n\n• ตัวเดียวกัน → กด "ยกเลิก" แล้ว "ติ๊กจากในระบบ" แทน (กันลงซ้ำ)\n• รอบใหม่ / ตัวใหม่จริง → กด "ตกลง" ลงเป็นสินค้าใหม่`)) return;
+    const sn = seriesOpts.find((s) => s.id === shared.series_id)?.name;
+    const etaNote = shared.eta_q && shared.eta_year ? `${shared.eta_q} ${shared.eta_year}` : 'TBA';
+    const now = new Date().toISOString();
+    const entries = rows.map((r) => {
+      const character = r.name.trim();
+      const product: Product = {
+        id: genId('p'), franchise_id: frId, manufacturer_id: line.maker_id,
+        series_id: shared.series_id || undefined, series_name: sn ? `${character} - ${sn}` : character, character_name: character,
+        wcf_type: shared.wcf_type, cost_yuan: Number(r.cost_yuan) || undefined,
+        type: 'other', description: '', images: r.image ? [r.image] : [], eta_note: etaNote,
+        price_total: rowPrice(r), deposit_amount: deposit, is_stock: false, has_variants: false, status: 'open', created_at: now,
+      };
+      return { product, memberId: r.memberId };
+    });
+    const n = entries.length;
+    setBusy('save');
+    const before = store.getState();
+    const after = dispatch(createProductsIntoLine(line.id, entries));
+    if (after === before) { setBusy(null); return flash('ไม่พบไลน์นี้ในระบบแล้ว — รีเฟรชหน้าแล้วลองใหม่ (ร่างยังอยู่)'); }
+    flash(`กำลังบันทึก ${n} สินค้า…`);
+    // รอผลเซฟก่อนล้างร่างเสมอ — เซฟล้ม = ร่างอยู่ครบ ไม่ยิง push โฆษณาของที่ยังไม่มีจริง (บทเรียน BulkAdd regression #10)
+    const err = await store.flush();
+    setBusy(null);
+    if (err) return flash('บันทึกไม่สำเร็จ — ร่างยังอยู่ครบ เช็คเน็ตแล้วกด "ลงสินค้า" ใหม่ (ถ้าชื่อซ้ำระบบจะถามก่อน)');
+    removeStore('session', key);
+    setRows([]);
+    dispatch(logActivity(uid, 'line_product_add', `ลงสินค้า ${n} ตัวจากไลน์ ${line.name.trim()}: ${entries.slice(0, 3).map((e) => e.product.character_name).join(' · ')}${n > 3 ? ` และอีก ${n - 3}` : ''}`, { targetId: line.id, targetLabel: line.name.trim() }));
+    // push ครั้งเดียวต่อชุด (ไม่ใช่ N เด้ง · ไม่ซ้ำ 2 ช่อง): ไลน์เปิดให้ลูกค้าอยู่ → wording ไลน์ไป /line · ไลน์ร่าง → wording สินค้าใหม่ปกติไป /shop
+    // ตัดสินจากสภาพ "หลังเซฟ" — ไลน์ที่เพิ่งได้ตัวแรกเพิ่งนับว่าเปิดตอนนี้ ถ้าใช้ db ตอนวาดหน้าจะเงียบผิด
+    const nl = after.productLines.find((l) => l.id === line.id) ?? line;
+    const first = entries[0].product;
+    const list = entries.slice(0, 3).map((e) => e.product.character_name).join(' · ') + (n > 3 ? ` และอีก ${n - 3}` : '');
+    let pushed = '';
+    if (lineOpenToCustomers(after, nl)) {
+      if (pushEnabled(after, 'line_item')) {
+        const subs = subsForLine(after, nl);
+        sendPush(subs, n === 1
+          ? { title: '🆕 เปิดพรีใหม่', body: `${first.character_name} (${nl.name.trim()}) ได้เปิดพรีแล้ว · ${baht(first.price_total)} · มัดจำ ${baht(first.deposit_amount)}`, url: `/line/${line.id}` }
+          : { title: `🆕 เปิดพรีใหม่ ${n} รายการ`, body: `${list} (ไลน์ ${nl.name.trim()}) ได้เปิดพรีแล้ว`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+        pushed = ` · แจ้งเตือนลูกค้า ${subs.length} เครื่อง`;
+      }
+    } else if (pushEnabled(after, 'new_preorder')) {
+      const subs = subsForNewProduct(after, first);
+      sendPush(subs, n === 1
+        ? { title: '🆕 เปิดพรีใหม่', body: `${first.series_name} · ${baht(first.price_total)}`, url: `/shop/${first.id}` }
+        : { title: `🆕 เปิดพรีใหม่ ${n} รายการ`, body: list, url: '/shop?cat=preorder' }, dispatch).catch(() => {});
+      pushed = ` · แจ้งเตือน "เปิดพรีใหม่" ${subs.length} เครื่อง`;
+    }
+    flash(`ลงสินค้า ${n} ตัวเข้าไลน์แล้ว 🎉${pushed} — แตะรูปหมู่เพื่อวางป้าย`);
+  };
+
+  return (
+    <div className="mb-4 rounded-xl border border-[#16a34a]/40 bg-[#16a34a]/5 p-3">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 text-left">
+        <span className="text-[12.5px] font-extrabold">🆕 ลงสินค้าพรีใหม่ + เข้าไลน์นี้</span>
+        {rows.length > 0 && <span className="rounded-full bg-[#16a34a]/20 px-2 py-0.5 text-[10.5px] font-bold text-[#4ade80]">ร่าง {rows.length} ตัว</span>}
+        <span className="ml-auto text-[11px] text-ink-faint">{open ? '▲ ซ่อน' : '▼ เปิด'}</span>
+      </button>
+      {!open && <div className="mt-1 text-[11.5px] text-ink-faint">ขั้นเดียวจบ: สินค้าเข้าระบบ (เปิดพรี) + เป็นตัวในไลน์ทันที — ไม่ต้องไปหน้า "สินค้า" ก่อน</div>}
+      {open && (
+        <div className="mt-2.5">
+          <div className="text-[11.5px] text-ink-muted2">ค่าย <b className="text-ink">{makerName}</b>{line.franchise_id && frName && <> · เรื่อง <b className="text-ink">{frName}</b></>} · พรีออเดอร์ · สถานะ "เปิดพรี" · ลูกค้าสั่งได้ทันที</div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {!line.franchise_id && (
+              <label className="col-span-2"><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">เรื่อง <span className="font-normal text-[#fbbf24]">· ไลน์นี้ยังไม่ระบุเรื่อง — จะตั้งให้ไลน์ด้วย</span></span>
+                <select className={inputCls} value={shared.franchise_id} onChange={(e) => setShared((s) => ({ ...s, franchise_id: e.target.value, series_id: '' }))}>
+                  <option value="">— เลือกเรื่อง —</option>
+                  {db.franchises.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+              </label>
+            )}
+            {seriesOpts.length > 0 && (
+              <label><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">ซีรีย์ (ไม่บังคับ)</span>
+                <select className={inputCls} value={shared.series_id} onChange={(e) => setShared((s) => ({ ...s, series_id: e.target.value }))}>
+                  <option value="">ไม่ระบุ</option>
+                  {seriesOpts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+            )}
+            <label><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">ชนิด</span>
+              <select className={inputCls} value={shared.wcf_type} onChange={(e) => setType(e.target.value as WcfType)}>
+                <option value="wcf">WCF (มัดจำ {baht(st.deposit_wcf)})</option>
+                <option value="mega_wcf">Mega WCF (มัดจำ {baht(st.deposit_mega)})</option>
+              </select>
+            </label>
+            <label><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">มัดจำ (฿ ทุกตัวในชุด)</span>
+              <input className={inputCls} inputMode="numeric" value={shared.deposit} onChange={(e) => setShared((s) => ({ ...s, deposit: e.target.value.replace(/[^\d]/g, '') }))} />
+            </label>
+            <label><span className="mb-1 block text-[11.5px] font-semibold text-ink-muted">ETA (ไม่บังคับ = TBA)</span>
+              <div className="flex gap-1.5">
+                <select className={inputCls} value={shared.eta_q} onChange={(e) => setShared((s) => ({ ...s, eta_q: e.target.value }))}>
+                  <option value="">Q?</option>{['Q1', 'Q2', 'Q3', 'Q4'].map((q) => <option key={q} value={q}>{q}</option>)}
+                </select>
+                <select className={inputCls} value={shared.eta_year} onChange={(e) => setShared((s) => ({ ...s, eta_year: e.target.value }))}>
+                  <option value="">ปี</option>{PADD_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </label>
+          </div>
+
+          {unlinked.length > 0 && (
+            <div className="mt-3">
+              <div className="text-[11.5px] font-semibold text-ink-muted">ลงสินค้าให้ตัวที่ Add ไว้แล้ว (ป้ายที่วางไว้อยู่ที่เดิม) — แตะเลือก:</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {unlinked.map((m) => {
+                  const on = rows.some((r) => r.memberId === m.id);
+                  return (
+                    <button key={m.id} onClick={() => toggleMember(m)} className={cx('rounded-full border px-2.5 py-1 text-[11.5px] font-semibold', on ? 'border-[#16a34a]/60 bg-[#16a34a]/20 text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}>
+                      {on ? '✓ ' : ''}{line.members.indexOf(m) + 1}. {m.name || 'ไม่มีชื่อ'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-col gap-2">
+            {rows.map((r, i) => {
+              const price = rowPrice(r);
+              const auto = r.cost_yuan ? priceFromYuan(st, Number(r.cost_yuan) || 0) : 0;
+              const bound = r.memberId ? line.members.findIndex((m) => m.id === r.memberId) : -1;
+              const dup = dupOf(r.name);
+              return (
+                <div key={r.key} className="rounded-lg border border-subtle bg-surface-3 p-2">
+                  <div className="flex items-center gap-2">
+                    <label className={cx('relative h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-subtle bg-stripe', busy === r.key && 'animate-pulse', !canWrite && 'pointer-events-none opacity-50')} title="รูปสินค้า (ใส่ลายน้ำให้อัตโนมัติ)">
+                      {r.image ? <img src={r.image} alt="" className="h-full w-full object-cover" /> : <span className="grid h-full place-items-center text-ink-faint"><Icon name="camera" size={14} /></span>}
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => { void setImage(r.key, e.target.files?.[0]); e.target.value = ''; }} />
+                    </label>
+                    <input className={cx(inputCls, '!py-1.5')} value={r.name} onChange={(e) => setRow(r.key, (x) => ({ ...x, name: e.target.value }))} placeholder={`ชื่อตัวละคร ${i + 1}`} />
+                    <button onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} className="shrink-0 px-1 text-ink-faint" aria-label="ลบแถว"><Icon name="x" size={14} /></button>
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-2 pl-12">
+                    <input className={cx(inputCls, '!py-1.5')} inputMode="decimal" value={r.cost_yuan} onChange={(e) => setRow(r.key, (x) => ({ ...x, cost_yuan: e.target.value.replace(/[^\d.]/g, '') }))} placeholder="ต้นทุน ¥" />
+                    <input className={cx(inputCls, '!py-1.5')} inputMode="numeric" value={r.price} onChange={(e) => setRow(r.key, (x) => ({ ...x, price: e.target.value.replace(/[^\d]/g, '') }))} placeholder={auto ? `฿${auto.toLocaleString()} (จากหยวน)` : 'ราคาเต็ม ฿'} />
+                  </div>
+                  <div className="mt-1 pl-12 text-[11px] text-ink-faint">
+                    {price > 0 ? <>ขาย <b className="text-ink">{baht(price)}</b> · มัดจำ {baht(deposit)}{deposit > price && <span className="text-[#f87171]"> · มัดจำมากกว่าราคา!</span>}</> : 'กรอกหยวน (คิดราคาให้) หรือใส่ราคาเต็มเอง'}
+                    {bound >= 0 && <span className="text-[#4ade80]"> · ผูกกับตัวที่ {bound + 1} (ป้ายเดิมอยู่ที่เดิม)</span>}
+                    {r.memberId && bound < 0 && <span className="text-[#fbbf24]"> · ตัวที่ผูกไว้ถูกลบแล้ว → จะเพิ่มเป็นตัวใหม่</span>}
+                    {dup && <span className="text-[#fbbf24]"> · ⚠ "{dup.series_name}" มีในระบบแล้ว — ตัวเดียวกันให้ติ๊กจากในระบบแทน</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            <button onClick={() => addRow()} disabled={!canWrite} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold disabled:opacity-40">+ แถวใหม่</button>
+            <label className={cx('cursor-pointer rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold', (!canWrite || busy === 'multi') && 'pointer-events-none opacity-50')}>
+              {busy === 'multi' ? 'กำลังอัปโหลด…' : '🖼 เลือกรูปหลายรูป (1 รูป = 1 ตัว)'}
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { void addImages(e.target.files); e.target.value = ''; }} />
+            </label>
+          </div>
+          <button onClick={() => void save()} disabled={!canWrite || !!busy || rows.length === 0} className="mt-2.5 w-full rounded-lg bg-cta px-4 py-2.5 text-[13px] font-bold text-white disabled:opacity-40">
+            {busy === 'save' ? 'กำลังบันทึก…' : `ลงสินค้า ${rows.length} ตัว + เข้าไลน์`}
+          </button>
+          <div className="mt-1.5 text-[11px] text-ink-faint">
+            {liveLine
+              ? '🔔 ไลน์นี้ลูกค้าเห็นอยู่ → ลงแล้วแจ้งเตือนอัตโนมัติ "ชื่อ (ไลน์) ได้เปิดพรีแล้ว" (ตามสวิตช์ Push Control)'
+              : 'ไลน์นี้ลูกค้ายังไม่เห็น → สินค้าขึ้นในช็อปตามปกติ + แจ้งเตือน "เปิดพรีใหม่" ตามสวิตช์ Push Control'}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

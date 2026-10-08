@@ -2573,6 +2573,32 @@ export const setLinesPublic = (enabled: boolean) => (db: Database): Database => 
   appConfig: [{ key: LINES_PUBLIC_KEY, value: { enabled, changed_at: new Date().toISOString() } }, ...db.appConfig.filter((c) => c.key !== LINES_PUBLIC_KEY)],
 });
 
+/** ลงสินค้าพรีใหม่ "จากในไลน์" (เจ้าของ 2026-10-08: ทำไลน์ + แอดสินค้าเข้าระบบในขั้นเดียว ไม่ต้องทำงาน 2 ต่อ)
+ *  mutation เดียว = สินค้าเข้าระบบ + เข้าไลน์พร้อมกัน (เซฟทีเดียว ไม่มีจังหวะที่สินค้าเกิดแต่ไลน์ยังไม่รู้จัก)
+ *  · entry.memberId = ตัวที่ Add เองไว้ก่อน (เช่น "หาของ") → ผูกสินค้าเข้าตัวนั้น ป้ายที่วางไว้อยู่ที่เดิม · manual_state ถูกล้าง (สถานะคำนวณจากสินค้าแล้ว)
+ *  · ไม่มี memberId / หาไม่เจอ → ต่อท้ายเป็นตัวใหม่ ชื่อ = ชื่อตัวละคร
+ *  · ไลน์ยังไม่ระบุเรื่อง → ตั้งเป็นเรื่องของสินค้าตัวแรก (ตัวกรอง /lines + การปิดเสียงเรื่องของลูกค้าจะได้ตรงกับของจริง)
+ *  · ไม่เจอไลน์ = ไม่ทำอะไรเลย (ไม่ปล่อยสินค้าเกิดลอยๆ นอกไลน์โดยที่หน้าจอคิดว่าเข้าไลน์แล้ว) */
+export const createProductsIntoLine = (lineId: string, entries: { product: Product; memberId?: string }[]) => (db: Database): Database => {
+  const line = db.productLines.find((l) => l.id === lineId);
+  if (!line || entries.length === 0) return db;
+  const seen = new Set(db.products.map((p) => p.id));
+  const fresh = entries.filter((e) => !seen.has(e.product.id) && seen.add(e.product.id)); // id ซ้ำในชุดเดียวกัน/กับระบบ = ข้าม (ไม่ทับของเก่า)
+  if (fresh.length === 0) return db;
+  let members = line.members.map((m) => ({ ...m, product_ids: [...m.product_ids] }));
+  for (const e of fresh) {
+    const at = e.memberId ? members.findIndex((m) => m.id === e.memberId) : -1;
+    if (at >= 0) {
+      const m = members[at];
+      members[at] = { ...m, manual_state: undefined, product_ids: m.product_ids.includes(e.product.id) ? m.product_ids : [...m.product_ids, e.product.id] };
+    } else {
+      members = [...members, { id: id('lm'), name: e.product.character_name?.trim() || e.product.series_name, product_ids: [e.product.id] }];
+    }
+  }
+  const next: Database = { ...db, products: [...fresh.map((e) => e.product), ...db.products] };
+  return upsertProductLine({ ...line, franchise_id: line.franchise_id || fresh[0].product.franchise_id, members })(next);
+};
+
 // ── โหมดทดลอง (ยังไม่รัน v60) ───────────────────────────────────────────────
 /** บิดแบบ local — ใช้ตอนยังไม่มี RPC เท่านั้น (สูตรต้องตรงกับ migration v60). */
 export const placeBidLocal = (auctionId: string, userId: string, amount: number) => (db: Database): Database => {

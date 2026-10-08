@@ -17,7 +17,7 @@ import {
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
-  setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder,
+  setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder, createProductsIntoLine,
 } from '../../src/data/mutations';
 
 let pass = 0, fail = 0;
@@ -432,6 +432,49 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
       { id: 'b3', maker_id: MK, title: 'c', poster_url: 'p.jpg', status: 'closed', created_at: '' },
     ] as Database['boards'] });
     ok('H4 openBoards: เฉพาะกระดานเปิดที่มีโปสเตอร์ (แท็บ "ปิดพรี" + แถบหน้าแรกใช้ชุดเดียวกัน)', openBoards(boards).map((b) => b.id).join() === 'b1');
+  }
+
+  // ── 15. ลงสินค้าพรีใหม่ "จากในไลน์" (เจ้าของ 2026-10-08: ทำไลน์ + แอดสินค้าเข้าระบบในขั้นเดียว) ───────────────
+  {
+    const NP = (id: string, over: Partial<Product> = {}) => P(id, { character_name: `C-${id}`, series_name: `C-${id} - Vol.1`, type: 'other', ...over });
+    const line = L([M('custom', [], { manual_state: 'sourcing', pin_x: 40, pin_y: 30, image_url: 'm.jpg' }), M('b', ['pb'])]);
+    const db = setLinesPublic(true)(base({ products: [P('pb')], productLines: [line] }));
+    const r1 = createProductsIntoLine('L1', [{ product: NP('n1') }, { product: NP('n2'), memberId: 'custom' }])(db);
+    const l1 = r1.productLines[0];
+    ok('I1 ตัวใหม่: สินค้าเข้าระบบ (หน้าสุด) + ต่อท้ายเป็นตัวในไลน์ ชื่อ = ชื่อตัวละคร · product_ids = [id]',
+      r1.products[0].id === 'n1' && r1.products.some((p) => p.id === 'n2') && l1.members.length === 3 && l1.members[2].name === 'C-n1' && l1.members[2].product_ids.join() === 'n1', l1.members);
+    const cm = l1.members[0];
+    ok('I2 ผูกกับตัวที่ Add ไว้: ป้าย/รูปอยู่ที่เดิม · manual_state ถูกล้าง (ไม่มีคีย์ค้าง) · product_ids = [n2]',
+      cm.pin_x === 40 && cm.pin_y === 30 && cm.image_url === 'm.jpg' && !('manual_state' in cm) && cm.product_ids.join() === 'n2', cm);
+    const s2 = lineMemberState(r1, l1, cm, { uid: 'uA' });
+    ok('I3 ตัวที่ผูกแล้วอ่านสถานะจากสินค้า: เปิดพรี → ป้าย Pre-Order (ไม่ใช่ "หาของ" ที่ตั้งเองไว้)', s2.kind === 'preorder' && s2.pinLabel === 'Pre-Order' && s2.visible, s2);
+    const inLines = productsInVisibleLines(r1, 'uA');
+    ok('I4 updated_at ถูกตั้ง · ไลน์ยังเปิดให้ลูกค้า · สินค้าใหม่ถูกยุบเข้าไลน์ในช็อป', !!l1.updated_at && lineOpenToCustomers(r1, l1) && inLines.has('n1') && inLines.has('n2'));
+    const r2 = createProductsIntoLine('L1', [{ product: NP('n3'), memberId: 'ghost' }])(db);
+    ok('I5 memberId ที่ไม่มีแล้ว → เพิ่มเป็นตัวใหม่ (สินค้าไม่หลุดจากไลน์)',
+      r2.productLines[0].members.length === 3 && r2.productLines[0].members[2].product_ids.join() === 'n3' && r2.products[0].id === 'n3');
+    ok('I6 ไม่เจอไลน์ = db เดิมเป๊ะ (ไม่ปล่อยสินค้าเกิดลอยๆ นอกไลน์)', createProductsIntoLine('nope', [{ product: NP('n4') }])(db) === db);
+    const r4 = createProductsIntoLine('L1', [{ product: NP('pb', { price_total: 1 }) }, { product: NP('n5') }, { product: NP('n5', { price_total: 1 }) }])(db);
+    ok('I7 id ซ้ำ (กับในระบบ / ในชุดเดียวกัน) ถูกข้าม: ของเก่าไม่ถูกทับ · n5 เข้าครั้งเดียว · ไม่มีตัวซ้ำ',
+      r4.products.find((p) => p.id === 'pb')!.price_total === 2000 && r4.products.filter((p) => p.id === 'n5').length === 1 && r4.products.find((p) => p.id === 'n5')!.price_total === 2000
+      && r4.productLines[0].members.filter((m) => m.product_ids.includes('n5')).length === 1 && r4.productLines[0].members.length === 3, r4.productLines[0].members);
+    const noFr = base({ productLines: [L([], { franchise_id: null })] });
+    ok('I8 ไลน์ยังไม่ระบุเรื่อง → ตั้งเป็นเรื่องของสินค้าตัวแรก', createProductsIntoLine('L1', [{ product: NP('n6', { franchise_id: 'f-other' }) }])(noFr).productLines[0].franchise_id === 'f-other');
+    ok('I9 ไลน์ที่มีเรื่องอยู่แล้ว → เรื่องเดิมคงอยู่', createProductsIntoLine('L1', [{ product: NP('n7', { franchise_id: 'f-other' }) }])(db).productLines[0].franchise_id === FR);
+    const row = cleanLineRow(l1);
+    ok('I10 แถวที่เขียนลง DB: ตัวใหม่มีแค่ id/name/product_ids · ตัวที่ผูกไม่มี manual_state ค้าง',
+      Object.keys(row.members[2]).sort().join() === 'id,name,product_ids' && !('manual_state' in row.members[0]), row.members);
+    ok('I11 entries ว่าง = db เดิม', createProductsIntoLine('L1', [])(db) === db);
+    ok('I12 ติ๊กจากในระบบเห็นว่าผูกแล้ว: memberProducts ของตัวใหม่ = สินค้าที่เพิ่งลง', memberProducts(r1, l1.members[2]).linked.map((p) => p.id).join() === 'n1');
+    // ชุดเดียวกันหลายตัว ผูกตัว Add ไว้ 2 ตัว + ตัวใหม่ 1 → ลำดับเดิมไม่สลับ ตัวใหม่ต่อท้าย
+    const two = setLinesPublic(true)(base({ productLines: [L([M('x', [], { manual_state: 'preorder', pin_x: 10, pin_y: 10 }), M('y', [], { manual_state: 'sourcing' })])] }));
+    const r5 = createProductsIntoLine('L1', [{ product: NP('a1'), memberId: 'y' }, { product: NP('a2') }, { product: NP('a3'), memberId: 'x' }])(two);
+    const ms = r5.productLines[0].members;
+    ok('I13 หลายตัวในชุดเดียว: ลำดับตัวเดิมคงที่ (x,y) · ตัวใหม่ต่อท้าย · ผูกถูกตัว', ms.map((m) => `${m.id}:${m.product_ids.join('+')}`).join() === 'x:a3,y:a1' + `,${ms[2].id}:a2` && ms[2].name === 'C-a2', ms);
+    const dark = setLinesPublic(true)(base({ productLines: [L([M('z', [])])] })); // ตัวเดียว ยังไม่ตั้งสถานะ = ลูกค้าไม่เห็นตัว → ไลน์ยังไม่นับว่าเปิด
+    const lit = createProductsIntoLine('L1', [{ product: NP('b1'), memberId: 'z' }])(dark);
+    ok('I14 ไลน์ที่ยังไม่มีตัวที่มองเห็น → หลังลงสินค้า "เปิดให้ลูกค้า" ทันที (push ต้องตัดสินจากสภาพหลังเซฟ ไม่ใช่ตอนวาดหน้า)',
+      !lineOpenToCustomers(dark, dark.productLines[0]) && lineOpenToCustomers(lit, lit.productLines[0]));
   }
 
   console.log(`\nlines-audit: ${pass} passed, ${fail} failed`);
