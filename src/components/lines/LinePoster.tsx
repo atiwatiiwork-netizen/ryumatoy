@@ -12,7 +12,7 @@ import { TONE_HEX } from './lineUi';
  *   ไม่งั้นป้ายทุกอันเลื่อนออกจากหัวตัวละคร · ตำแหน่งที่แตะคิดจาก getBoundingClientRect ของ <img> เอง
  * ดีไซน์ป้าย v2.1 (เจ้าของ 2026-10-07): กระจกเข้มโปร่ง + ขอบสีบาง + วงเลขสี + เส้นชี้ลงจุดขาวที่หัว — สีอยู่แค่วงเลข/ขอบ
  */
-export interface PosterPin { id: string; no: number; x: number; y: number; tone: LineTone; text: string }
+export interface PosterPin { id: string; no: number; x: number; y: number; tone: LineTone; text: string; short?: string }
 
 export function LinePoster({
   src, pins, onPinTap, onPick, pending, editing, highlightId, numbersOnly,
@@ -43,7 +43,7 @@ export function LinePoster({
     return () => ro.disconnect();
   }, [src]);
 
-  const placed = layoutPins(pins.map((p) => ({ id: p.id, x: p.x, y: p.y, w: pinLabelWidth(p.text) })), size.h || undefined, size.w || undefined)
+  const placed = layoutPins(pins.map((p) => ({ id: p.id, x: p.x, y: p.y, w: pinLabelWidth(p.text), ws: p.short ? pinLabelWidth(p.short) : undefined })), size.h || undefined, size.w || undefined)
     .map((pl) => (numbersOnly ? { ...pl, compact: true } : pl));
   const byId = new Map(pins.map((p) => [p.id, p]));
   const pick = (e: React.MouseEvent<HTMLImageElement>) => {
@@ -136,7 +136,7 @@ function Pin({ p, pl, onTap, editing, hi }: { p: PosterPin; pl: PinPlacement; on
         }}
       >
         <span className={cx('grid shrink-0 place-items-center rounded-full font-extrabold text-[#0b0b0e]', pl.dense ? 'h-[15px] w-[15px] text-[9.5px]' : 'h-[17px] w-[17px] text-[10.5px]')} style={{ background: color }}>{p.no}</span>
-        {p.text}
+        {pl.short && p.short ? p.short : p.text}
       </button>
     </div>
   );

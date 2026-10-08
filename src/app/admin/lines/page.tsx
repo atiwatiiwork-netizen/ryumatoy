@@ -333,7 +333,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   };
 
   // ป้ายในหน้าแก้ไข = ป้ายเดียวกับที่ลูกค้าเห็น (ข้อความสถานะ ไม่ใช่ชื่อ) — เจ้าของ 2026-10-08: "ไม่ต้องสลับโหมดไปมา"
-  const posterPins: PosterPin[] = states.filter((s) => hasPin(s.member)).map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.state.pinLabel }));
+  const posterPins: PosterPin[] = states.filter((s) => hasPin(s.member)).map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.state.pinLabel, short: s.state.pinShort }));
 
   return (
     <div>

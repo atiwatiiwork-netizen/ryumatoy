@@ -315,7 +315,11 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     // ป้ายจริงตอนนี้ = 'Pre-Order' (96px): มือถือ 343 → 5 ป้ายรวม 480 แม้ย่อ (384) ก็เกิน 335 → สลับชั้น (คนละแถวแต่ระดับคงที่) · จอ 580 → แถวเดียว
     const po343 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order') })), 229, 343);
     const po580 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order') })), 387, 580);
-    ok('P11c Pre-Order ×5: มือถือ 343 ย่อแล้วยังเกิน → สลับชั้น 0/1/0/1/0 · จอ 580 แถวเดียว', po343.map((p) => p.tier).join() === '0,1,0,1,0' && po580.every((p) => p.tier === 0 && !p.dense), { po343: po343.map((p) => p.tier), po580: po580.map((p) => p.tier) });
+    ok('P11c Pre-Order ×5 ไม่มีคำย่อ: มือถือ 343 → สลับชั้น 0/1/0/1/0 · จอ 580 แถวเดียว', po343.map((p) => p.tier).join() === '0,1,0,1,0' && po580.every((p) => p.tier === 0 && !p.dense), { po343: po343.map((p) => p.tier), po580: po580.map((p) => p.tier) });
+    // เจ้าของ 2026-10-08 "เหมือนเดิม" → มีคำย่อ (PRE): มือถือ 343 ใช้คำย่อ แถวเดียว ขนาดปกติ · จอ 580 ยังคำเต็ม
+    const sh343 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order'), ws: pinLabelWidth('PRE') })), 229, 343);
+    const sh580 = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: realY[i], w: pinLabelWidth('Pre-Order'), ws: pinLabelWidth('PRE') })), 387, 580);
+    ok('P11d Pre-Order ×5 มีคำย่อ PRE: มือถือ 343 → แถวเดียว คำย่อ ขนาดปกติ · จอ 580 → คำเต็ม', sh343.every((p) => p.tier === 0 && p.short === true && !p.dense) && sh580.every((p) => p.tier === 0 && !p.short), { sh343: sh343.map((p) => `t${p.tier}${p.short ? 'S' : ''}`), sh580: sh580.map((p) => `t${p.tier}${p.short ? 'S' : ''}`) });
     const wide = layoutPins([11, 29.5, 50, 68.5, 87].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('เปิดพรี') })), 380, 580);
     ok('P12 จอกว้างพอ → ไม่ย่อ (ป้ายขนาดปกติ แถวเดียว)', wide.every((p) => !p.dense && p.tier === 0), wide);
     const tight = layoutPins([10, 22, 34, 46, 58].map((x, i) => ({ id: `m${i}`, x, y: 42, w: pinLabelWidth('Pakunoda Black Suite') })), 229, 343);

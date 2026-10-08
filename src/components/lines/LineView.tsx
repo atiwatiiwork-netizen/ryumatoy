@@ -59,7 +59,7 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
   };
   const pins: PosterPin[] = shown
     .filter((s) => hasPin(s.member))
-    .map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.state.pinLabel }));
+    .map((s) => ({ id: s.member.id, no: s.no, x: s.member.pin_x!, y: s.member.pin_y!, tone: s.state.tone, text: s.state.pinLabel, short: s.state.pinShort }));
 
   return (
     <div>

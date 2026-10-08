@@ -94,6 +94,7 @@ export interface LineMemberState {
   tone: LineTone;
   label: string;      // ป้ายสั้นบนรูป (1–2 คำ)
   pinLabel: string;   // ป้ายบนรูปจริง (ของคุณ + ปิดพรี = "พรีแล้ว ✓")
+  pinShort: string;   // คำย่อของ pinLabel ใช้เมื่อแถวเดียวไม่พอ ("Pre-Order" → "PRE") — คำที่สั้นอยู่แล้วใช้คำเดิม
   detail: string;     // บรรทัดรองในรายการใต้รูป
   cta?: LineCta;
   product?: Product;  // สินค้าที่ใช้ตัดสิน
@@ -109,6 +110,8 @@ export interface LineCtx {
 }
 
 const baht = (n: number) => `฿${Math.round(n).toLocaleString('en-US')}`;
+/** คำย่อของป้าย — ใช้เมื่อคำเต็มไม่พอแถวเดียวบนมือถือ (เจ้าของ 2026-10-08: มือถือต้องแถวเดียว) */
+export const PIN_SHORT: Record<string, string> = { 'Pre-Order': 'PRE', 'ปิดพรีแล้ว': 'ปิดพรี', 'พรีแล้ว ✓': 'พรีแล้ว', 'หมดชั่วคราว': 'หมดชั่วคราว' };
 export const sourcingHref = (line: ProductLine, m: LineMember, product?: Product) =>
   `/sourcing?line=${encodeURIComponent(line.id)}&m=${encodeURIComponent(m.id)}${product ? `&src=${encodeURIComponent(product.id)}` : ''}`;
 const lineOaCta = (lineOa?: string): LineCta | undefined =>
@@ -124,12 +127,10 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   const { all } = memberProducts(db, m);
   const ids = new Set(all.map((p) => p.id));
   const mine = !!ctx.uid && db.tickets.some((t) => t.owner_id === ctx.uid && t.status !== 'transferred' && ids.has(t.product_id));
-  const make = (s: Omit<LineMemberState, 'mine' | 'pinLabel' | 'visible'> & { visible?: boolean }): LineMemberState => ({
-    ...s,
-    mine,
-    visible: s.visible ?? true,
-    pinLabel: mine && s.kind === 'closed' ? 'พรีแล้ว ✓' : s.label,
-  });
+  const make = (s: Omit<LineMemberState, 'mine' | 'pinLabel' | 'pinShort' | 'visible'> & { visible?: boolean }): LineMemberState => {
+    const pinLabel = mine && s.kind === 'closed' ? 'พรีแล้ว ✓' : s.label;
+    return { ...s, mine, visible: s.visible ?? true, pinLabel, pinShort: PIN_SHORT[pinLabel] ?? pinLabel };
+  };
 
   // ── ยังไม่มีสินค้าในระบบ (หรือสินค้าที่ผูกถูกลบหมด) → สถานะที่แอดมินตั้งเอง ──
   if (all.length === 0) {
@@ -288,6 +289,8 @@ export interface PinPlacement {
   compact: boolean;
   /** ป้ายย่อ (ฟอนต์/ช่องไฟเล็กลง ~15%) — ใช้เมื่อย่อแล้วทุกป้ายพอดีแถวเดียว ดีกว่าสลับชั้นขึ้นลง (เจ้าของ 2026-10-08) */
   dense: boolean;
+  /** ใช้คำย่อ (PosterPin.short เช่น "PRE") เพราะคำเต็มไม่พอแถวเดียว */
+  short?: boolean;
 }
 /** อัตราย่อป้ายโหมด dense — ต้องตรงกับ CSS ใน LinePoster (ฟอนต์ 10px · วงเลข 15px · ช่องไฟแคบลง) */
 export const PIN_DENSE_SCALE = 0.8;
@@ -363,7 +366,11 @@ function packRow(items: { id: string; X: number; w: number }[], W: number, gapPx
  * ลำดับการเลือก: 1) แถวเดียว ป้ายขนาดปกติ ขยับซ้ายขวาเลี่ยงชน 2) แถวเดียว ป้ายย่อ 20% 3) ไม่พอจริงๆ (จอแคบ+ป้ายยาว)
  * ค่อยสลับชั้นสั้น/ยาว · รู้ขนาดรูปเท่านั้นถึงจัดแถวได้ (ไม่รู้ = สลับชั้นแบบเดิม)
  */
-export function layoutPins(pins: { id: string; x: number; y: number; w?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
+/**
+ * `ws` = ความกว้างป้ายแบบคำย่อ (เช่น "PRE" แทน "Pre-Order") — ขั้นที่ 3 ก่อนจะยอมแยก 2 แถว (เจ้าของ 2026-10-08 "เหมือนเดิม":
+ * บนมือถือต้องแถวเดียว) · ลำดับ: เต็ม → เต็มย่อ 20% → คำย่อ → คำย่อย่อ 20% → สลับชั้น
+ */
+export function layoutPins(pins: { id: string; x: number; y: number; w?: number; ws?: number }[], heightPx?: number, widthPx?: number): PinPlacement[] {
   const compact = pins.length > PIN_COMPACT_OVER;
   const sized = compact ? pins.map((p) => ({ ...p, w: PIN_COMPACT_W })) : pins;
   if (widthPx && widthPx > 0 && sized.every((p) => p.w)) {
@@ -372,6 +379,13 @@ export function layoutPins(pins: { id: string; x: number; y: number; w?: number 
     if (!compact) {
       const dense = layoutPinsAt(sized.map((p) => ({ ...p, w: (p.w ?? 0) * PIN_DENSE_SCALE })), heightPx, widthPx, true, true);
       if (dense) return dense;
+      if (sized.some((p) => p.ws && p.ws < (p.w ?? 0))) {
+        const shortW = sized.map((p) => ({ ...p, w: p.ws ?? p.w }));
+        const short = layoutPinsAt(shortW, heightPx, widthPx, false, true);
+        if (short) return short.map((p) => ({ ...p, short: true }));
+        const shortDense = layoutPinsAt(shortW.map((p) => ({ ...p, w: (p.w ?? 0) * PIN_DENSE_SCALE })), heightPx, widthPx, true, true);
+        if (shortDense) return shortDense.map((p) => ({ ...p, short: true }));
+      }
     }
   }
   return layoutPinsAt(sized, heightPx, widthPx, false, false)!;
