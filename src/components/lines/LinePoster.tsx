@@ -73,7 +73,7 @@ export function LinePoster({
         <div className="pointer-events-none absolute h-0 w-0" style={{ left: `${pending.x}%`, top: `${pending.y}%` }}>
           <span className="absolute h-12 w-px -translate-x-1/2 -translate-y-1/2 bg-white/90" />
           <span className="absolute h-px w-12 -translate-x-1/2 -translate-y-1/2 bg-white/90" />
-          <span className="absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.5)' }} />
+          <span className="absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-white" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.5)' }} />
         </div>
       )}
     </div>

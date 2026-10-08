@@ -362,8 +362,12 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
             </div>
             {line.cover_url ? (
               <>
-                <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
-                <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />
+                <div className="relative">
+                  <LinePoster src={line.cover_url} pins={posterPins} editing onPick={(x, y) => { if (guard()) setPending({ x, y }); }} pending={pending} />
+                  {/* กล่องเลือกชื่อซ้อนบนรูปตรงจุดที่แตะ — เดิมอยู่ใต้รูปจนหลุดสายตา (เจ้าของ 2026-10-08: "ผูกหัวแล้วยังไงต่อ") */}
+                  {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
+                </div>
+                <PinProgress line={line} pending={!!pending} />
               </>
             ) : (
               <div className="grid aspect-[16/9] place-items-center rounded-card border border-dashed border-subtle bg-surface-2 text-center text-[12.5px] text-ink-faint">ใส่รูปหมู่ของค่าย (แบบที่ค่ายโพสต์) แล้วแตะหัวตัวละครเพื่อวางป้าย</div>
@@ -391,22 +395,48 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   );
 }
 
-/** หลังแตะรูป: "จุดนี้คือใคร?" — เลือกตัวในไลน์ · วางซ้ำได้ (ย้ายป้าย) */
-function PinPicker({ line, states, pending, onPlace, onCancel }: { line: ProductLine; states: { member: LineMember; no: number; state: LineMemberState }[]; pending: { x: number; y: number } | null; onPlace: (mid: string) => void; onCancel: () => void }) {
-  if (!pending) return <div className="mt-2 text-[12px] text-ink-faint">แตะที่หัวตัวละครบนรูป → เลือกว่าเป็นใคร (แตะใหม่ = ย้ายป้าย) · ตัวที่ไม่วาง = ไม่มีป้ายบนรูป แต่ยังอยู่ในรายการ</div>;
+/** หลังแตะรูป: กล่อง "จุดนี้คือใคร?" ซ้อนบนรูป ใกล้จุดที่แตะ (เหนือจุดถ้ามีที่ ไม่งั้นใต้จุด) — เลือกชื่อ = ป้ายขึ้นทันที · วางซ้ำได้ (ย้ายป้าย) */
+function PinPicker({ line, states, pending, onPlace, onCancel }: { line: ProductLine; states: { member: LineMember; no: number; state: LineMemberState }[]; pending: { x: number; y: number }; onPlace: (mid: string) => void; onCancel: () => void }) {
+  const below = pending.y < 45;
+  const unplaced = states.filter((s) => !hasPin(s.member));
+  const ordered = [...unplaced, ...states.filter((s) => hasPin(s.member))];
   return (
-    <div className="mt-2 rounded-xl border border-accent-soft bg-surface-2 p-3">
-      <div className="mb-2 flex items-center"><span className="text-[13px] font-extrabold">จุดนี้คือใคร?</span><div className="flex-1" /><button onClick={onCancel} className="text-[12px] font-semibold text-ink-faint">ยกเลิก</button></div>
-      {line.members.length === 0 ? <div className="text-[12px] text-ink-faint">ยังไม่มีตัวในไลน์ — เพิ่มทางขวาก่อน</div> : (
+    <div
+      className="absolute z-10 w-[min(92%,420px)] rounded-xl border border-white/20 bg-[rgba(10,10,14,.92)] p-3 shadow-2xl backdrop-blur-md"
+      style={{ left: `clamp(4%, ${pending.x}%, 96%)`, transform: 'translateX(-50%)', ...(below ? { top: `calc(${pending.y}% + 26px)` } : { bottom: `calc(${100 - pending.y}% + 26px)` }) }}
+    >
+      <div className="mb-2 flex items-center">
+        <span className="text-[13px] font-extrabold text-white">ขั้นที่ 2 · จุดนี้คือใคร?</span>
+        <div className="flex-1" />
+        <button onClick={onCancel} className="text-[12px] font-semibold text-white/60">ยกเลิก</button>
+      </div>
+      {line.members.length === 0 ? <div className="text-[12px] text-white/70">ยังไม่มีตัวในไลน์ — เพิ่มทางขวาก่อน</div> : (
         <div className="flex flex-wrap gap-1.5">
-          {states.map((s) => (
-            <button key={s.member.id} onClick={() => onPlace(s.member.id)} className="flex items-center gap-1.5 rounded-full border border-subtle bg-surface-3 py-1 pl-1 pr-3 text-[12px] font-semibold">
+          {ordered.map((s) => (
+            <button key={s.member.id} onClick={() => onPlace(s.member.id)} className={cx('flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-3 text-[12px] font-semibold text-white', hasPin(s.member) ? 'border-white/10 bg-white/5 text-white/60' : 'border-white/30 bg-white/10')}>
               <span className="grid h-5 w-5 place-items-center rounded-full text-[10.5px] font-extrabold text-[#0b0b0e]" style={{ background: TONE_HEX[s.state.tone] }}>{s.no}</span>
-              {s.member.name.trim() || `ตัวที่ ${s.no}`}{hasPin(s.member) && <span className="text-[10.5px] text-ink-faint">(ย้าย)</span>}
+              {s.member.name.trim() || `ตัวที่ ${s.no}`}{hasPin(s.member) && <span className="text-[10.5px]">(ย้าย)</span>}
             </button>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** แถบบอกขั้นตอน + ความคืบหน้าใต้รูป — รู้ตลอดว่าวางแล้วกี่ตัว ขาดใคร */
+function PinProgress({ line, pending }: { line: ProductLine; pending: boolean }) {
+  const missing = line.members.filter((m) => !hasPin(m));
+  const done = line.members.length - missing.length;
+  return (
+    <div className="mt-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[12px]">
+      {pending
+        ? <span className="font-bold text-[#fbbf24]">ขั้นที่ 2: เลือกชื่อในกล่องบนรูป → ป้ายจะขึ้นที่จุดนั้นทันที</span>
+        : line.members.length === 0
+          ? <span className="text-ink-faint">เพิ่มตัวในไลน์ทางขวาก่อน แล้วค่อยมาแตะหัวบนรูป</span>
+          : missing.length === 0
+            ? <span className="font-bold text-[#4ade80]">✓ วางป้ายครบ {done}/{line.members.length} ตัว · แตะหัวซ้ำ = ย้ายป้าย</span>
+            : <span><b className="text-ink">ขั้นที่ 1:</b> แตะหัวตัวละครบนรูป <span className="text-ink-faint">· วางแล้ว {done}/{line.members.length} · ยังไม่วาง: {missing.map((m) => m.name.trim() || '(ไม่มีชื่อ)').join(', ')}</span></span>}
     </div>
   );
 }
