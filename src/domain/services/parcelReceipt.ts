@@ -78,22 +78,35 @@ export function parseParcelReceipt(text: string): ParsedReceipt {
   };
 
   // 1) บรรทัดที่มีคำว่า Waybill/Tracking/เลขพัสดุ → เลขที่ตามมา (แก้ O/l/S/B ที่ OCR สับสน)
+  //    ป้ายเพี้ยนได้: "WeybilNumber" / "Waybil umber" / "WaybilNurber" (รูปเล็กจากแชท) → จับแบบหลวม
+  const LABEL = /w[ae]y\s*bi[l1]+\s*(?:n[uo]m?b?er|no\.?)?|track[i1]ng\s*(?:n[uo]m?b?er|no\.?)?|เลขพัสดุ|หมายเลขพัสดุ/i;
   lines.forEach((l, i) => {
-    if (!/waybill|tracking|เลขพัสดุ|หมายเลขพัสดุ/i.test(l)) return;
-    const after = l.split(/waybill\s*(?:number|no\.?)?|tracking\s*(?:number|no\.?)?|เลขพัสดุ|หมายเลขพัสดุ/i)[1] ?? '';
+    if (!LABEL.test(l)) return;
+    const after = l.split(LABEL)[1] ?? '';
     const m = /[A-Za-z0-9|]{10,16}/.exec(after.replace(/[:：]/g, ' '));
     if (!m) return;
     const tok = m[0];
     const wb = /^[A-Z]{2}/i.test(tok) ? tok.toUpperCase().replace(/\|/g, '1') : fixDigits(tok);
     pushRow(wb, i);
   });
-  // 2) ไม่เจอป้าย Waybill เลย (ใบเสร็จรูปแบบอื่น) → ไล่หาเลขตามรูปแบบของขนส่งที่รู้
-  if (rows.length === 0) {
-    const pats = carrier ? CARRIER_PAT.filter((c) => c.key === carrier) : CARRIER_PAT;
+  // 2) ไล่หาเลขตามรูปแบบของขนส่งในทุกบรรทัดด้วย (ป้ายอ่านไม่ออกแต่เลขยังอยู่ · ใบเสร็จรูปแบบอื่น)
+  //    ข้ามบรรทัดที่เป็นเลขภาษี/สาขา/เบอร์โทร และเลขที่เจอจากป้ายแล้ว (pushRow กันซ้ำให้)
+  {
+    const knownHead = carrier ?? (rows.length && rows.every((r) => /^\d{12}$/.test(r.waybill)) ? 'jt' : undefined);
+    const pats = knownHead ? CARRIER_PAT.filter((c) => c.key === knownHead) : CARRIER_PAT;
     lines.forEach((l, i) => {
-      if (/tax|ภาษี|สาขา/i.test(l)) return;
-      for (const c of pats) { const m = c.waybill.exec(fixDigits(l)); if (m) { pushRow(m[0].toUpperCase(), i); if (!carrier) { carrier = c.key; carrierGuessed = true; } break; } }
+      if (/tax|ภาษี|สาขา|โทร|tel|ins\b|phone/i.test(l)) return;
+      for (const c of pats) {
+        const m = c.waybill.exec(fixDigits(l));
+        if (!m) continue;
+        const wb = m[0].toUpperCase();
+        if (normalizePhone(wb)) continue; // เลข 10 หลักขึ้นต้น 0 = เบอร์โทร ไม่ใช่เลขพัสดุ
+        pushRow(wb, i);
+        if (!carrier) { carrier = c.key; carrierGuessed = true; }
+        break;
+      }
     });
+    rows.sort((a, b) => a.line - b.line);
   }
   // 3) หัวใบเสร็จอ่านไม่ออก แต่เลขพัสดุทุกใบเป็น 12 หลัก = รูปแบบ J&T → เดา (ให้แอดมินยืนยัน)
   if (!carrier && rows.length && rows.every((r) => /^\d{12}$/.test(r.waybill))) { carrier = 'jt'; carrierGuessed = true; }
