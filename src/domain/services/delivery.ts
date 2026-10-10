@@ -106,19 +106,32 @@ export const handoffQueue = (db: Database): PreorderTicket[] =>
  * จัดกลุ่มตั๋วเป็น "ช่อง" ของใบปะหน้า: ลูกค้าเดียวกัน + ที่อยู่เดียวกัน = ช่องเดียว (spec ข้อ 4.3 —
  * in-stock ส่งพร้อมพรีได้), ที่อยู่ custom ต่างกัน = แยกช่องให้เอง. บรรทัดสินค้า = ชื่อ - ค่าย ×จำนวน.
  */
-export interface LabelSlot { key: string; to: ShipTo; tickets: PreorderTicket[]; lines: { label: string; qty: number }[] }
+export interface LabelSlot {
+  key: string; to: ShipTo; tickets: PreorderTicket[]; lines: { label: string; qty: number }[];
+  /** เวลาที่งานนี้ "เข้าคิว" = แอดมินกดรับเรื่อง (accepted_at) ครั้งแรกสุดในช่อง — ไม่มี = ตั๋วเก่าก่อน v52 (ไม่มีเวลา)
+   *  เจ้าของ 2026-10-10: "เข้ามาหลายช่วง ไม่รู้ว่าอันไหนมาก่อนหลัง" → เรียงเก่าสุดก่อน + เลขคิว */
+  since?: string;
+  requestedAt?: string; // ลูกค้ากดขอรับของเมื่อไหร่ (เก่าสุดในช่อง)
+  queueNo: number;      // ลำดับคิว 1.. (เก่าสุด = 1)
+}
+const minIso = (a?: string, b?: string) => (!a ? b : !b ? a : a < b ? a : b);
 export const labelSlots = (db: Database, tickets: PreorderTicket[]): LabelSlot[] => {
   const map = new Map<string, LabelSlot>();
   for (const t of tickets) {
     const to = resolveShipTo(db, t);
     const key = `${t.owner_id}|${to.name}|${to.phone}|${to.address}`;
-    const slot = map.get(key) ?? { key, to, tickets: [], lines: [] };
+    const slot = map.get(key) ?? { key, to, tickets: [], lines: [], queueNo: 0 };
     slot.tickets.push(t);
+    slot.since = minIso(slot.since, t.delivery?.accepted_at ?? t.delivery?.requested_at);
+    slot.requestedAt = minIso(slot.requestedAt, t.delivery?.requested_at);
     // productLabel ลงท้าย "- ค่าย" อยู่แล้ว (DNA) — รวมจำนวนถ้าสินค้า+แบบซ้ำกันในช่องเดียว
     const label = productLabel(db, t.product_id, t.variant_id);
     const line = slot.lines.find((l) => l.label === label);
     if (line) line.qty += t.qty; else slot.lines.push({ label, qty: t.qty });
     map.set(key, slot);
   }
-  return [...map.values()];
+  // เก่าสุดก่อน (มาก่อนได้ก่อน) · ตั๋วเก่าที่ไม่มีเวลาไว้ท้ายสุด
+  const out = [...map.values()].sort((a, b) => (!a.since ? 1 : !b.since ? -1 : a.since < b.since ? -1 : a.since > b.since ? 1 : 0));
+  out.forEach((s, i) => { s.queueNo = i + 1; });
+  return out;
 };

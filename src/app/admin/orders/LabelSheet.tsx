@@ -23,6 +23,13 @@ const COLS = 2;
 const ROWS = 4;
 const PER_PAGE = COLS * ROWS;
 
+const shortDate = (iso: string) => new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+const fmtTime = (iso: string) => new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+/** วันตามปฏิทินเครื่อง (เวลาไทย ไม่ใช่ UTC) ไว้จัดกลุ่มหัววัน */
+const dayKey = (iso?: string) => { if (!iso) return ''; const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const dayLabel = (key: string, today: string, yesterday: string) => key === '' ? 'ตั๋วเก่า (ไม่มีเวลารับเรื่อง)' : key === today ? 'วันนี้' : key === yesterday ? 'เมื่อวาน' : new Date(key + 'T12:00:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' });
+const daysWaiting = (iso: string, now: number) => Math.floor((now - new Date(iso).getTime()) / 86400000);
+
 /** ตัดข้อความให้พอดีความกว้าง (ไทยไม่มีช่องว่าง → ไล่ทีละตัวอักษร). */
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
   const lines: string[] = [];
@@ -53,6 +60,13 @@ function drawSlot(ctx: CanvasRenderingContext2D, slot: LabelSlot, x: number, y: 
   // ผู้ส่ง — คงที่ทุกช่อง (spec ข้อ 2)
   ctx.font = "bold 30px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
   ctx.fillText(`ผู้ส่ง ${SENDER_NAME} ${SENDER_PHONE}`, x + PAD, cy);
+  // เลขคิว + วันเข้าคิว มุมขวาบน (เจ้าของ 2026-10-10: ของเข้าหลายช่วง ปริ้นแล้วต้องรู้ว่าใบไหนมาก่อน)
+  ctx.font = "24px 'Noto Sans Thai','Sarabun',Tahoma,sans-serif";
+  ctx.fillStyle = '#6b7280';
+  ctx.textAlign = 'right';
+  ctx.fillText(`คิว #${slot.queueNo}${slot.since ? ' · ' + shortDate(slot.since) : ''}`, x + w - PAD, cy + 4);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#111';
   cy += 40;
 
   // เว้นที่ว่างสำหรับแปะ/เขียนเพิ่ม (spec ข้อ 3) — ลดลงนิดเพื่อรับบรรทัดเบอร์โทรที่แยกออกมา
@@ -133,7 +147,21 @@ export function LabelSheet({ tickets }: { tickets: PreorderTicket[] }) {
     flash(`สร้างใบปะหน้าแล้ว · ${chosen.length} ช่อง / ${out.length} แผ่น`);
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = Date.now();
+  const today = dayKey(new Date(now).toISOString());
+  const yesterday = dayKey(new Date(now - 86400000).toISOString());
+  // จัดกลุ่มตามวันที่รับเรื่อง (labelSlots เรียงเก่าสุดก่อนมาแล้ว → กลุ่มเก่าอยู่บน)
+  const groups: { key: string; slots: LabelSlot[] }[] = [];
+  for (const s of slots) {
+    const k = dayKey(s.since);
+    const g = groups[groups.length - 1];
+    if (g && g.key === k) g.slots.push(s); else groups.push({ key: k, slots: [s] });
+  }
+  const toggleGroup = (g: { slots: LabelSlot[] }) => {
+    const allOn = g.slots.every((s) => !off.has(s.key));
+    setOff((old) => { const n = new Set(old); for (const s of g.slots) { if (allOn) n.add(s.key); else n.delete(s.key); } return n; });
+    setPages([]);
+  };
 
   return (
     <div className="mb-[18px] rounded-2xl border border-subtle bg-surface-2 p-5">
@@ -142,21 +170,47 @@ export function LabelSheet({ tickets }: { tickets: PreorderTicket[] }) {
         {/* นับเป็น "ช่อง" (ลูกค้า+ที่อยู่) ไม่เท่าจำนวนตั๋ว — บอกคู่กันกันงงกับเลขคิวเลขพัสดุ */}
         <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] text-ink-muted2">{tickets.length} ใบ / {slots.length} ช่อง</span>
       </div>
-      <div className="mb-3 text-[11.5px] text-ink-faint">รวมพรี + In Stock รอบเดียวกัน · ลูกค้าเดียวกัน = ช่องเดียว (หลายสินค้าหลายบรรทัด) · ปริ้นแล้วตัดตามเส้นประ</div>
+      <div className="mb-3 text-[11.5px] text-ink-faint">รวมพรี + In Stock รอบเดียวกัน · ลูกค้าเดียวกัน = ช่องเดียว (หลายสินค้าหลายบรรทัด) · <b className="text-ink-muted2">เรียงตามเวลารับเรื่อง เก่าสุดอยู่บน (คิว #1)</b> เลขคิวพิมพ์ลงใบด้วย · ปริ้นแล้วตัดตามเส้นประ</div>
 
       {slots.length === 0 ? <div className="py-2 text-[13px] text-ink-faint">ไม่มีรายการพร้อมพิมพ์ (ต้องจ่ายครบ + ยืนยันวิธีรับของแบบส่งพัสดุ)</div> : (
         <>
-          <div className="mb-3 flex flex-col gap-1.5">
-            {slots.map((s) => (
-              <label key={s.key} className={cx('flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5', off.has(s.key) ? 'border-subtle bg-surface-3 opacity-50' : 'border-[#7c3aed]/40 bg-[#7c3aed]/[0.07]')}>
-                <input type="checkbox" checked={!off.has(s.key)} onChange={() => toggle(s.key)} className="mt-1 h-4 w-4 accent-[#7c3aed]" />
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold">{s.to.name} <span className="text-[11.5px] font-normal text-ink-faint">{s.to.phone}</span></div>
-                  <div className="line-clamp-1 text-[11.5px] text-ink-faint">{s.to.address || '— ไม่มีที่อยู่'}</div>
-                  <div className="mt-0.5 text-[11.5px] text-ink-muted2">{s.lines.map((l) => `${l.label} ×${l.qty}`).join(' · ')}</div>
+          <div className="mb-3 flex flex-col gap-2">
+            {groups.map((g) => {
+              const onCount = g.slots.filter((s) => !off.has(s.key)).length;
+              return (
+                <div key={g.key || 'legacy'} className="min-w-0">
+                  {/* หัววัน: ติ๊ก/เอาออกทั้งวันได้ — ปริ้นเฉพาะของที่เข้ามาวันนี้ หรือเคลียร์ของค้างข้ามวันก่อน */}
+                  <button type="button" onClick={() => toggleGroup(g)} className="mb-1.5 flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-[12px] font-bold text-ink-muted2 hover:bg-white/[0.04]">
+                    <span className={cx('grid h-4 w-4 place-items-center rounded border text-[10px]', onCount === g.slots.length ? 'border-[#7c3aed] bg-[#7c3aed] text-white' : onCount ? 'border-[#7c3aed] text-[#c4b5fd]' : 'border-subtle text-transparent')}>{onCount === g.slots.length ? '✓' : onCount ? '–' : ''}</span>
+                    📅 {dayLabel(g.key, today, yesterday)}
+                    <span className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[11px] font-semibold text-ink-faint">{g.slots.length} ช่อง · เลือก {onCount}</span>
+                  </button>
+                  <div className="flex flex-col gap-1.5">
+                    {g.slots.map((s) => {
+                      const wait = s.since ? daysWaiting(s.since, now) : null;
+                      return (
+                        <label key={s.key} className={cx('flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5', off.has(s.key) ? 'border-subtle bg-surface-3 opacity-50' : 'border-[#7c3aed]/40 bg-[#7c3aed]/[0.07]')}>
+                          <input type="checkbox" checked={!off.has(s.key)} onChange={() => toggle(s.key)} className="mt-1 h-4 w-4 accent-[#7c3aed]" />
+                          <span className="mt-0.5 grid h-6 min-w-[30px] shrink-0 place-items-center rounded-md bg-white/[0.08] px-1 font-mono text-[11.5px] font-bold text-ink-muted">#{s.queueNo}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span className="text-[13px] font-semibold">{s.to.name}</span>
+                              <span className="text-[11.5px] text-ink-faint">{s.to.phone}</span>
+                              {s.since
+                                ? <span className="text-[11px] text-ink-faint">⏱ รับเรื่อง {fmtTime(s.since)}{s.requestedAt && s.requestedAt !== s.since ? ` · ลูกค้าขอ ${fmtTime(s.requestedAt)}` : ''}</span>
+                                : <span className="text-[11px] text-ink-faint">ตั๋วเก่า ไม่มีเวลารับเรื่อง</span>}
+                              {wait !== null && wait >= 1 && <span className={cx('rounded px-1.5 py-0.5 text-[10.5px] font-bold', wait >= 3 ? 'animate-blink bg-[#b91c1c]/25 text-[#f87171]' : 'bg-[#d97706]/20 text-[#fbbf24]')}>รอมา {wait} วัน</span>}
+                            </div>
+                            <div className="line-clamp-1 text-[11.5px] text-ink-faint">{s.to.address || '— ไม่มีที่อยู่'}</div>
+                            <div className="mt-0.5 text-[11.5px] text-ink-muted2">{s.lines.map((l) => `${l.label} ×${l.qty}`).join(' · ')}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
-              </label>
-            ))}
+              );
+            })}
           </div>
           <button onClick={generate} className="w-full rounded-xl bg-[#7c3aed] py-2.5 text-[13.5px] font-bold text-white">
             🖨️ สร้างใบปะหน้า ({chosen.length} ช่อง · {Math.max(1, Math.ceil(chosen.length / PER_PAGE))} แผ่น)

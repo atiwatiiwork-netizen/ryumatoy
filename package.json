@@ -14,6 +14,7 @@
     "audit:sql": "npx --yes tsx scripts/audit/sql/roundA-audit.ts && npx --yes tsx scripts/audit/sql/roundB-audit.ts && npx --yes tsx scripts/audit/sql/roundC-audit.ts && npx --yes tsx scripts/audit/sql/roundD-audit.ts && npx --yes tsx scripts/audit/sql/roundE-audit.ts && npx --yes tsx scripts/audit/sql/ownerfb-audit.ts && npx --yes tsx scripts/audit/sql/round1-audit.ts && npx --yes tsx scripts/audit/sql/lines-audit.ts",
     "audit:lines": "npx --yes tsx scripts/audit/lines-audit.ts",
     "audit:collect": "npx --yes tsx scripts/audit/collect-audit.ts",
+    "audit:labels": "npx --yes tsx scripts/audit/labels-audit.ts",
     "audit:roundA": "npx --yes tsx scripts/audit/roundA-audit.ts",
     "audit:roundB": "npx --yes tsx scripts/audit/roundB-audit.ts",
     "audit:roundC": "npx --yes tsx scripts/audit/roundC-audit.ts",
