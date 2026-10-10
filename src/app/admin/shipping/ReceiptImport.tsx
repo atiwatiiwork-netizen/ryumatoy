@@ -109,6 +109,9 @@ export function ReceiptImport() {
   const setPick = (k: string, patch: Partial<Pick>) => setPicks((old) => ({ ...old, [k]: { ...old[k], ...patch } }));
 
   const chosen = matches.filter((m) => { const p = picks[m.row.waybill]; return p?.on && p.slotKey && slotByKey(p.slotKey) && p.waybill.trim(); });
+  // ใบที่ "อาจจะอยู่ในระบบ" แต่ยังไม่ได้ติ๊ก (ชื่อคล้าย/หลายช่อง) — ต้องเด่นและถูกรายงาน ไม่งั้นหลุด (เคสจริง 2026-10-10: เอฟ ของเล่น)
+  const attention = matches.filter((m) => (m.status === 'suggest' || m.status === 'ambiguous') && !picks[m.row.waybill]?.on);
+  const attentionText = (ms: ReceiptMatch[]) => ms.map((m) => `${m.row.name ?? 'ไม่ทราบชื่อ'} – ${m.row.waybill} (${STATUS_TH[m.status].label})`).join(' · ');
   // เลขซ้ำกันในตารางเดียว (แอดมินแก้เลขจนชนกัน) → ห้ามยืนยัน
   const dupWaybill = (() => { const seen = new Set<string>(); for (const m of chosen) { const w = picks[m.row.waybill].waybill.trim().toUpperCase(); if (seen.has(w)) return w; seen.add(w); } return null; })();
 
@@ -170,7 +173,7 @@ export function ReceiptImport() {
         for (const t of tks) dispatch(logActivity(adminId, 'set_parcel', `ส่งพัสดุ ${cLabel} ${a.waybill} (อ่านจากใบเสร็จ)`, { targetId: t.id, targetLabel: t.ticket_no }));
       }
       const n = applied.reduce((s, a) => s + a.ticketIds.length, 0);
-      setDone(`✓ กรอกเลขพัสดุแล้ว ${n} ใบ (${applied.length} พัสดุ) + แจ้งลูกค้าแล้ว${skipped.length ? ` · ข้าม ${skipped.length} ใบ (ส่งไปแล้ว/ค้างเงิน): ${skipped.join(', ')}` : ''}${kept ? ` · เก็บลูกค้านอกระบบไว้รอแจ้ง ${kept} ใบ (ดูด้านล่าง)` : ''}`);
+      setDone(`✓ กรอกเลขพัสดุแล้ว ${n} ใบ (${applied.length} พัสดุ) + แจ้งลูกค้าแล้ว${skipped.length ? ` · ข้าม ${skipped.length} ใบ (ส่งไปแล้ว/ค้างเงิน): ${skipped.join(', ')}` : ''}${kept ? ` · เก็บลูกค้านอกระบบไว้รอแจ้ง ${kept} ใบ (ดูด้านล่าง)` : ''}${attention.length ? ` · ⚠ ยังไม่ได้กรอก ${attention.length} ใบ (ไม่ได้ติ๊ก): ${attentionText(attention)} — เลือกช่องแล้วติ๊ก กดยืนยันอีกครั้งได้` : ''}`);
       flash(`กรอกเลขพัสดุแล้ว ${n} ใบ ✓`);
     } finally { setBusy(false); }
   };
@@ -205,8 +208,13 @@ export function ReceiptImport() {
                 ))}
                 {carrier && guessed && <span className="rounded bg-[#d97706]/20 px-1.5 py-0.5 text-[10.5px] font-bold text-[#fbbf24]">เดาจากรูปแบบเลข — ตรวจด้วย</span>}
                 {!carrier && <span className="rounded bg-[#b91c1c]/20 px-1.5 py-0.5 text-[10.5px] font-bold text-[#f87171]">อ่านชื่อขนส่งไม่ออก — เลือกเอง</span>}
-                <span className="ml-auto text-ink-faint">อ่านได้ {parsed.rows.length} ใบ · จับคู่ได้ {matches.filter((m) => m.status === 'ok').length} · ไม่เจอ {matches.filter((m) => m.status === 'unmatched').length}</span>
+                <span className="ml-auto text-ink-faint">อ่านได้ {parsed.rows.length} ใบ · จับคู่ได้ {matches.filter((m) => m.status === 'ok').length} · ไม่เจอ {matches.filter((m) => m.status === 'unmatched').length}{matches.some((m) => m.status === 'used') ? ` · กรอกไปแล้ว ${matches.filter((m) => m.status === 'used').length}` : ''}</span>
               </div>
+              {attention.length > 0 && (
+                <div className="rounded-xl border border-[#d97706]/50 bg-[#d97706]/[0.08] px-3 py-2 text-[12.5px] text-[#fbbf24]">
+                  ⚠ <b>{attention.length} ใบ</b> อาจอยู่ในระบบแต่ยังไม่ได้ติ๊ก — ดูแถวสีเหลืองแล้วเลือกช่อง + ติ๊กก่อนกดยืนยัน: <span className="text-ink-muted2">{attentionText(attention)}</span>
+                </div>
+              )}
 
               <div className="flex flex-col gap-1.5">
                 {matches.map((m) => <MatchRow key={m.row.waybill} m={m} pick={picks[m.row.waybill]} slots={slots} onChange={(p) => setPick(m.row.waybill, p)} />)}
@@ -348,7 +356,7 @@ function MatchRow({ m, pick, slots, onChange }: { m: ReceiptMatch; pick?: Pick; 
   const selectable = m.status !== 'used';
   const options = m.status === 'ambiguous' ? m.candidates : slots;
   return (
-    <div className={cx('min-w-0 rounded-xl border px-3 py-2.5', pick.on ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.06]' : 'border-subtle bg-surface-3', m.status === 'used' && 'opacity-60')}>
+    <div className={cx('min-w-0 rounded-xl border px-3 py-2.5', pick.on ? 'border-[#16a34a]/40 bg-[#16a34a]/[0.06]' : (m.status === 'suggest' || m.status === 'ambiguous') ? 'border-[#d97706]/60 bg-[#d97706]/[0.08]' : 'border-subtle bg-surface-3', m.status === 'used' && 'opacity-60')}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <input type="checkbox" checked={pick.on} disabled={!selectable || !pick.slotKey} onChange={(e) => onChange({ on: e.target.checked })} className="h-4 w-4 accent-[#16a34a]" />
         <input value={pick.waybill} onChange={(e) => onChange({ waybill: e.target.value })} className="w-[150px] rounded-md border border-subtle bg-surface-2 px-2 py-1 font-mono text-[12.5px] text-ink" />

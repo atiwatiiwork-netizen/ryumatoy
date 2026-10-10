@@ -132,7 +132,15 @@ export function matchReceiptRows(db: Database, rows: ReceiptRow[], slots: LabelS
     const phone = row.phone && row.phone !== sender ? row.phone : '';
     const byPhone = phone ? slots.filter((s) => normalizePhone(s.to.phone) === phone) : [];
     if (byPhone.length === 1) return { row, status: 'ok', slot: byPhone[0], candidates: byPhone };
-    if (byPhone.length > 1) return { row, status: 'ambiguous', candidates: byPhone };
+    if (byPhone.length > 1) {
+      // เบอร์เดียวกันหลายช่อง (เคสจริง 2026-10-10 "เอฟ ของเล่น": ตั๋วหนึ่งใช้ชื่อสมาชิก อีกใบใส่ที่อยู่/ชื่อผู้รับเอง
+      // เบอร์เดิม) → ถ้าทุกช่องเป็นลูกค้าคนเดียวกัน ให้ "ชื่อ" ตัดสิน · ตรงช่องเดียว = ok ติ๊กให้เลย
+      const sameOwner = new Set(byPhone.map((s) => s.tickets[0]?.owner_id)).size === 1;
+      const nm0 = row.name ? normalizeName(row.name) : '';
+      const byNm = nm0.length >= 3 ? byPhone.filter((s) => nameSimilar(nm0, normalizeName(s.to.name))) : [];
+      if (sameOwner && byNm.length === 1) return { row, status: 'ok', slot: byNm[0], candidates: byPhone };
+      return { row, status: 'ambiguous', candidates: byPhone };
+    }
     const nm = row.name ? normalizeName(row.name) : '';
     const byName = nm.length >= 3 ? slots.filter((s) => nameSimilar(nm, normalizeName(s.to.name))) : [];
     if (byName.length === 1) return { row, status: 'suggest', slot: byName[0], candidates: byName };

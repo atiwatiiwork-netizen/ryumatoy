@@ -76,7 +76,17 @@ ok('เลขที่กรอกไปแล้ว = used + บอกเลข
 // เบอร์เดียวกัน 2 ช่อง (u1 กับ u3) → ambiguous
 db = base(); db.tickets.push({ ...db.tickets[0], id: 't3', ticket_no: 'T3', owner_id: 'u3', original_buyer_id: 'u3' });
 ms = matchReceiptRows(db, r.rows, labelSlots(db, parcelQueue(db)));
-ok('เบอร์ตรง 2 ช่อง = ambiguous ให้เลือกเอง', ms[1].status === 'ambiguous' && ms[1].candidates.length === 2);
+ok('เบอร์ตรง 2 ช่อง คนละลูกค้า = ambiguous ให้เลือกเอง', ms[1].status === 'ambiguous' && ms[1].candidates.length === 2);
+// เบอร์เดียวกัน 2 ช่อง แต่เป็นลูกค้าคนเดียว (ที่อยู่/ชื่อผู้รับที่กรอกเอง) → ชื่อตัดสิน = ok ติ๊กให้ (เคสจริง "เอฟ ของเล่น")
+db = base();
+db.tickets.push({ ...db.tickets[0], id: 't1c', ticket_no: 'T1C', delivery: { method: 'custom', name: 'ธนชาติ เวียงทอง', phone: '095-045-9431', address: 'อาคารเดอะเหมวงศ์', requested_at: '2026-10-09T02:00:00Z', accepted_at: '2026-10-09T03:00:00Z' } });
+db.users = db.users.map((u) => (u.id === 'u1' ? { ...u, display_name: 'เอฟ ของเล่น', phone: '0950459431' } : u));
+ms = matchReceiptRows(db, [{ waybill: '829448618073', name: 'เอฟ ของเล่น', phone: '0950459431', line: 1 }], labelSlots(db, parcelQueue(db)));
+ok('ลูกค้าคนเดียว 2 ช่อง เบอร์เดียวกัน → ชื่อตัดสิน = ok ช่องที่ชื่อตรง', ms[0].status === 'ok' && ms[0].slot?.to.name === 'เอฟ ของเล่น' && ms[0].candidates.length === 2);
+ms = matchReceiptRows(db, [{ waybill: '829448618073', name: 'ธนชาติ เวียงทอง', phone: '0950459431', line: 1 }], labelSlots(db, parcelQueue(db)));
+ok('ชื่อในใบเสร็จตรงชื่อผู้รับที่กรอกเอง → ok ช่องนั้น', ms[0].status === 'ok' && ms[0].slot?.to.name === 'ธนชาติ เวียงทอง');
+ms = matchReceiptRows(db, [{ waybill: '829448618073', phone: '0950459431', line: 1 }], labelSlots(db, parcelQueue(db)));
+ok('ไม่มีชื่อให้ตัดสิน → ยัง ambiguous', ms[0].status === 'ambiguous');
 // 2 แถวชี้ช่องเดียวกัน (OCR อ่านเบอร์ซ้ำ) → ทั้งคู่ ambiguous
 db = base();
 ms = matchReceiptRows(db, [{ waybill: 'A1', phone: '0943745425', line: 1 }, { waybill: 'A2', phone: '0943745425', line: 2 }], labelSlots(db, parcelQueue(db)));
