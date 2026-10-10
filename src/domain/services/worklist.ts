@@ -72,7 +72,7 @@ export function worklist(db: Database): WorkItem[] {
   add({ key: 'plans', urgency: 'today', icon: '📅', title: 'นัดชำระถึงกำหนด', detail: 'ลูกค้านัดจ่ายวันนี้/เลยกำหนด — กดเตือนได้', count: due.length, href: '/admin/today', money: due.reduce((s, p) => s + p.amount, 0) });
 
   const collect = collectableTickets(db);
-  add({ key: 'collect', urgency: 'today', icon: '📣', title: 'ทวงส่วนต่างได้แล้ว', detail: 'ของถึงไทยแล้วแต่ยังค้างจ่าย', count: collect.length, href: '/admin/analytics', money: collect.reduce((s, t) => s + ticketDue(t), 0) });
+  add({ key: 'collect', urgency: 'today', icon: '📣', title: 'ทวงส่วนต่างได้แล้ว', detail: 'ของถึงไทยแล้วแต่ยังค้างจ่าย — หน้าตามของ', count: collect.length, href: '/admin/collect', money: collect.reduce((s, t) => s + ticketDue(t), 0) });
 
   // ── จัดส่ง ──
   add({ key: 'dchoice', urgency: 'today', icon: '📦', title: 'รอลูกค้าเลือกวิธีรับของ', detail: 'จ่ายครบแล้ว — เตือนหรือส่งตามที่อยู่ได้เลย', count: awaitingChoice(db).length, href: '/admin/shipping' });

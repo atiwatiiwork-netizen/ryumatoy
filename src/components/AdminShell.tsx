@@ -8,7 +8,7 @@ import { useAuth, canLogin, useCurrentUserId } from '@/state/AuthProvider';
 import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
-import { worklist, plansDue, dataIssues } from '@/domain/services/worklist';
+import { worklist, plansDue, dataIssues, collectableTickets } from '@/domain/services/worklist';
 import { needsClose } from '@/domain/services/auctions';
 import { marketQueue } from '@/domain/services/market';
 import { pendingRpGroups } from '@/domain/services/payments';
@@ -140,6 +140,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
     + db.auctionEntries.filter((e) => e.status === 'pending').length;
   // ตลาดใบพรี: รอไฟนอล + รอตรวจสอบ + คนขายเงียบเกิน 12 ชม.
   const marketJobs = marketQueue(db).jobs;
+  // ตามของ (เจ้าของ 2026-10-10): ของถึงไทยแล้วแต่ลูกค้ายังค้างส่วนต่าง — ทวงได้เลย
+  const collectJobs = collectableTickets(db).length;
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string };
   const it = (href: string, icon: IconName, label: string, badge?: number, sub?: string): NavItem =>
@@ -163,6 +165,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/products', 'box', 'Pre-Order', undefined, 'แคตตาล็อกพรี'),
       it('/admin/instock', 'store', 'In-Stock', undefined, 'ของพร้อมส่ง'),
       it('/admin/stock', 'bolt', 'สต๊อกใบพรี', undefined, 'รอบพิเศษ + วงจรของ'),
+      it('/admin/collect', 'payments', 'ตามของ', collectJobs, 'ของถึงไทยแล้ว · ลูกค้ายังไม่ชำระ'),
       it('/admin/production', 'swap', 'ปิดรอบ / กระดาน', undefined, 'ปิดยอด + โพสต์กระดาน'),
       it('/admin/lines', 'group', 'ไลน์ (พรียกไลน์)', undefined, 'รูปหมู่ + ป้ายสถานะ · ลองก่อนเปิด'),
       it('/admin/auctions', 'tag', 'ประมูล', auctionJobs, 'ห้องประมูล + ลองเล่นก่อนเปิด'),
