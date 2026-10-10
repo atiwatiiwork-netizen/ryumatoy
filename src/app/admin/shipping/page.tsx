@@ -16,6 +16,7 @@ import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { LabelSheet } from '../orders/LabelSheet';
+import { ReceiptImport } from './ReceiptImport';
 import type { Carrier, PreorderTicket } from '@/domain/entities';
 
 const CARRIERS: { key: Carrier; label: string }[] = [
@@ -197,6 +198,9 @@ export default function ShippingPage() {
 
       {/* ② ใบปะหน้า A4 (ระบบที่ทำไว้แล้ว — ย้ายมาอยู่ศูนย์จัดส่ง) */}
       <LabelSheet tickets={dParcel} />
+
+      {/* 📷 อ่านใบเสร็จขนส่ง → กรอกเลขพัสดุทั้งชุด (เจ้าของ 2026-10-10) — ใช้ setParcel ตัวเดียวกับกรอกมือข้างล่าง */}
+      <ReceiptImport />
 
       {/* ③ รอใส่เลขพัสดุ → push "ส่งแล้ว" อัตโนมัติหลังกรอกเลข */}
       <Section icon="box" tone="text-[#f87171]" title="รอใส่เลขพัสดุ" count={dParcel.length} sub="แพ็คเสร็จ → เลือกขนส่ง + กรอกเลข = ตั๋วเสร็จสิ้น + push แจ้งลูกค้า 'ส่งแล้ว' ทันที">
