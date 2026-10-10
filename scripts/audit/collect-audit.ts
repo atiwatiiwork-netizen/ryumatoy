@@ -31,6 +31,7 @@ const base = (): Database => {
     tk('t4', 'u1', 'pB', 'shipping', 2790),           // ของยังไม่ถึง → ไม่ขึ้น
     tk('t5', 'u2', 'pA', 'arrived', 1590, 1590),      // จ่ายครบ → ไม่ขึ้น
     tk('t6', 'u1', 'pA', 'delivered', 800, 0, { status: 'shipped' }), // ส่งแล้วยังค้าง → แถบแดง
+    tk('t11', 'u3', 'pA', 'shipping', 1590),          // ใบรอบอื่นของ pA ของยังไม่ถึง → นับใน others.notArrived
   ];
   db.remainingPayments = [{ id: 'rp3', ticket_id: 't3', user_id: 'u3', amount: 1590, slip_url: 'x', status: 'pending', created_at: '2026-10-09' }];
   return db;
@@ -45,6 +46,7 @@ ok('สินค้า pA โชว์ครบ 3 คน (รวมคนรอ�
 const u3 = b.products[0].customers.find((c) => c.userId === 'u3')!;
 ok('คนที่ส่งสลิปแล้ว: chaseable ว่าง due 0', u3.chaseable.length === 0 && u3.due === 0 && u3.tickets[0].awaitingSlip);
 ok('ส่งแล้วยังค้าง = t6 ขึ้นแถบแดง', b.shippedUnpaid.length === 1 && b.shippedUnpaid[0].id === 't6');
+ok('นับใบทั้งหมดของ pA = 6 (ในหน้า 3 + จ่ายครบ 1 + ส่งแล้ว 1 + รอบอื่นยังไม่ถึง 1)', b.products[0].totalTickets === 6 && b.products[0].others.paidFull === 1 && b.products[0].others.shipped === 1 && b.products[0].others.notArrived === 1);
 ok('เรียงลูกค้าในสินค้า: ค้างมากก่อน แล้วคนรอสลิปท้าย', b.products[0].customers[2].userId === 'u3');
 ok('ข้อมูลติดต่อ', b.products[0].customers.find((c) => c.userId === 'u1')!.phone === '0812345678' && b.products[0].customers.find((c) => c.userId === 'u2')!.lineId === 'ying');
 

@@ -45,8 +45,11 @@ export interface CollectProduct {
   image?: string;
   due: number;
   customers: CollectCustomer[];
-  ticketCount: number;    // รวมทุกใบ (ทวงได้ + รอสลิป + ติดตลาด)
+  ticketCount: number;    // ใบที่อยู่ในหน้านี้ (ทวงได้ + รอสลิป + ติดตลาด)
   awaitingSlip: number;
+  /** ใบอื่นของสินค้าเดียวกันที่ "ไม่อยู่ในรายการทวง" — เจ้าของ 2026-10-10: "โลกิมี 7 ใบ ทำไมเหลือ 4" ต้องบอกว่าอีก 3 ไปอยู่ไหน */
+  totalTickets: number;
+  others: { paidFull: number; shipped: number; notArrived: number };
 }
 export interface CollectBoard {
   products: CollectProduct[];
@@ -124,6 +127,16 @@ export function collectBoard(db: Database, now: Date = new Date()): CollectBoard
     for (const r of rows) byUser.set(r.ticket.owner_id, [...(byUser.get(r.ticket.owner_id) ?? []), r]);
     const customers = [...byUser.entries()].map(([uid, rs]) => buildCustomer(db, uid, rs, now)).sort((a, b) => b.due - a.due || a.name.localeCompare(b.name, 'th'));
     const p = db.products.find((x) => x.id === productId);
+    const inPage = new Set(rows.map((r) => r.ticket.id));
+    const others = { paidFull: 0, shipped: 0, notArrived: 0 };
+    let totalTickets = rows.length;
+    for (const t of db.tickets) {
+      if (t.product_id !== productId || inPage.has(t.id)) continue;
+      totalTickets++;
+      if (t.status === 'shipped') others.shipped++;          // ส่งพัสดุแล้ว (ค้างเงินด้วย = อยู่แถบแดงบนสุด)
+      else if (ticketDue(t) <= 0) others.paidFull++;         // จ่ายครบแล้ว รอจัดส่ง
+      else others.notArrived++;                              // ใบรอบอื่น ของยังไม่ถึงไทย (product_status ต่อใบยังเป็นผลิต/เดินทาง)
+    }
     return {
       productId,
       name: p ? productLabel(db, productId) : productId,
@@ -132,6 +145,8 @@ export function collectBoard(db: Database, now: Date = new Date()): CollectBoard
       customers,
       ticketCount: rows.length,
       awaitingSlip: rows.filter((r) => r.awaitingSlip).length,
+      totalTickets,
+      others,
     };
   }).sort((a, b) => b.due - a.due || b.ticketCount - a.ticketCount);
 

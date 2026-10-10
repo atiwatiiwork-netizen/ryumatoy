@@ -160,9 +160,19 @@ function ProductCard({ p, onRemindAll, onRemind, onCopy }: { p: CollectProduct; 
           <div className="truncate text-[15px] font-extrabold">{p.name}</div>
           <div className="mt-0.5 flex flex-wrap gap-1.5 text-[11.5px] font-bold">
             <span className="rounded-md bg-[#d97706]/20 px-1.5 py-0.5 text-[#fbbf24]">ค้าง {baht(p.due)}</span>
-            <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">{chaseN} คน · {p.ticketCount} ใบ</span>
+            <span className="rounded-md bg-white/[0.07] px-1.5 py-0.5 text-ink-muted2">{chaseN} คน · ทวง {p.ticketCount - p.awaitingSlip} จาก {p.totalTickets} ใบ</span>
             {p.awaitingSlip > 0 && <span className="rounded-md bg-[#2563eb]/[0.15] px-1.5 py-0.5 text-[#93c5fd]">รอตรวจสลิป {p.awaitingSlip}</span>}
           </div>
+          {/* ใบที่เหลือของสินค้านี้ไปอยู่ไหน — ไม่งั้นเจ้าของนับใบไม่ครบแล้วคิดว่าข้อมูลหาย */}
+          {p.totalTickets > p.ticketCount && (
+            <div className="mt-1 text-[11.5px] text-ink-faint">
+              อีก {p.totalTickets - p.ticketCount} ใบไม่ต้องทวง: {[
+                p.others.paidFull ? `✓ จ่ายครบแล้ว ${p.others.paidFull}` : '',
+                p.others.shipped ? `📦 ส่งพัสดุแล้ว ${p.others.shipped}` : '',
+                p.others.notArrived ? `🚚 รอบอื่น ของยังไม่ถึงไทย ${p.others.notArrived}` : '',
+              ].filter(Boolean).join(' · ')}
+            </div>
+          )}
         </div>
         {chaseN > 0 && <button onClick={onRemindAll} className="shrink-0 rounded-lg border border-[#a855f7]/50 px-2.5 py-1.5 text-[12px] font-bold text-[#c084fc]">🔔 เตือนทุกคน</button>}
       </div>
