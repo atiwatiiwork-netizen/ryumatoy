@@ -13,7 +13,6 @@ import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import { logActivity } from '@/data/mutations';
 import { productLabel } from '@/domain/services/catalog';
 import { collectBoard, collectPushPayload, collectMessage, REMIND_ACTION, COLLECT_PUSH_KEY, type CollectCustomer, type CollectProduct, type CollectTicket } from '@/domain/services/collect';
-import type { Database } from '@/domain/entities';
 
 /**
  * 📣 ตามของ (เจ้าของ 2026-10-10) — "รวมรายการสินค้าที่มาถึงไทยแล้ว ลูกค้ายังไม่ชำระ" ไว้ที่เดียว
@@ -21,8 +20,6 @@ import type { Database } from '@/domain/entities';
  * หน้านี้ทำแค่: จัดกลุ่มรายสินค้า/รายคน · 🔔 เตือน (push) · 📋 ก๊อปข้อความไปทักเอง · จดว่าเตือนแล้วเมื่อไหร่ (activity log)
  * DNA: ทุกอย่างคำนวณสดจาก store ทุก render — ลูกค้าจ่าย/แอดมินอนุมัติสลิปแล้วแถวหายเองทันที
  */
-type Dispatch = ReturnType<typeof useDispatch>;
-type Flash = (m: string) => void;
 type View = 'product' | 'customer';
 
 const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
@@ -75,9 +72,13 @@ export default function CollectPage() {
     }
     flash(`ส่ง push แล้ว ${sent} คน${nobell ? ` · ไม่มีกระดิ่ง ${nobell} คน (ทักเอง)` : ''}`);
   };
-  const copyMsg = async (c: CollectCustomer, rows?: CollectTicket[]) => {
+  const copyMsg = async (c: CollectCustomer, rows: CollectTicket[] = c.chaseable) => {
     const ok = await copyText(collectMessage(db, c, rows, typeof window !== 'undefined' ? window.location.origin : undefined));
-    flash(ok ? `คัดลอกข้อความถึง ${c.name} แล้ว — วางใน LINE/เฟสได้เลย` : 'คัดลอกไม่สำเร็จ');
+    if (!ok) return flash('คัดลอกไม่สำเร็จ');
+    // ก๊อปไปทักเอง = เตือนแล้วเหมือนกัน → จด "เตือนล่าสุด" ด้วย (คนไม่มีกระดิ่งคือกลุ่มที่ต้องใช้ปุ่มนี้)
+    const due = rows.reduce((s, r) => s + r.due, 0);
+    dispatch(logActivity(me, REMIND_ACTION, `ก๊อปข้อความทวง ${baht(due)} · ${rows.map((r) => r.ticket.ticket_no).join(', ')}`, { targetId: c.userId, targetLabel: c.name, amount: due }));
+    flash(`คัดลอกข้อความถึง ${c.name} แล้ว — วางใน LINE/เฟสได้เลย`);
   };
 
   return (
@@ -122,7 +123,7 @@ export default function CollectPage() {
       ) : view === 'product' ? (
         <div className="flex flex-col gap-3">
           {products.length === 0 && <div className="text-[13px] text-ink-faint">ไม่พบตามคำค้น</div>}
-          {products.map((p) => <ProductCard key={p.productId} p={p} db={db} onRemindAll={() => void remindProduct(p)} onRemind={(c) => void remindOne(c, new Set(c.chaseable.filter((x) => x.ticket.product_id === p.productId).map((x) => x.ticket.id)))} onCopy={(c) => void copyMsg(c, c.chaseable.filter((x) => x.ticket.product_id === p.productId))} />)}
+          {products.map((p) => <ProductCard key={p.productId} p={p} onRemindAll={() => void remindProduct(p)} onRemind={(c) => void remindOne(c, new Set(c.chaseable.filter((x) => x.ticket.product_id === p.productId).map((x) => x.ticket.id)))} onCopy={(c) => void copyMsg(c, c.chaseable.filter((x) => x.ticket.product_id === p.productId))} />)}
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -149,7 +150,7 @@ function Stat({ label, value, tone, href }: { label: string; value: string; tone
   return href ? <Link href={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>;
 }
 
-function ProductCard({ p, db, onRemindAll, onRemind, onCopy }: { p: CollectProduct; db: Database; onRemindAll: () => void; onRemind: (c: CollectCustomer) => void; onCopy: (c: CollectCustomer) => void }) {
+function ProductCard({ p, onRemindAll, onRemind, onCopy }: { p: CollectProduct; onRemindAll: () => void; onRemind: (c: CollectCustomer) => void; onCopy: (c: CollectCustomer) => void }) {
   const chaseN = p.customers.filter((c) => c.chaseable.some((r) => r.ticket.product_id === p.productId)).length;
   return (
     <div className="min-w-0 rounded-2xl border border-subtle bg-surface-2 p-3.5">
@@ -168,8 +169,6 @@ function ProductCard({ p, db, onRemindAll, onRemind, onCopy }: { p: CollectProdu
       <div className="mt-3 flex flex-col gap-2">
         {p.customers.map((c) => <CustomerCard key={c.userId} c={{ ...c, tickets: c.tickets.filter((r) => r.ticket.product_id === p.productId), chaseable: c.chaseable.filter((r) => r.ticket.product_id === p.productId) }} onRemind={() => onRemind(c)} onCopy={() => onCopy(c)} />)}
       </div>
-      {/* db ใช้สำหรับอนาคต (ชื่อแบบ/รอบอยู่ใน label แล้ว) */}
-      {db ? null : null}
     </div>
   );
 }
