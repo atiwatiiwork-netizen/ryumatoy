@@ -157,6 +157,20 @@ export interface LineMember {
   pin_x?: number;              // ตำแหน่งป้ายบนรูปปก เป็น % ของรูป (0–100) · ไม่มี = ไม่วางป้าย (ยังอยู่ในรายการ)
   pin_y?: number;
 }
+/** ลูกค้านอกระบบ (v82): พัสดุจากใบเสร็จขนส่งที่ไม่ตรงกับตั๋วในแอป — แอดมินเอาเลขไปแจ้งในแชทเอง
+ *  id = '<carrier>:<waybill>' (อ่านใบเสร็จเดิมซ้ำ = แถวเดิม) · notified_at = ติ๊ก ✓ แจ้งแล้ว · dropped_at = ✕ เอาออก (ไม่ลบ) */
+export interface ExternalParcel {
+  id: string;
+  carrier: Carrier;
+  waybill: string;
+  name: string;
+  phone: string;
+  created_by?: string;
+  created_at: string;
+  notified_at?: string;
+  notified_by?: string;
+  dropped_at?: string;
+}
 export interface ProductLine {
   id: string;
   maker_id: string;            // ค่าย (บังคับ — แยกค่ายแยกไลน์)
@@ -763,6 +777,7 @@ export interface Database {
   auctionEntries: AuctionEntry[];
   pointLedger: PointLedgerEntry[]; // สมุดคะแนนสะสม (v66) — บวก/ลบ ไม่แก้แถวเก่า
   productLines: ProductLine[];     // ไลน์ (พรียกไลน์ · v81) — ยังไม่รัน migration = [] (ไม่ทำให้แอปโหลดพัง)
+  externalParcels: ExternalParcel[]; // ลูกค้านอกระบบ รอแจ้ง/แจ้งแล้ว (v82) — ยังไม่รัน = []
   settings: ShopSettings;
 }
 

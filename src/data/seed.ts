@@ -186,6 +186,7 @@ export const SEED_DATABASE: Database = {
   auctionEntries: [],
   pointLedger: [],
   productLines: [],
+  externalParcels: [],
   paymentAccounts: [
     { id: 'pay-1', name: 'Ryuma Toy Shop', number: '081-234-5678', active: true },
   ],

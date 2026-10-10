@@ -1,4 +1,4 @@
-import type { ProductLine, LineMember } from '../domain/entities';
+import type { ProductLine, LineMember, ExternalParcel } from '../domain/entities';
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo, RemainingPayment } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
@@ -2550,6 +2550,29 @@ export const setMarketDirect = (enabled: boolean) => (db: Database): Database =>
 // เขียนได้เฉพาะแอดมิน (RLS product_lines_admin) · ป้ายสถานะไม่ถูกเก็บ — คำนวณสดใน lines.ts
 /** สร้าง/แก้ไลน์ทั้งแถว — cleanLineRow แปลงช่องที่ล้างค่าเป็น null (undefined หายตอน JSON → ค่าเก่าค้างใน DB)
  *  และจัด members ให้สะอาด (พิกัดอยู่ในกรอบ 0–100 · product_ids ไม่ซ้ำ) */
+// ── ลูกค้านอกระบบ (v82) — พัสดุจากใบเสร็จที่ไม่ตรงกับตั๋วในแอป ─────────────
+/** เก็บรายการรอแจ้ง — id ซ้ำ (ใบเสร็จเดิม) = ไม่เพิ่ม ไม่ทับของเดิม (ที่ติ๊กแจ้งแล้ว/เอาออกแล้วต้องคงอยู่) */
+export const addExternalParcels = (rows: Array<Pick<ExternalParcel, 'id' | 'carrier' | 'waybill' | 'name' | 'phone'>>, by: string) => (db: Database): Database => {
+  const have = new Set(db.externalParcels.map((p) => p.id));
+  const fresh = rows.filter((r) => !have.has(r.id)).map((r): ExternalParcel => ({ ...r, created_by: by, created_at: new Date().toISOString() }));
+  return fresh.length ? { ...db, externalParcels: [...db.externalParcels, ...fresh] } : db;
+};
+/** ✓ แจ้งลูกค้าแล้ว — ติ๊กซ้ำ = ไม่เปลี่ยนเวลาเดิม */
+export const markExternalNotified = (id: string, by: string) => (db: Database): Database => ({
+  ...db,
+  externalParcels: db.externalParcels.map((p) => (p.id === id && !p.notified_at ? { ...p, notified_at: new Date().toISOString(), notified_by: by, dropped_at: undefined } : p)),
+});
+/** ✕ เอาออก (ไม่ต้องแจ้ง) — เก็บแถวไว้ ไม่ลบ */
+export const dropExternalParcel = (id: string) => (db: Database): Database => ({
+  ...db,
+  externalParcels: db.externalParcels.map((p) => (p.id === id && !p.dropped_at ? { ...p, dropped_at: new Date().toISOString() } : p)),
+});
+/** แก้ชื่อ/เบอร์ที่ OCR อ่านเพี้ยน */
+export const editExternalParcel = (id: string, patch: { name?: string; phone?: string }) => (db: Database): Database => ({
+  ...db,
+  externalParcels: db.externalParcels.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+});
+
 export const upsertProductLine = (line: ProductLine) => (db: Database): Database => ({
   ...db,
   productLines: upsertById(db.productLines, cleanLineRow({ ...line, updated_at: new Date().toISOString() })),

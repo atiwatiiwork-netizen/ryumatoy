@@ -2,7 +2,8 @@
  *   npx --yes tsx scripts/audit/receipt-audit.ts */
 import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, PreorderTicket } from '../../src/domain/entities';
-import { parseParcelReceipt, matchReceiptRows, normalizePhone, normalizeName, unmatchedText } from '../../src/domain/services/parcelReceipt';
+import { parseParcelReceipt, matchReceiptRows, normalizePhone, normalizeName, unmatchedText, extParcelId, externalParcelLists, externalParcelText } from '../../src/domain/services/parcelReceipt';
+import { addExternalParcels, markExternalNotified, dropExternalParcel, editExternalParcel } from '../../src/data/mutations';
 import { labelSlots, parcelQueue } from '../../src/domain/services/delivery';
 
 let p = 0, f = 0;
@@ -84,6 +85,33 @@ ok('2 แถวชี้ช่องเดียว → ambiguous ทั้ง�
 db = base(); db.tickets = [db.tickets[0]].map((t) => ({ ...t, remaining_paid: 0 }));
 ms = matchReceiptRows(db, r.rows, labelSlots(db, parcelQueue(db)));
 ok('ตั๋วค้างเงินไม่อยู่ในคิว → unmatched', ms[1].status === 'unmatched');
+
+// 3) ลูกค้านอกระบบ (v82): เก็บ/ติ๊ก/เอาออก/ประวัติ
+{
+  let d = base();
+  d.externalParcels = [];
+  const rows = [
+    { id: extParcelId('jt', '829444227721'), carrier: 'jt' as const, waybill: '829444227721', name: 'ธัตณพล', phone: '0858555686' },
+    { id: extParcelId('jt', '829445242640'), carrier: 'jt' as const, waybill: '829445242640', name: 'นิว', phone: '0831628638' },
+  ];
+  d = addExternalParcels(rows, 'adm')(d);
+  ok('เก็บ 2 ใบเข้ารายการรอแจ้ง', externalParcelLists(d).pending.length === 2 && d.externalParcels[0].created_by === 'adm');
+  d = addExternalParcels(rows, 'adm')(d);
+  ok('ใบเสร็จเดิมซ้ำ = ไม่เพิ่มซ้ำ (id = ขนส่ง:เลข)', d.externalParcels.length === 2 && extParcelId('jt', ' 829444227721 ') === 'jt:829444227721');
+  d = markExternalNotified(rows[0].id, 'adm2')(d);
+  let ls = externalParcelLists(d);
+  ok('ติ๊กแจ้งแล้ว → ย้ายไปประวัติ พร้อมคนกด', ls.pending.length === 1 && ls.history.length === 1 && ls.history[0].notified_by === 'adm2' && !!ls.history[0].notified_at);
+  const t1 = ls.history[0].notified_at;
+  d = markExternalNotified(rows[0].id, 'adm3')(d);
+  ok('ติ๊กซ้ำ = เวลาเดิม คนเดิม', externalParcelLists(d).history[0].notified_at === t1 && externalParcelLists(d).history[0].notified_by === 'adm2');
+  d = dropExternalParcel(rows[1].id)(d);
+  ls = externalParcelLists(d);
+  ok('เอาออก = หายจากรอแจ้ง ไม่เข้าประวัติ แถวยังอยู่', ls.pending.length === 0 && ls.history.length === 1 && d.externalParcels.length === 2);
+  d = addExternalParcels(rows, 'adm')(d);
+  ok('อ่านใบเสร็จเดิมอีกรอบหลังติ๊ก/เอาออก = ไม่ฟื้นกลับมารอแจ้ง', externalParcelLists(d).pending.length === 0);
+  d = editExternalParcel(rows[0].id, { name: 'ธัตณพล เนติประมุข', phone: '0858555686' })(d);
+  ok('แก้ชื่อ + ข้อความก๊อป', externalParcelText(d.externalParcels[0]) === 'ธัตณพล เนติประมุข (0858555686) – J&T 829444227721');
+}
 
 console.log(`ใบเสร็จขนส่ง: ${p} ผ่าน / ${f} ตก`);
 if (f) process.exit(1);

@@ -158,7 +158,7 @@ async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unkn
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, productLines, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, productLines, externalParcels, settings] =
       await Promise.all([
         fetchAll(sb, 'users'),
         fetchAll(sb, 'categories'),
@@ -207,6 +207,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         // ไลน์ (v81) — ยังไม่รัน migration = ตารางไม่มี → [] (ไม่อยู่ใน fatal list ไม่ทำให้แอปโหลดพัง)
         //   RLS: ลูกค้าได้เฉพาะไลน์ที่เปิดแล้ว (สวิตช์ lines_public + active) · แอดมินได้ทุกแถว
         fetchAll(sb, 'product_lines'),
+        // ลูกค้านอกระบบ (v82) — ตารางยังไม่มี = [] · RLS แอดมินเท่านั้น
+        fetchAll(sb, 'external_parcels'),
         fetchAll(sb, 'shop_settings'),
       ]);
 
@@ -288,6 +290,7 @@ export const supabaseAdapter: PersistenceAdapter = {
             }))
           : [],
       })) as unknown as Database['productLines'],
+      externalParcels: (externalParcels.data ?? []) as Database['externalParcels'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -343,6 +346,8 @@ export const supabaseAdapter: PersistenceAdapter = {
     // ไลน์ (v81): เขียนได้เฉพาะแอดมิน (RLS) — เซสชันลูกค้าไม่เคยแก้ productLines จึงไม่มี diff ไม่มีคำขอ
     //   คอลัมน์ที่ "ล้างค่า" (cover_url/franchise_id/note) ต้องส่งเป็น null — undefined หายไปตอน JSON → ค่าเก่าค้างใน DB
     await step('product_lines', () => syncTable(sb, 'product_lines', next.productLines as unknown as Row[], base.productLines as unknown as Row[]));
+    // ลูกค้านอกระบบ (v82): แอดมินเท่านั้น · หน้าจอเช็คก่อนว่าตารางมีแล้วค่อยเขียน (probe) — ยังไม่รัน SQL = ไม่มี diff
+    await step('external_parcels', () => syncTable(sb, 'external_parcels', next.externalParcels as unknown as Row[], base.externalParcels as unknown as Row[]));
     await step('preorder_boards', () => syncTable(sb, 'preorder_boards', next.boards as unknown as Row[], base.boards as unknown as Row[]));
     await step('board_close_logs', () => syncTable(sb, 'board_close_logs', next.boardLogs as unknown as Row[], base.boardLogs as unknown as Row[]));
     await step('product_batches', () => syncTable(sb, 'product_batches', next.batches as unknown as Row[], base.batches as unknown as Row[]));

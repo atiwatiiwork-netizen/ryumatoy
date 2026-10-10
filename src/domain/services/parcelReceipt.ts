@@ -1,4 +1,4 @@
-import type { Carrier, Database } from '../entities';
+import type { Carrier, Database, ExternalParcel } from '../entities';
 import { labelSlots, parcelQueue, SENDER_PHONE, type LabelSlot } from './delivery';
 
 /**
@@ -144,6 +144,18 @@ export function matchReceiptRows(db: Database, rows: ReceiptRow[], slots: LabelS
   for (const m of out) if (m.slot && (taken.get(m.slot.key)?.length ?? 0) > 1) { m.status = 'ambiguous'; m.candidates = [m.slot]; m.slot = undefined; }
   return out;
 }
+
+// ── ลูกค้านอกระบบ (v82) ──
+export const extParcelId = (carrier: Carrier, waybill: string) => `${carrier}:${waybill.trim().toUpperCase()}`;
+/** รอแจ้ง = ยังไม่ติ๊ก/ไม่เอาออก (เก่าสุดก่อน) · ประวัติ = ติ๊กแจ้งแล้ว (ใหม่สุดก่อน) */
+export function externalParcelLists(db: Database): { pending: ExternalParcel[]; history: ExternalParcel[] } {
+  const pending = db.externalParcels.filter((p) => !p.notified_at && !p.dropped_at).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  const history = db.externalParcels.filter((p) => !!p.notified_at).sort((a, b) => ((a.notified_at ?? '') < (b.notified_at ?? '') ? 1 : -1));
+  return { pending, history };
+}
+export const CARRIER_LABEL: Record<Carrier, string> = { jt: 'J&T', flash: 'Flash', kerry: 'Kerry', ems: 'EMS' };
+export const externalParcelText = (p: Pick<ExternalParcel, 'carrier' | 'waybill' | 'name' | 'phone'>) =>
+  `${p.name || 'ไม่ทราบชื่อ'}${p.phone ? ` (${p.phone})` : ''} – ${CARRIER_LABEL[p.carrier]} ${p.waybill}`;
 
 /** ข้อความ "ชื่อ – เลข" สำหรับก๊อปไปแจ้งลูกค้านอกระบบ */
 export const unmatchedText = (ms: ReceiptMatch[]) =>
