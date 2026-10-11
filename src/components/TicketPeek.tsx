@@ -48,6 +48,7 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
     const cur = nowDb.tickets.find((x) => x.id === live.id);
     if (!cur || cur.owner_id !== t.owner_id) { flash('ตั๋วใบนี้เปลี่ยนเจ้าของไปแล้ว — ปิดหน้าต่างแล้วเปิดใหม่'); return; }
     if (cur.status === 'shipped') { flash('ใบนี้จบงานไปแล้ว'); return; }
+    if (nowDb.remainingPayments.some((r) => r.ticket_id === cur.id && r.status === 'pending')) { flash('ใบนี้มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน'); return; }
     if (marketLocked(nowDb, live.id)) { flash('ใบนี้อยู่ระหว่างซื้อขาย/เปลี่ยนใบในตลาด — จบดีลหรือยกเลิกก่อนถึงจบงานได้'); return; }
     const dueNow = Math.max(0, cur.remaining_amount - cur.remaining_paid);
     const msg = dueNow > 0

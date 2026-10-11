@@ -10,8 +10,11 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { copyText } from '@/lib/clipboard';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
-import { logActivity } from '@/data/mutations';
+import { logActivity, completeTicketOffline } from '@/data/mutations';
+import { store } from '@/data/store';
+import { persistFailText } from '@/data/persistErrors';
 import { productLabel } from '@/domain/services/catalog';
+import { marketLocked } from '@/domain/services/market';
 import { collectBoard, collectPushPayload, collectMessage, REMIND_ACTION, COLLECT_PUSH_KEY, type CollectCustomer, type CollectProduct, type CollectTicket } from '@/domain/services/collect';
 
 /**
@@ -31,6 +34,7 @@ export default function CollectPage() {
   const me = useCurrentUserId();
   const [view, setView] = useState<View>('product');
   const [q, setQ] = useState('');
+  const [closing, setClosing] = useState<string | null>(null); // id ตั๋วที่กำลังกด ✅ Complete — กันกดซ้ำ/กดใบอื่นระหว่างรอเซฟ
   const board = useMemo(() => collectBoard(db), [db]);
 
   const needle = q.trim().toLowerCase();
@@ -81,6 +85,43 @@ export default function CollectPage() {
     flash(`คัดลอกข้อความถึง ${c.name} แล้ว — วางใน LINE/เฟสได้เลย`);
   };
 
+  /** ✅ Complete (เจ้าของ 2026-10-11): เคลียร์กันข้างนอกแล้ว (โอนตรง/มารับเอง/ตกลงทางแชท) → ปิดใบจากหน้านี้เลย
+   *  กติกาเดียวกับปุ่ม "จบงานตั๋วนี้เลย" ในป๊อปอัปตั๋ว: โหลดสดก่อนตัดสินใจ → ยืนยันยอดที่ "รับนอกระบบ" (เงินต้องมีร่องรอยในสมุด)
+   *  → completeTicketOffline (บันทึกรายได้ + ปิดใบเป็นเสร็จสิ้น) → read-back → เซฟให้จบ → ค่อยบอกว่าสำเร็จ (DNA save) */
+  const completeOne = async (r: CollectTicket, c: CollectCustomer) => {
+    if (closing) return;
+    setClosing(r.ticket.id);
+    try {
+      const fresh = await store.reload({ safe: true });
+      if (!fresh) return flash(store.reloadFailText('รอสักครู่แล้วลองใหม่'));
+      const nowDb = store.getState();
+      const cur = nowDb.tickets.find((x) => x.id === r.ticket.id);
+      if (!cur || cur.owner_id !== c.userId) return flash(`${r.ticket.ticket_no} เปลี่ยนเจ้าของ/ถูกลบไปแล้ว — รีเฟรชหน้า`);
+      if (cur.status === 'shipped') return flash(`${cur.ticket_no} จบงานไปแล้ว`);
+      if (nowDb.remainingPayments.some((x) => x.ticket_id === cur.id && x.status === 'pending')) return flash(`${cur.ticket_no} มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน`);
+      if (marketLocked(nowDb, cur.id)) return flash(`${cur.ticket_no} ติดประกาศขายในตลาด — จบดีลหรือยกเลิกประกาศก่อน`);
+      const dueNow = Math.max(0, cur.remaining_amount - cur.remaining_paid);
+      const label = productLabel(nowDb, cur.product_id, cur.variant_id);
+      const msg = dueNow > 0
+        ? `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · ค้าง ${baht(dueNow)}\n\n`
+          + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่าง ${baht(dueNow)} นอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ให้ และตั๋วจะกลายเป็น "เสร็จสิ้น" (หายจากคิวตามของ/จัดส่ง ไม่ต้องใส่เลขพัสดุ)\n`
+          + `(ถ้ายังไม่ได้รับเงิน ห้ามกด — บัญชีจะเพี้ยน)`
+        : `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · จ่ายครบแล้ว\nตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ`;
+      if (!confirm(msg)) return;
+      dispatch(completeTicketOffline(cur.id, { collectRemaining: dueNow > 0 }));
+      // read-back: mutation no-op ได้ (สลิปเพิ่งมา/ใบถูกปิดจากอีกเครื่อง) — ห้ามขึ้น ✓ ทั้งที่ไม่มีอะไรเปลี่ยน
+      let ok = false;
+      dispatch((d) => { ok = d.tickets.find((x) => x.id === cur.id)?.status === 'shipped'; return d; });
+      if (!ok) return flash('ปิดใบไม่สำเร็จ — รีเฟรชแล้วลองใหม่');
+      const pf = await store.flush();
+      if (pf) return flash(persistFailText(pf, 'ยังบันทึกขึ้นระบบไม่ได้ — ระบบลองใหม่ให้อัตโนมัติ รอสักครู่แล้วรีเฟรชเช็ค'));
+      dispatch(logActivity(me, 'close_delivery',
+        `จบงานนอกระบบ ${cur.ticket_no} · ${c.name}${dueNow > 0 ? ` · รับส่วนต่างนอกระบบ ${baht(dueNow)}` : ''} (จากหน้าตามของ)`,
+        { targetId: cur.id, targetLabel: cur.ticket_no, amount: dueNow }));
+      flash(dueNow > 0 ? `Complete ${cur.ticket_no} ✓ บันทึกรับเงิน ${baht(dueNow)} แล้ว` : `Complete ${cur.ticket_no} ✓`);
+    } finally { setClosing(null); }
+  };
+
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -123,12 +164,12 @@ export default function CollectPage() {
       ) : view === 'product' ? (
         <div className="flex flex-col gap-3">
           {products.length === 0 && <div className="text-[13px] text-ink-faint">ไม่พบตามคำค้น</div>}
-          {products.map((p) => <ProductCard key={p.productId} p={p} onRemindAll={() => void remindProduct(p)} onRemind={(c) => void remindOne(c, new Set(c.chaseable.filter((x) => x.ticket.product_id === p.productId).map((x) => x.ticket.id)))} onCopy={(c) => void copyMsg(c, c.chaseable.filter((x) => x.ticket.product_id === p.productId))} />)}
+          {products.map((p) => <ProductCard key={p.productId} p={p} closing={closing} onRemindAll={() => void remindProduct(p)} onRemind={(c) => void remindOne(c, new Set(c.chaseable.filter((x) => x.ticket.product_id === p.productId).map((x) => x.ticket.id)))} onCopy={(c) => void copyMsg(c, c.chaseable.filter((x) => x.ticket.product_id === p.productId))} onComplete={(r, c) => void completeOne(r, c)} />)}
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
           {customers.length === 0 && <div className="text-[13px] text-ink-faint">ไม่พบตามคำค้น</div>}
-          {customers.map((c) => <CustomerCard key={c.userId} c={c} showProduct onRemind={() => void remindOne(c)} onCopy={() => void copyMsg(c)} />)}
+          {customers.map((c) => <CustomerCard key={c.userId} c={c} showProduct closing={closing} onRemind={() => void remindOne(c)} onCopy={() => void copyMsg(c)} onComplete={(r) => void completeOne(r, c)} />)}
         </div>
       )}
       <div className="text-[11px] text-ink-faint">ℹ ฐานข้อมูลไม่ได้เก็บวันที่ "ถึงไทยเมื่อ" ต่อใบ — ใช้ "เตือนล่าสุด" (จดอัตโนมัติทุกครั้งที่กด 🔔 หรือ 📋) เป็นตัวช่วยไล่ลำดับแทน</div>
@@ -150,7 +191,7 @@ function Stat({ label, value, tone, href }: { label: string; value: string; tone
   return href ? <Link href={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>;
 }
 
-function ProductCard({ p, onRemindAll, onRemind, onCopy }: { p: CollectProduct; onRemindAll: () => void; onRemind: (c: CollectCustomer) => void; onCopy: (c: CollectCustomer) => void }) {
+function ProductCard({ p, closing, onRemindAll, onRemind, onCopy, onComplete }: { p: CollectProduct; closing: string | null; onRemindAll: () => void; onRemind: (c: CollectCustomer) => void; onCopy: (c: CollectCustomer) => void; onComplete: (r: CollectTicket, c: CollectCustomer) => void }) {
   const chaseN = p.customers.filter((c) => c.chaseable.some((r) => r.ticket.product_id === p.productId)).length;
   return (
     <div className="min-w-0 rounded-2xl border border-subtle bg-surface-2 p-3.5">
@@ -177,13 +218,13 @@ function ProductCard({ p, onRemindAll, onRemind, onCopy }: { p: CollectProduct; 
         {chaseN > 0 && <button onClick={onRemindAll} className="shrink-0 rounded-lg border border-[#a855f7]/50 px-2.5 py-1.5 text-[12px] font-bold text-[#c084fc]">🔔 เตือนทุกคน</button>}
       </div>
       <div className="mt-3 flex flex-col gap-2">
-        {p.customers.map((c) => <CustomerCard key={c.userId} c={{ ...c, tickets: c.tickets.filter((r) => r.ticket.product_id === p.productId), chaseable: c.chaseable.filter((r) => r.ticket.product_id === p.productId) }} onRemind={() => onRemind(c)} onCopy={() => onCopy(c)} />)}
+        {p.customers.map((c) => <CustomerCard key={c.userId} c={{ ...c, tickets: c.tickets.filter((r) => r.ticket.product_id === p.productId), chaseable: c.chaseable.filter((r) => r.ticket.product_id === p.productId) }} closing={closing} onRemind={() => onRemind(c)} onCopy={() => onCopy(c)} onComplete={(r) => onComplete(r, c)} />)}
       </div>
     </div>
   );
 }
 
-function CustomerCard({ c, showProduct, onRemind, onCopy }: { c: CollectCustomer; showProduct?: boolean; onRemind: () => void; onCopy: () => void }) {
+function CustomerCard({ c, showProduct, closing, onRemind, onCopy, onComplete }: { c: CollectCustomer; showProduct?: boolean; closing: string | null; onRemind: () => void; onCopy: () => void; onComplete: (r: CollectTicket) => void }) {
   const due = c.chaseable.reduce((s, r) => s + r.due, 0);
   const canChase = c.chaseable.length > 0;
   return (
@@ -206,6 +247,13 @@ function CustomerCard({ c, showProduct, onRemind, onCopy }: { c: CollectCustomer
             <span className="font-bold no-underline">{baht(r.due)}</span>
             {r.awaitingSlip && <span className="rounded bg-[#2563eb]/[0.15] px-1.5 py-0.5 text-[10px] font-bold text-[#93c5fd] no-underline">ส่งสลิปแล้ว รอตรวจ</span>}
             {r.locked && <span className="rounded bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2 no-underline">ติดประกาศขายในตลาด</span>}
+            {/* ✅ Complete = เคลียร์กันข้างนอกแล้ว (ยืนยันยอดในป๊อปอัป) — เฉพาะใบที่ทวงได้: ใบรอตรวจสลิป/ติดตลาดต้องเคลียร์ทางนั้นก่อน */}
+            {!r.awaitingSlip && !r.locked && (
+              <button disabled={closing !== null} onClick={() => onComplete(r)} title="เคลียร์กันข้างนอกแล้ว — บันทึกรับเงินส่วนต่าง + ปิดใบเป็นเสร็จสิ้น"
+                className="ml-auto rounded-md border border-[#16a34a]/50 px-2 py-0.5 text-[10.5px] font-bold text-[#4ade80] hover:bg-[#16a34a]/15 disabled:opacity-40">
+                {closing === r.ticket.id ? '⏳ กำลังปิด…' : '✅ Complete'}
+              </button>
+            )}
           </div>
         ))}
       </div>

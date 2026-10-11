@@ -1865,6 +1865,9 @@ export const completeTicketOffline = (ticketId: string, opts?: { collectRemainin
   const t = db.tickets.find((x) => x.id === ticketId);
   if (!t || t.status === 'shipped') return db;
   if (marketLocked(db, ticketId)) return db; // ลงขายอยู่ในตลาด — ห้ามปิดใบ (ผู้ซื้ออาจกำลังโอนเงินอยู่)
+  // ลูกค้าส่งสลิปส่วนต่างรอตรวจอยู่ → ห้ามปิดนอกระบบทับ: สลิปจะค้างคิวตลอด (อนุมัติไม่ได้เพราะยอดเกินค้าง) และแอดมินงงว่าเงินก้อนไหนจริง
+  // ให้ไปอนุมัติ/ปฏิเสธสลิปนั้นก่อน (ด่านอยู่ใน mutation — หน้าตามของ/TicketPeek อ่านสดแล้วแต่สลิปมาได้ระหว่างกด)
+  if (db.remainingPayments.some((r) => r.ticket_id === ticketId && r.status === 'pending')) return db;
   const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
   if (due > 0 && !opts?.collectRemaining) return db; // ยังค้างเงินแต่ไม่ได้ยืนยันว่ารับเงินแล้ว → ไม่ปิด
   const now = new Date().toISOString();

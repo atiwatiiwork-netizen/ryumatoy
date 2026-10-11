@@ -3,6 +3,7 @@
 import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, PreorderTicket } from '../../src/domain/entities';
 import { collectBoard, collectPushPayload, collectMessage, awaitingSlipTickets, REMIND_ACTION } from '../../src/domain/services/collect';
+import { completeTicketOffline, offlineRpId } from '../../src/data/mutations';
 
 let p = 0, f = 0;
 const ok = (n: string, c: boolean) => { if (c) p++; else { f++; console.log('FAIL', n); } };
@@ -91,6 +92,33 @@ ok('awaitingSlipTickets = t3', awaitingSlipTickets(base()).map((t) => t.id).join
 db = base(); db.tickets = []; db.remainingPayments = [];
 b = collectBoard(db);
 ok('ว่าง', b.products.length === 0 && b.totalDue === 0 && b.shippedUnpaid.length === 0);
+
+// 7) ✅ Complete จากหน้าตามของ (เจ้าของ 2026-10-11) — เคลียร์นอกระบบ: ปิดใบ + เงินมีร่องรอย + หายจากบอร์ด
+db = base();
+const before = collectBoard(db);
+let after = completeTicketOffline('t1', { collectRemaining: true })(db);
+const t1 = after.tickets.find((t) => t.id === 't1')!;
+const rpOff = after.remainingPayments.find((r) => r.id === offlineRpId('t1'));
+ok('Complete: ตั๋วเป็น shipped + ส่วนต่างเต็ม', t1.status === 'shipped' && t1.remaining_paid === t1.remaining_amount && !!t1.shipped_out_at);
+ok('Complete: มีแถวรับเงินนอกระบบ approved ยอด = ค้าง (รายได้ไม่หาย)', !!rpOff && rpOff.status === 'approved' && rpOff.amount === 1590 && rpOff.user_id === 'u1' && rpOff.slip_url === '');
+b = collectBoard(after);
+ok('Complete: แถวหายจากบอร์ด · ยอดทวงลด 1590 · ไม่ขึ้นแถบ "ส่งแล้วยังค้าง"', b.totalDue === before.totalDue - 1590 && !b.customers.some((c) => c.chaseable.some((r) => r.ticket.id === 't1')) && !b.shippedUnpaid.some((t) => t.id === 't1'));
+ok('Complete: คนอื่น (u2) ยังอยู่ ไม่โดนหางเลข', b.customers.some((c) => c.userId === 'u2' && c.chaseable.length === 1));
+// กดซ้ำ/อีกเครื่องกดซ้อน = idempotent: ไม่บวกเงินซ้ำ ไม่มีแถว rp เพิ่ม
+const again = completeTicketOffline('t1', { collectRemaining: true })(after);
+ok('Complete ซ้ำ: no-op (db เดิม) · แถวรับเงินมีใบเดียว', again === after && after.remainingPayments.filter((r) => r.ticket_id === 't1').length === 1);
+// ใบที่มีสลิปรอตรวจ (t3) ห้ามปิดนอกระบบทับ — ด่านอยู่ใน mutation
+db = base();
+after = completeTicketOffline('t3', { collectRemaining: true })(db);
+ok('ใบที่ส่งสลิปแล้วรอตรวจ: Complete เป็น no-op (ต้องอนุมัติ/ปฏิเสธสลิปก่อน)', after === db && db.tickets.find((t) => t.id === 't3')!.status === 'active');
+// ใบค้างเงินแต่ไม่ยืนยันว่ารับเงิน → ไม่ปิด (กันหนี้หายเงียบ)
+db = base();
+after = completeTicketOffline('t1')(db);
+ok('ค้างเงิน + ไม่ยืนยันรับเงิน: no-op', after === db);
+// ใบจ่ายครบ (t5) ปิดได้โดยไม่ต้องยืนยัน และไม่สร้างแถวเงินปลอม
+db = base();
+after = completeTicketOffline('t5')(db);
+ok('ใบจ่ายครบ: ปิดได้ ไม่มีแถวรับเงินนอกระบบ', after.tickets.find((t) => t.id === 't5')!.status === 'shipped' && !after.remainingPayments.some((r) => r.id === offlineRpId('t5')));
 
 console.log(`ตามของ: ${p} ผ่าน / ${f} ตก`);
 if (f) process.exit(1);
