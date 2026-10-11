@@ -9,7 +9,7 @@ import { productLabel } from '@/domain/services/catalog';
 import { ticketPayer } from '@/domain/services/tickets';
 import { marketLocked } from '@/domain/services/market';
 import { baht } from '@/lib/theme';
-import { completeTicketOffline, logActivity } from '@/data/mutations';
+import { completeTicketOffline, offlineReceiveFor, logActivity } from '@/data/mutations';
 import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
 import { Icon } from './Icon';
@@ -48,14 +48,17 @@ export function TicketPeek({ ticket: t, onClose }: { ticket: PreorderTicket; onC
     const cur = nowDb.tickets.find((x) => x.id === live.id);
     if (!cur || cur.owner_id !== t.owner_id) { flash('ตั๋วใบนี้เปลี่ยนเจ้าของไปแล้ว — ปิดหน้าต่างแล้วเปิดใหม่'); return; }
     if (cur.status === 'shipped') { flash('ใบนี้จบงานไปแล้ว'); return; }
-    if (nowDb.remainingPayments.some((r) => r.ticket_id === cur.id && r.status === 'pending')) { flash('ใบนี้มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน'); return; }
+    const pend = nowDb.remainingPayments.find((r) => r.ticket_id === cur.id && r.status === 'pending');
+    if (pend) { flash(pend.purpose === 'topup' ? 'ใบนี้มีสลิปเติมมัดจำรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "ตลาดใบพรี" ก่อน' : 'ใบนี้มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน'); return; }
     if (marketLocked(nowDb, live.id)) { flash('ใบนี้อยู่ระหว่างซื้อขาย/เปลี่ยนใบในตลาด — จบดีลหรือยกเลิกก่อนถึงจบงานได้'); return; }
-    const dueNow = Math.max(0, cur.remaining_amount - cur.remaining_paid);
+    // ยอด "รับจริง" = ค้าง − โบนัสยศผูกใบ (สูตรเดียวกับ mutation/กระเป๋าลูกค้า) — ไม่งั้นแอดมินเก็บเกิน/รายได้เกินจริง
+    const { due, bonus, receive: dueNow } = offlineReceiveFor(nowDb, cur);
+    const amountLine = bonus > 0 ? `ค้าง ${baht(due)} · โบนัสยศหักให้ −${baht(bonus)} · รับจริง ${baht(dueNow)}` : `ใบนี้ยังค้าง ${baht(dueNow)}`;
     const msg = dueNow > 0
-      ? `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nใบนี้ยังค้าง ${baht(dueNow)}\n`
+      ? `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\n${amountLine}\n`
         + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่างนอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ ${baht(dueNow)} ให้ด้วย\n`
         + `(ถ้ายังไม่ได้รับเงิน ห้ามกด — บัญชีจะเพี้ยน)\n\nตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ`
-      : `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\nจ่ายครบแล้ว · ตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ\n(ใช้กับเคสมารับเอง/ส่งกันเองนอกระบบ)`;
+      : `จบงานตั๋ว ${live.ticket_no} เลยไหม?\n\n${bonus > 0 ? amountLine : 'จ่ายครบแล้ว'} · ตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ\n(ใช้กับเคสมารับเอง/ส่งกันเองนอกระบบ)`;
     if (!confirm(msg)) return;
     setBusy(true);
     try {

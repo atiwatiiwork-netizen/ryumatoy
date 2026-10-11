@@ -1868,24 +1868,36 @@ export const completeTicketOffline = (ticketId: string, opts?: { collectRemainin
   // ลูกค้าส่งสลิปส่วนต่างรอตรวจอยู่ → ห้ามปิดนอกระบบทับ: สลิปจะค้างคิวตลอด (อนุมัติไม่ได้เพราะยอดเกินค้าง) และแอดมินงงว่าเงินก้อนไหนจริง
   // ให้ไปอนุมัติ/ปฏิเสธสลิปนั้นก่อน (ด่านอยู่ใน mutation — หน้าตามของ/TicketPeek อ่านสดแล้วแต่สลิปมาได้ระหว่างกด)
   if (db.remainingPayments.some((r) => r.ticket_id === ticketId && r.status === 'pending')) return db;
-  const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
-  if (due > 0 && !opts?.collectRemaining) return db; // ยังค้างเงินแต่ไม่ได้ยืนยันว่ารับเงินแล้ว → ไม่ปิด
+  // โบนัสยศผูกใบหักให้เหมือนอนุมัติสลิปปกติ (approveRemainingPayment) — ลูกค้าเห็น "ต้องโอน" หลังหักโบนัสในกระเป๋าอยู่แล้ว
+  // ถ้าไม่หัก: รายได้ที่บันทึกสูงกว่าเงินจริง + โบนัสหายถาวร (กระดานเดือนค้าง "รอใช้") — audit 2026-10-11
+  const { bonus, receive } = offlineReceiveFor(db, t);
+  if (receive > 0 && !opts?.collectRemaining) return db; // ยังค้างเงินแต่ไม่ได้ยืนยันว่ารับเงินแล้ว → ไม่ปิด
   const now = new Date().toISOString();
   const rpId = offlineRpId(ticketId);
   const next: Database = {
     ...db,
     tickets: db.tickets.map((x) => (x.id === ticketId
-      ? { ...x, remaining_paid: x.remaining_amount, status: 'shipped' as const, shipped_out_at: now }
+      ? { ...x, remaining_amount: x.remaining_amount - bonus, remaining_paid: x.remaining_amount - bonus, status: 'shipped' as const, shipped_out_at: now }
       : x)),
     // เงินที่รับนอกระบบต้องมีร่องรอยในสมุด ไม่งั้น cashIn ไม่นับ = รายได้หาย (ดู money.ts: remaining อ่านจากตารางนี้)
-    remainingPayments: due > 0 && !db.remainingPayments.some((r) => r.id === rpId)
+    remainingPayments: receive > 0 && !db.remainingPayments.some((r) => r.id === rpId)
       ? [{
-          id: rpId, ticket_id: ticketId, user_id: t.owner_id, amount: due,
+          id: rpId, ticket_id: ticketId, user_id: t.owner_id, amount: receive,
           slip_url: '', status: 'approved' as const, created_at: now, approved_at: now,
         }, ...db.remainingPayments]
       : db.remainingPayments,
+    // สมุดแต้ม: +โบนัส / −ใช้ลดใบนี้ (id ผูกเดือน+ใบ → กดซ้ำไม่ซ้ำแถว) — แบบเดียวกับอนุมัติสลิป
+    pointLedger: bonus > 0 ? [...bonusRows(db, t, 'discount', bonus, 'system'), ...db.pointLedger] : db.pointLedger,
   };
   return mintPointsForTickets([ticketId])(next);
+};
+
+/** ยอดตอน Complete นอกระบบ: ค้าง (due) − โบนัสยศผูกใบที่ยังไม่ได้ใช้ (bonus) = รับจริง (receive)
+ *  ตัวเลขเดียวกับที่ลูกค้าเห็น "ต้องโอน" ในกระเป๋า — UI ยืนยันด้วยตัวนี้ mutation ก็ใช้ตัวนี้ (ห้ามคำนวณคนละสูตร) */
+export const offlineReceiveFor = (db: Database, t: PreorderTicket): { due: number; bonus: number; receive: number } => {
+  const due = Math.max(0, (t.remaining_amount ?? 0) - (t.remaining_paid ?? 0));
+  const bonus = Math.min(due, Math.max(0, pendingBonusDiscount(db, t)));
+  return { due, bonus, receive: due - bonus };
 };
 
 /**

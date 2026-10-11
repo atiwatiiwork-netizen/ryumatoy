@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
@@ -10,7 +10,7 @@ import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
 import { copyText } from '@/lib/clipboard';
 import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
-import { logActivity, completeTicketOffline } from '@/data/mutations';
+import { logActivity, completeTicketOffline, offlineReceiveFor } from '@/data/mutations';
 import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
 import { productLabel } from '@/domain/services/catalog';
@@ -34,7 +34,8 @@ export default function CollectPage() {
   const me = useCurrentUserId();
   const [view, setView] = useState<View>('product');
   const [q, setQ] = useState('');
-  const [closing, setClosing] = useState<string | null>(null); // id ตั๋วที่กำลังกด ✅ Complete — กันกดซ้ำ/กดใบอื่นระหว่างรอเซฟ
+  const [closing, setClosing] = useState<string | null>(null); // id ตั๋วที่กำลังกด ✅ Complete — ใช้วาดปุ่ม (disabled)
+  const lockRef = useRef<string | null>(null); // ล็อกจริง: ดับเบิลแตะก่อน React re-render state ยังเป็น null — ref จับได้ทันที
   const board = useMemo(() => collectBoard(db), [db]);
 
   const needle = q.trim().toLowerCase();
@@ -89,26 +90,47 @@ export default function CollectPage() {
    *  กติกาเดียวกับปุ่ม "จบงานตั๋วนี้เลย" ในป๊อปอัปตั๋ว: โหลดสดก่อนตัดสินใจ → ยืนยันยอดที่ "รับนอกระบบ" (เงินต้องมีร่องรอยในสมุด)
    *  → completeTicketOffline (บันทึกรายได้ + ปิดใบเป็นเสร็จสิ้น) → read-back → เซฟให้จบ → ค่อยบอกว่าสำเร็จ (DNA save) */
   const completeOne = async (r: CollectTicket, c: CollectCustomer) => {
-    if (closing) return;
+    if (lockRef.current) return;
+    lockRef.current = r.ticket.id;
     setClosing(r.ticket.id);
     try {
-      const fresh = await store.reload({ safe: true });
-      if (!fresh) return flash(store.reloadFailText('รอสักครู่แล้วลองใหม่'));
-      const nowDb = store.getState();
-      const cur = nowDb.tickets.find((x) => x.id === r.ticket.id);
-      if (!cur || cur.owner_id !== c.userId) return flash(`${r.ticket.ticket_no} เปลี่ยนเจ้าของ/ถูกลบไปแล้ว — รีเฟรชหน้า`);
-      if (cur.status === 'shipped') return flash(`${cur.ticket_no} จบงานไปแล้ว`);
-      if (nowDb.remainingPayments.some((x) => x.ticket_id === cur.id && x.status === 'pending')) return flash(`${cur.ticket_no} มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน`);
-      if (marketLocked(nowDb, cur.id)) return flash(`${cur.ticket_no} ติดประกาศขายในตลาด — จบดีลหรือยกเลิกประกาศก่อน`);
-      const dueNow = Math.max(0, cur.remaining_amount - cur.remaining_paid);
+      /** โหลดสดแล้วเช็คว่ายังปิดได้ไหม — เรียก 2 รอบ: ก่อนถามยืนยัน และ "หลัง" ยืนยัน (แอดมินอ่านป๊อปอัปได้เป็นนาที
+       *  ลูกค้าส่งสลิป/ใบถูกปิดจากอีกเครื่องระหว่างนั้นได้ — ด่านใน mutation เห็นแต่ของเครื่องตัวเอง) */
+      const check = async () => {
+        if (!(await store.reload({ safe: true }))) { flash(store.reloadFailText('รอสักครู่แล้วลองใหม่')); return null; }
+        const d = store.getState();
+        const cur = d.tickets.find((x) => x.id === r.ticket.id);
+        if (!cur || cur.owner_id !== c.userId) { flash(`${r.ticket.ticket_no} เปลี่ยนเจ้าของ/ถูกลบไปแล้ว — รีเฟรชหน้า`); return null; }
+        if (cur.status === 'shipped') { flash(`${cur.ticket_no} จบงานไปแล้ว`); return null; }
+        const pend = d.remainingPayments.find((x) => x.ticket_id === cur.id && x.status === 'pending');
+        if (pend) {
+          // สลิปเติมมัดจำ (ตลาด) อยู่คนละคิวกับสลิปส่วนต่าง — ชี้ให้ถูกที่ ไม่งั้นแอดมินไปหาไม่เจอ
+          flash(pend.purpose === 'topup'
+            ? `${cur.ticket_no} มีสลิปเติมมัดจำรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "ตลาดใบพรี" ก่อน`
+            : `${cur.ticket_no} มีสลิปส่วนต่างรอตรวจอยู่ — ไปอนุมัติ/ปฏิเสธที่ "สลิป / ออเดอร์" ก่อน`);
+          return null;
+        }
+        if (marketLocked(d, cur.id)) { flash(`${cur.ticket_no} ติดประกาศขายในตลาด — จบดีลหรือยกเลิกประกาศก่อน`); return null; }
+        return { d, cur };
+      };
+      const first = await check();
+      if (!first) return;
+      const { d: nowDb, cur } = first;
+      // ยอด "รับจริง" = ค้าง − โบนัสยศผูกใบ (สูตรเดียวกับ mutation และกระเป๋าลูกค้า) — ป๊อปอัปต้องบอกตัวเลขที่ลูกค้าจ่ายจริง
+      const { due, bonus, receive } = offlineReceiveFor(nowDb, cur);
       const label = productLabel(nowDb, cur.product_id, cur.variant_id);
-      const msg = dueNow > 0
-        ? `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · ค้าง ${baht(dueNow)}\n\n`
-          + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่าง ${baht(dueNow)} นอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ให้ และตั๋วจะกลายเป็น "เสร็จสิ้น" (หายจากคิวตามของ/จัดส่ง ไม่ต้องใส่เลขพัสดุ)\n`
+      const amountLine = bonus > 0 ? `ค้าง ${baht(due)} · โบนัสยศหักให้ −${baht(bonus)} · รับจริง ${baht(receive)}` : `ค้าง ${baht(due)}`;
+      const msg = receive > 0
+        ? `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · ${amountLine}\n\n`
+          + `กดตกลง = ยืนยันว่า "รับเงินส่วนต่าง ${baht(receive)} นอกระบบครบแล้ว" — ระบบจะบันทึกเป็นรายได้ให้ และตั๋วจะกลายเป็น "เสร็จสิ้น" (หายจากคิวตามของ/จัดส่ง ไม่ต้องใส่เลขพัสดุ)\n`
           + `(ถ้ายังไม่ได้รับเงิน ห้ามกด — บัญชีจะเพี้ยน)`
-        : `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · จ่ายครบแล้ว\nตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ`;
+        : `Complete ตั๋ว ${cur.ticket_no} ของ ${c.name} เลยไหม?\n\n${label} ×${cur.qty} · ${bonus > 0 ? amountLine : 'จ่ายครบแล้ว'}\nตั๋วจะกลายเป็น "เสร็จสิ้น" ไม่ต้องใส่เลขพัสดุ`;
       if (!confirm(msg)) return;
-      dispatch(completeTicketOffline(cur.id, { collectRemaining: dueNow > 0 }));
+      const second = await check();
+      if (!second) return;
+      const again = offlineReceiveFor(second.d, second.cur);
+      if (again.receive !== receive) return flash(`ยอดค้างของ ${cur.ticket_no} เพิ่งเปลี่ยน (ตอนนี้ ${baht(again.receive)}) — ดูใหม่แล้วกดอีกครั้ง`);
+      dispatch(completeTicketOffline(cur.id, { collectRemaining: receive > 0 }));
       // read-back: mutation no-op ได้ (สลิปเพิ่งมา/ใบถูกปิดจากอีกเครื่อง) — ห้ามขึ้น ✓ ทั้งที่ไม่มีอะไรเปลี่ยน
       let ok = false;
       dispatch((d) => { ok = d.tickets.find((x) => x.id === cur.id)?.status === 'shipped'; return d; });
@@ -116,10 +138,10 @@ export default function CollectPage() {
       const pf = await store.flush();
       if (pf) return flash(persistFailText(pf, 'ยังบันทึกขึ้นระบบไม่ได้ — ระบบลองใหม่ให้อัตโนมัติ รอสักครู่แล้วรีเฟรชเช็ค'));
       dispatch(logActivity(me, 'close_delivery',
-        `จบงานนอกระบบ ${cur.ticket_no} · ${c.name}${dueNow > 0 ? ` · รับส่วนต่างนอกระบบ ${baht(dueNow)}` : ''} (จากหน้าตามของ)`,
-        { targetId: cur.id, targetLabel: cur.ticket_no, amount: dueNow }));
-      flash(dueNow > 0 ? `Complete ${cur.ticket_no} ✓ บันทึกรับเงิน ${baht(dueNow)} แล้ว` : `Complete ${cur.ticket_no} ✓`);
-    } finally { setClosing(null); }
+        `จบงานนอกระบบ ${cur.ticket_no} · ${c.name}${receive > 0 ? ` · รับส่วนต่างนอกระบบ ${baht(receive)}` : ''}${bonus > 0 ? ` · โบนัสยศ −${baht(bonus)}` : ''} (จากหน้าตามของ)`,
+        { targetId: cur.id, targetLabel: cur.ticket_no, amount: receive }));
+      flash(receive > 0 ? `Complete ${cur.ticket_no} ✓ บันทึกรับเงิน ${baht(receive)} แล้ว` : `Complete ${cur.ticket_no} ✓`);
+    } finally { lockRef.current = null; setClosing(null); }
   };
 
   return (
@@ -215,7 +237,7 @@ function ProductCard({ p, closing, onRemindAll, onRemind, onCopy, onComplete }: 
             </div>
           )}
         </div>
-        {chaseN > 0 && <button onClick={onRemindAll} className="shrink-0 rounded-lg border border-[#a855f7]/50 px-2.5 py-1.5 text-[12px] font-bold text-[#c084fc]">🔔 เตือนทุกคน</button>}
+        {chaseN > 0 && <button disabled={closing !== null} onClick={onRemindAll} className="shrink-0 rounded-lg border border-[#a855f7]/50 px-2.5 py-1.5 text-[12px] font-bold text-[#c084fc] disabled:opacity-40">🔔 เตือนทุกคน</button>}
       </div>
       <div className="mt-3 flex flex-col gap-2">
         {p.customers.map((c) => <CustomerCard key={c.userId} c={{ ...c, tickets: c.tickets.filter((r) => r.ticket.product_id === p.productId), chaseable: c.chaseable.filter((r) => r.ticket.product_id === p.productId) }} closing={closing} onRemind={() => onRemind(c)} onCopy={() => onCopy(c)} onComplete={(r) => onComplete(r, c)} />)}
@@ -259,8 +281,9 @@ function CustomerCard({ c, showProduct, closing, onRemind, onCopy, onComplete }:
       </div>
       {canChase && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button onClick={onRemind} className="rounded-lg border border-[#a855f7]/50 px-3 py-1.5 text-[12px] font-bold text-[#c084fc]">🔔 เตือน</button>
-          <button onClick={onCopy} className="rounded-lg border border-subtle px-3 py-1.5 text-[12px] font-bold text-ink-muted2 hover:text-ink">📋 ก๊อปข้อความ</button>
+          {/* ระหว่าง Complete กำลัง reload/เซฟ — ห้ามยิงเตือน/ก๊อป (dispatch ที่ลงระหว่าง reload ถูกทับหายได้) */}
+          <button disabled={closing !== null} onClick={onRemind} className="rounded-lg border border-[#a855f7]/50 px-3 py-1.5 text-[12px] font-bold text-[#c084fc] disabled:opacity-40">🔔 เตือน</button>
+          <button disabled={closing !== null} onClick={onCopy} className="rounded-lg border border-subtle px-3 py-1.5 text-[12px] font-bold text-ink-muted2 hover:text-ink disabled:opacity-40">📋 ก๊อปข้อความ</button>
           {c.lastRemindedAt && <span className="text-[11px] text-ink-faint">เตือนล่าสุด {fmtTime(c.lastRemindedAt)}</span>}
         </div>
       )}

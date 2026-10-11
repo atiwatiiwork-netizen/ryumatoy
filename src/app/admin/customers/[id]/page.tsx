@@ -202,7 +202,8 @@ export default function CustomerPage() {
               <div key={r.id} className="flex flex-wrap items-center gap-2 py-2">
                 <span className="w-[135px] shrink-0 font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? '—'}</span>
                 <span className="flex-1 text-[12.5px] font-semibold">{baht(r.amount)}{r.coupon_discount ? <span className="font-normal text-[#4ade80]"> · คูปอง −{baht(r.coupon_discount)}</span> : null}</span>
-                <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-bold', r.status === 'approved' ? 'bg-[#16a34a]/[0.14] text-[#4ade80]' : 'bg-[#d97706]/[0.14] text-[#fbbf24]')}>{r.status === 'approved' ? 'อนุมัติ' : 'รอตรวจ'}</span>
+                {/* แถว rp-off-* = เงินที่แอดมินยืนยันว่ารับนอกระบบตอนกด Complete/จบงาน (ไม่มีสลิป) — ต้องแยกจากสลิปจริงให้เห็น */}
+                <span className={cx('rounded-md px-2 py-0.5 text-[10.5px] font-bold', r.status === 'approved' ? 'bg-[#16a34a]/[0.14] text-[#4ade80]' : 'bg-[#d97706]/[0.14] text-[#fbbf24]')}>{r.status === 'approved' ? (r.id.startsWith('rp-off-') ? 'รับนอกระบบ' : 'อนุมัติ') : 'รอตรวจ'}</span>
                 <span className="text-[11px] text-ink-faint">{fmtDate(r.created_at)}</span>
               </div>
             );

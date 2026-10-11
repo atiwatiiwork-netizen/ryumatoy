@@ -4,7 +4,7 @@ process.env.TZ = 'Asia/Bangkok'; // ตัดเดือนตามเวล�
 import { SEED_DATABASE } from '../../src/data/seed';
 import { approveOrder, approveRemainingPayment, submitOrder, closeMonth, deleteTicket, backfillPoints, adjustPoints, submitRemainingPayment, setMonthlyConfig, launchPointsPreOnly } from '../../src/data/mutations';
 import { balanceOf, lifetimeOf, ticketIsFullPay, ticketIsPre, rawPointsForTicket, ticketEarnEligible, earnIdFor, ticketsMissingEarn, earnRowForTicket, pointsRates, redeemEnabled, pointsLaunchInfo, launchNotice, earnedTicketCount, launchCorrectionRows, heldPointsFor, redeemHoldId, refundId, reverseIdFor } from '../../src/domain/services/points';
-import { preparePointsLaunch, enablePointsLaunch, editTicketDeposit, mintPointsForTickets, createCoupon, grantCoupon, simulateAfterLaunch, updateSettings } from '../../src/data/mutations';
+import { preparePointsLaunch, enablePointsLaunch, editTicketDeposit, mintPointsForTickets, createCoupon, grantCoupon, simulateAfterLaunch, updateSettings, completeTicketOffline, offlineRpId } from '../../src/data/mutations';
 import { sweepCandidates, earnFixIdFor } from '../../src/domain/services/points';
 import { monthlyConfig, monthlyStatus, monthlyBoard, monthlyPieces, ticketYm, countsForMonthly, DEFAULT_MONTHLY, currentYm, prevYm, closedMonths, monthsToClose, computeMonthSnapshot, monthlyBonusForTicket, pendingBonusDiscount, mbonusId, latestRankOf } from '../../src/domain/services/monthly';
 import type { Database, PreorderTicket, Order } from '../../src/domain/entities';
@@ -66,6 +66,16 @@ const closeTicket = (db: Database, t: PreorderTicket, uid: string) => {
   ok('A8 อนุมัติ: หนี้ถูกลด 25 + ปิดใบ + ได้ 20 คะแนน + สมุดมีคู่ +25/−25', t1.status === 'paid_full' && t1.remaining_amount === due - 25 && db.pointLedger.some((e) => e.id === earnIdFor(t1.id) && e.delta === 20) && db.pointLedger.some((e) => e.id === mbonusId(YM, t1.id) && e.delta === 25) && db.pointLedger.some((e) => e.id === `pl-mbonus-use-${YM}-${t1.id}` && e.delta === -25), t1);
   ok('A9 ยอดคงเหลือ = 20 (โบนัสเป็นส่วนลด ไม่ใช่แต้ม)', balanceOf(db, U) === 20, balanceOf(db, U));
   ok('A10 โบนัสใบที่ 1 ถูกใช้แล้ว (applied) · pendingBonusDiscount = 0', monthlyBonusForTicket(db, t1)?.applied === true && pendingBonusDiscount(db, t1) === 0);
+  // ปิดใบที่ 2 แบบ "Complete นอกระบบ" (หน้าตามของ/TicketPeek) → ต้องหักโบนัสเหมือนอนุมัติสลิป ไม่งั้นรายได้เกินจริง+โบนัสหาย (audit 2026-10-11)
+  {
+    const due2 = tix[1].remaining_amount;
+    const d2 = completeTicketOffline(tix[1].id, { collectRemaining: true })(db);
+    const t2 = d2.tickets.find((x) => x.id === tix[1].id)!;
+    const off = d2.remainingPayments.find((r) => r.id === offlineRpId(tix[1].id));
+    ok('A10b Complete นอกระบบ: หนี้ลด 25 · รับจริง = ค้าง − 25 · ปิดใบ · สมุดมีคู่ +25/−25 · ได้ 20', t2.status === 'shipped' && t2.remaining_amount === due2 - 25 && t2.remaining_paid === due2 - 25 && off?.amount === due2 - 25 && d2.pointLedger.some((e) => e.id === mbonusId(YM, t2.id) && e.delta === 25) && d2.pointLedger.some((e) => e.id === `pl-mbonus-use-${YM}-${t2.id}` && e.delta === -25) && d2.pointLedger.some((e) => e.id === earnIdFor(t2.id) && e.delta === 20), { t2, off });
+    ok('A10c Complete ซ้ำ: no-op ไม่บวกโบนัส/เงินซ้ำ', completeTicketOffline(tix[1].id, { collectRemaining: true })(d2) === d2);
+    ok('A10d หลัง Complete โบนัสใบนั้น applied · ยอดคงเหลือ 20+20', monthlyBonusForTicket(d2, t2)?.applied === true && balanceOf(d2, U) === 40, balanceOf(d2, U));
+  }
   // ปิดใบที่ 11 → ไม่มีส่วนลด
   const due11 = tix[10].remaining_amount;
   const r11 = closeTicket(db, tix[10], U);
