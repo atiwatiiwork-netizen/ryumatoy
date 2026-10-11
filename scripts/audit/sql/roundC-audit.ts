@@ -167,7 +167,7 @@ async function boot() {
   {
     await db.exec('set session_replication_role = replica;');
     await db.query(`insert into remaining_payments (id, ticket_id, user_id, amount, slip_url, status, created_at) values
-      ('rp-ok','t-oi6','uA',100,'https://x/s.jpg','approved',now()), ('rp-pend','t-oi6','uA',100,'https://x/s2.jpg','pending',now())`);
+      ('rp-ok','t-oi6','uA',100,'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg','approved',now()), ('rp-pend','t-oi6','uA',100,'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s2.jpg','pending',now())`);
     await db.exec('set session_replication_role = origin;');
     const d1 = await run(db, 'X', `delete from remaining_payments where id = 'rp-ok'`);
     const still = (await q(db, `select id from remaining_payments where id = 'rp-ok'`)).length;
@@ -181,7 +181,7 @@ async function boot() {
     await db.query(`insert into order_items (id, order_id, product_id, qty, deposit_amount) values ('oiZ','oZ','P1',1,300)`);
     await db.query(`insert into preorder_tickets (id, ticket_no, product_id, owner_id, original_buyer_id, qty, deposit_paid, remaining_amount, remaining_paid, status, product_status)
                     values ('t-oiZ','NR-Z-1','P1','uZ','uZ',1,300,1390,100,'active','production')`);
-    await db.query(`insert into remaining_payments (id, ticket_id, user_id, amount, slip_url, status, created_at) values ('rp-z','t-oiZ','uZ',100,'https://x/z.jpg','approved',now())`);
+    await db.query(`insert into remaining_payments (id, ticket_id, user_id, amount, slip_url, status, created_at) values ('rp-z','t-oiZ','uZ',100,'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/z.jpg','approved',now())`);
     await db.exec('set session_replication_role = origin;');
     const pg = await call(db, 'X', 'ryuma_admin_purge_user', ['uZ']);
     ok('R3 ลบสมาชิกที่มีสลิปอนุมัติแล้ว (ไม่มีประวัติตลาด) ยังลบได้', !!pg.ok && (await q(db, `select id from users where id = 'uZ'`)).length === 0, pg);

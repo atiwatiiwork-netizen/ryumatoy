@@ -88,7 +88,7 @@ async function directDeal(db: PGlite, ticketId: string, qty: number, price: numb
   if (!offer.ok) throw new Error('offer failed ' + JSON.stringify(offer));
   const id = offer.id as string;
   if (upto === 'reserved') return { id, fin: null as Res | null };
-  await call(db, 'B', 'ryuma_market_pay', [id, 'https://x/slip.jpg']);
+  await call(db, 'B', 'ryuma_market_pay', [id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/slip.jpg']);
   await call(db, 'A', 'ryuma_market_seller_confirm', [id]);
   if (upto === 'seller_ok') return { id, fin: null };
   const fin = await call(db, 'X', 'ryuma_market_finalize', [id, null]);
@@ -134,9 +134,9 @@ async function directDeal(db: PGlite, ticketId: string, qty: number, price: numb
     const r3 = await patch(db, 'X', 't-oi2', { qty: 3, market_rev: 1 });
     ok('B4 แอดมินแก้จำนวนชิ้นของตั๋วที่เคยผ่านตลาดไม่ได้ (เก็บค่าเดิมเงียบๆ)', !r3.THROWN && (await ticket(db, 't-oi2')).qty === 2, r3);
     // R3-12: เครื่องเก่าของคนขายจ่ายยอดก่อนแตก (4170) บนใบแม่ที่เหลือค้าง 2780
-    const rp = await run(db, 'A', `insert into remaining_payments (id, ticket_id, user_id, amount, slip_url) values ('rp-over','t-oi2','uA',4170,'https://x/s.jpg')`);
+    const rp = await run(db, 'A', `insert into remaining_payments (id, ticket_id, user_id, amount, slip_url) values ('rp-over','t-oi2','uA',4170,'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg')`);
     ok('B5 สลิปยอดเกินยอดค้าง (เครื่องเก่าจ่ายยอดก่อนแตกขาย) → ถูกปฏิเสธ', !!rp.THROWN && /เกินยอดค้าง/.test(rp.THROWN), rp);
-    const rpOk = await run(db, 'A', `insert into remaining_payments (id, ticket_id, user_id, amount, slip_url) values ('rp-okay','t-oi2','uA',2780,'https://x/s.jpg')`);
+    const rpOk = await run(db, 'A', `insert into remaining_payments (id, ticket_id, user_id, amount, slip_url) values ('rp-okay','t-oi2','uA',2780,'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg')`);
     ok('B6 สลิปยอดพอดียอดค้าง = ผ่านตามปกติ', !rpOk.THROWN, rpOk);
   }
 
@@ -149,7 +149,7 @@ async function directDeal(db: PGlite, ticketId: string, qty: number, price: numb
     ok('C2 ดีลค้าง: แอดมิน "จบงานนอกระบบ" แทรกสลิปไม่ได้ (rp_lock ไม่ยกเว้นแอดมินแล้ว)', !!r2.THROWN, r2);
     const r3 = await patch(db, 'X', 't-oi3', { product_status: 'shipping', market_rev: 0 });
     ok('C3 ดีลค้าง: แอดมินยังเปลี่ยนสถานะรอบได้ (ของเดินทาง)', !r3.THROWN, r3);
-    await call(db, 'B', 'ryuma_market_pay', [id, 'https://x/slip.jpg']);
+    await call(db, 'B', 'ryuma_market_pay', [id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/slip.jpg']);
     await call(db, 'A', 'ryuma_market_seller_confirm', [id]);
     await db.exec('set session_replication_role = replica;');
     await db.query(`update preorder_tickets set deposit_paid = 0, remaining_amount = 1690 where id = 't-oi3'`); // จำลองทางหลุดอื่น
@@ -246,7 +246,7 @@ async function directDeal(db: PGlite, ticketId: string, qty: number, price: numb
     await run(db, 'X', `update users set payout_info = '{"account_name":"Alice","promptpay":"0812345678"}' where id = 'uA'`);
     const l = await call(db, 'A', 'ryuma_market_list', ['t-oi4', 1, 600]);
     const rs = await call(db, 'B', 'ryuma_market_reserve', [l.id]);
-    const py = await call(db, 'B', 'ryuma_market_pay', [l.id, 'https://x/s.jpg']);
+    const py = await call(db, 'B', 'ryuma_market_pay', [l.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
     const cf = await call(db, 'A', 'ryuma_market_seller_confirm', [l.id]);
     const fn = await call(db, 'X', 'ryuma_market_finalize', [l.id, null]);
     const t = await ticket(db, 't-oi4');

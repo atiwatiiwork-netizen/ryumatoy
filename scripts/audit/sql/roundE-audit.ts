@@ -64,7 +64,7 @@ const reason = async (db: PGlite, t: string) => (await q(db, `select ryuma_marke
   const pw = await call(db, 'A', 'ryuma_market_push_targets', [f.id, 'withdrawn']);
   ok('E4 push ถึงผู้รับ: "คนส่งยกเลิกการยกให้แล้ว" (ไม่บอกให้แนบสลิป)', /ยกเลิกการยกให้/.test(pw.body ?? ''), pw);
   const p2 = await call(db, 'A', 'ryuma_market_offer', ['t-oi2', 1, 500, codeB, PAY, 'uB']);
-  await call(db, 'B', 'ryuma_market_pay', [p2.id, 'https://x/s.jpg']);
+  await call(db, 'B', 'ryuma_market_pay', [p2.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
   const cn2 = await call(db, 'A', 'ryuma_market_cancel', [p2.id, 'เปลี่ยนใจ']);
   ok('E5 ดีลมีเงินที่ผู้รับโอนแล้ว คนส่งยังถอนเองไม่ได้', cn2.error === 'bad_status', cn2);
 

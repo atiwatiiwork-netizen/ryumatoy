@@ -88,16 +88,16 @@ async function boot() {
     const c = await call(db, 'A', 'ryuma_market_cancel', [o.id]);
     // v79 (เจ้าของ 2026-10-05): ถอนได้ทุกเมื่อแต่ต้องมีเหตุผล — ไม่ใส่เหตุผล = ไม่ถอน
     ok('W2 ผู้รับเปิดหน้าโอนแล้ว คนส่งถอนโดยไม่ใส่เหตุผลไม่ได้ (reason_required)', c.error === 'reason_required' && (await tr(db, o.id)).status === 'reserved', c);
-    const pay = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://x/slip.jpg']);
+    const pay = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/slip.jpg']);
     ok('W3 ผู้รับแนบสลิปได้ตามปกติ → paid', !!pay.ok && (await tr(db, o.id)).status === 'paid', pay);
 
     const o2 = await offer('t-oi3', 500);
     const c2 = await call(db, 'A', 'ryuma_market_cancel', [o2.id, 'ส่งผิดคน']);
     ok('W4 ผู้รับยังไม่เปิดหน้าโอน → คนส่งถอนได้', !!c2.ok, c2);
-    const late = await call(db, 'B', 'ryuma_market_pay', [o2.id, 'https://x/late.jpg']);
+    const late = await call(db, 'B', 'ryuma_market_pay', [o2.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/late.jpg']);
     const t2 = await tr(db, o2.id);
     ok('W5 โอนไปแล้วแต่คนส่งถอนก่อน → แนบสลิปได้ เก็บเป็นหลักฐาน (withdrawn + recorded) · ดีลยังปิด',
-      late.error === 'withdrawn' && late.recorded === true && t2.status === 'cancelled' && t2.review_reason === 'late_slip' && !!t2.paid_at && t2.slip_url === 'https://x/late.jpg', { late, t2 });
+      late.error === 'withdrawn' && late.recorded === true && t2.status === 'cancelled' && t2.review_reason === 'late_slip' && !!t2.paid_at && t2.slip_url === 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/late.jpg', { late, t2 });
     const d = await call(db, 'B', 'ryuma_market_decline', [o2.id]);
     ok('W6 กด "ไม่รับ" กับดีลที่คนส่งถอนแล้ว → withdrawn (ไม่บอก "แจ้งคนส่งแล้ว")', d.error === 'withdrawn', d);
     const push = await call(db, 'B', 'ryuma_market_push_targets', [o2.id, 'late_slip']);
@@ -111,7 +111,7 @@ async function boot() {
     await db.exec('set session_replication_role = replica;');
     await db.query(`update ticket_transfers set hold_until = now() - interval '1 hour', expires_at = now() - interval '1 hour' where id = $1`, [o3.id]);
     await db.exec('set session_replication_role = origin;');
-    const late2 = await call(db, 'B', 'ryuma_market_pay', [o3.id, 'https://x/late2.jpg']);
+    const late2 = await call(db, 'B', 'ryuma_market_pay', [o3.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/late2.jpg']);
     const t3 = await tr(db, o3.id);
     ok('W9 หมดเวลา 24 ชม. แล้วค่อยแนบสลิป → hold_expired + recorded · สถานะ expired · เก็บสลิป', late2.error === 'hold_expired' && late2.recorded === true && t3.status === 'expired' && t3.review_reason === 'late_slip', { late2, t3 });
   }
@@ -122,7 +122,7 @@ async function boot() {
     await db.exec('set session_replication_role = replica;');
     await db.query(`update preorder_tickets set delivery = '{"method":"pickup","requested_at":"2026-10-03T00:00:00Z"}' where id = 't-oi5'`);
     await db.exec('set session_replication_role = origin;');
-    const p = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://x/s.jpg']);
+    const p = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
     const t = await tr(db, o.id);
     ok('X1 ตั๋วเปลี่ยนระหว่าง 24 ชม. (เลือกวิธีรับของ) → จ่ายไม่ผ่าน gone + เก็บสลิปเป็นหลักฐาน · ดีลปิด', p.error === 'gone' && p.recorded === true && t.status === 'cancelled' && t.cancel_reason === 'ticket_changed' && t.review_reason === 'late_slip', { p, t });
 
@@ -158,7 +158,7 @@ async function boot() {
     const r1 = await call(db, 'B', 'ryuma_market_reserve', [l.id]);
     const rl = await call(db, 'B', 'ryuma_market_release', [l.id]);
     const r2 = await call(db, 'C', 'ryuma_market_reserve', [l.id]);
-    const py = await call(db, 'C', 'ryuma_market_pay', [l.id, 'https://x/s.jpg']);
+    const py = await call(db, 'C', 'ryuma_market_pay', [l.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
     ok('Y3 กระดาน: จอง → ปล่อยจอง → คนอื่นจอง → จ่าย ยังทำงานเหมือนเดิม', !!l.ok && !!r1.ok && !!rl.ok && !!r2.ok && !!py.ok, { l, r1, rl, r2, py });
   }
 

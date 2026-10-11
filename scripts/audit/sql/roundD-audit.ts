@@ -55,7 +55,7 @@ async function deal(db: PGlite, ticket: string, qty: number) {
   const code = (await call(db, 'B', 'ryuma_wallet_code')).code as string;
   const o = await call(db, 'A', 'ryuma_market_offer', [ticket, qty, 500, code, PAY, 'uB']);
   if (!o.ok) return { o };
-  const p = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://x/s.jpg']);
+  const p = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
   const c = await call(db, 'A', 'ryuma_market_seller_confirm', [o.id]);
   const f = await call(db, 'X', 'ryuma_market_finalize', [o.id, null]);
   return { o, p, c, f, id: o.id as string };

@@ -142,7 +142,8 @@ export function ticketEarnBlock(db: Database, t: PreorderTicket): string | null 
   // สถานะที่ยังไม่ใช่ตั๋วจริง / ย้ายมือไปแล้ว (audit 2026-09-23)
   if (t.status === 'pending_approval' || t.status === 'transferred') return 'สถานะตั๋วไม่เข้าเกณฑ์';
   // บัญชีทีมงาน/แอดมิน — ตั๋วทดสอบไม่ควรพองหนี้คะแนนร้าน
-  if (isStaffAccount(db, t.owner_id)) return 'บัญชีแอดมิน/ทีมงาน';
+  // ดูที่ "คนได้แต้ม" (คนปิดยอด) ไม่ใช่คนถือ — ใบที่เปลี่ยนมือ: ทีมงานขายให้ลูกค้า แต้มไม่ควรไปทีมงาน · ลูกค้าขายให้ทีมงาน ลูกค้าไม่ควรเสียแต้ม (audit 1005 รอบ 4)
+  if (isStaffAccount(db, closerOf(db, t))) return 'บัญชีแอดมิน/ทีมงาน';
   if (ancestorEarned(db, t)) return 'แต้มได้ไปแล้วตอนปิดยอดใบแม่ (ก่อนแตกขาย)';
   if (isSourcingTicket(db, t)) return 'ตั๋วหาของ (ไม่ให้เฟสนี้)';
   // ตั๋วในรอบ "หาของ" แต่เรื่องหาของถูกลบไปแล้ว → isSourcingTicket จับไม่ได้ → เดิมจะกลายเป็นรอบพิเศษ +40 (audit 2026-09-23)
@@ -330,7 +331,7 @@ export function simulateAll(db: Database): SimRow[] {
   for (const t of db.tickets) {
     const pts = pointsForTicket(db, t);
     if (pts <= 0) continue;
-    const r = get(t.owner_id);
+    const r = get(closerOf(db, t)); // แต้มปิดใบเข้า "คนปิดยอด" (ใบเปลี่ยนมือ ≠ คนถือ) — ตรงกับ earnRowForTicket
     r.closedTickets += 1;
     r.wouldEarn += pts;
     // ที่ให้ไปแล้ว = ตัวเลขในสมุดจริง (อัตราอาจเปลี่ยนหลังให้ไป) ไม่ใช่สูตรปัจจุบัน

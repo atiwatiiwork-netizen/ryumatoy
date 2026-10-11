@@ -15,6 +15,7 @@ import { qualifyingCount } from '../../src/domain/services/campaigns';
 import { missionStateFor } from '../../src/domain/services/missions';
 import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket, dealStatusLabel, directEnabled, directVisibleTo, anyMarketVisibleTo, marketVisibleTo } from '../../src/domain/services/market';
 import { crc16ccitt, promptPayPayload, promptPayTarget } from '../../src/lib/promptpay';
+import { closerOf, ticketEarnBlock, simulateAll } from '../../src/domain/services/points';
 import { ticketSelectable } from '../../src/domain/services/payments';
 import { setMarketPublic, setPayoutInfo, setMarketDirect, setPayoutAccounts, payoutInfoOf } from '../../src/data/mutations';
 import { THAI_BANKS, bankOf, maskAccount } from '../../src/lib/thaiBanks';
@@ -394,6 +395,44 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   ok('N14 ไฟนอลดีลตรง: ตั๋วย้ายไปผู้รับ · เลข -T1 · เงินร้านไม่ขยับ · ผู้รับติดถือ 3 วัน', moved.owner_id === B && moved.ticket_no.endsWith('-T1')
     // เงินบนตั๋วต้องไม่หายไม่งอก: ยอดเต็ม/ที่จ่ายแล้ว รวมทุกใบเท่าเดิม (audit รอบ E R1-47: เดิมเทียบ cashIn ซึ่งไฟนอลไม่แตะอยู่แล้ว ไม่มีวันล้ม)
     && sumMoney(db5) === sumMoney(db4) && cashIn(db5).deposits === cashIn(db4).deposits && (sellBlockReason(db5, moved, B) ?? '').includes('ถือครบ 2 วัน'));
+}
+
+// ── O) v83 (audit 1005 รอบ 4 · จำลองกระดาน): รอบพิเศษที่ยังเปิด · ประวัติ = ดีลที่มีเงิน/ค้าง · แต้มดูคนปิดยอด ──────
+{
+  const db = structuredClone(base);
+  db.batches.push({ id: 'b-open', product_id: P.id, label: 'รอบ 2', price_total: 1690, deposit_amount: 300, stock_qty: 3, status: 'open', created_at: iso(-D) } as any,
+                  { id: 'b-done', product_id: P.id, label: 'รอบ 1', price_total: 1690, deposit_amount: 300, stock_qty: 0, status: 'closed', created_at: iso(-5 * D) } as any);
+  const tOpen = orderTicket(db, S, { batchId: 'b-open' }), tDone = orderTicket(db, S, { batchId: 'b-done' });
+  ok('O1 ตั๋วรอบพิเศษที่ร้านยังเปิดขาย → "ยังเปิดจอง" (ซ่อนปุ่มขาย) · รอบปิดแล้ว → ขายได้ (ตรง SQL v83)',
+    (sellBlockReason(db, tOpen, S) ?? '').startsWith('ยังเปิดจอง') && sellBlockReason(db, tDone, S) === null, [sellBlockReason(db, tOpen, S), sellBlockReason(db, tDone, S)]);
+  db.batches = db.batches.map((x) => (x.id === 'b-open' ? { ...x, stock_qty: 0 } : x));
+  ok('O2 รอบพิเศษที่ของหมดแล้ว (ร้านไม่ได้ขายแล้ว) → ขายได้', sellBlockReason(db, tOpen, S) === null, sellBlockReason(db, tOpen, S));
+
+  const h = orderTicket(db, S);
+  db.transfers = [listing(h, { status: 'cancelled', cancelled_at: iso(-H), cancel_reason: 'seller' })];
+  const withdrawn = hasMarketHistory(db, h);
+  db.transfers = [listing(h, { status: 'expired', expires_at: iso(-H) })];
+  const expired = hasMarketHistory(db, h);
+  db.transfers = [listing(h)];
+  const live = hasMarketHistory(db, h);
+  db.transfers = [listing(h, { status: 'cancelled', paid_at: iso(-2 * H), review_reason: 'late_slip', to_user_id: B })];
+  const paidCancel = hasMarketHistory(db, h);
+  ok('O3 ประวัติซื้อขาย: ลงแล้วถอน/หมดอายุ = ไม่นับ (แอดมินลบ/แก้ได้) · ลงขายค้าง/ยกเลิกหลังมีเงินโอน = นับ (ตรง SQL v83)',
+    !withdrawn && !expired && live && paidCancel, { withdrawn, expired, live, paidCancel });
+
+  // แต้มปิดใบ: ดู "คนปิดยอด" ไม่ใช่คนถือ
+  db.transfers = [];
+  db.settings = { ...db.settings, points_enabled: true, points_per_piece_pre: 20 };
+  const staffSold = orderTicket(db, 'u-admin', { paid: 1390 });           // ทีมงานจ่ายครบเอง แล้วขายให้ลูกค้า
+  const custSold = orderTicket(db, S, { paid: 1390 });                    // ลูกค้าจ่ายครบเอง แล้วขายให้ทีมงาน
+  db.tickets = db.tickets.map((x) => (x.id === staffSold.id ? { ...x, owner_id: B } : x.id === custSold.id ? { ...x, owner_id: 'u-admin' } : x));
+  const tS = db.tickets.find((x) => x.id === staffSold.id)!, tC = db.tickets.find((x) => x.id === custSold.id)!;
+  ok('O4 แต้ม: ใบที่ทีมงานปิดยอดแล้วขายให้ลูกค้า = ไม่ให้แต้ม (ไม่ไปเข้าทีมงาน) · ใบที่ลูกค้าปิดยอดแล้วขายให้ทีมงาน = ลูกค้ายังได้',
+    closerOf(db, tS) === 'u-admin' && ticketEarnBlock(db, tS) === 'บัญชีแอดมิน/ทีมงาน' && closerOf(db, tC) === S && ticketEarnBlock(db, tC) === null,
+    [closerOf(db, tS), ticketEarnBlock(db, tS), closerOf(db, tC), ticketEarnBlock(db, tC)]);
+  const sim = simulateAll(db);
+  ok('O5 พรีวิวแต้มทั้งร้านจัดกลุ่มตามคนปิดยอด (ลูกค้าที่ขายใบไปแล้วยังเห็นแต้มของใบนั้น · ทีมงานไม่โผล่)',
+    (sim.find((r) => r.userId === S)?.wouldEarn ?? 0) >= 20 && !sim.some((r) => r.userId === 'u-admin' && r.wouldEarn > 0), sim.slice(0, 4));
 }
 
 console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);

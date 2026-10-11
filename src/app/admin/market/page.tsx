@@ -404,11 +404,11 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
         </div>
         {cancelling && (
           <div className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.08] p-3">
-            <div className="text-[12px] text-ink-muted2">{free ? 'ยกให้ฟรี — ไม่มีเงินเปลี่ยนมือ' : tr.paid_at ? `${buyerWord}โอนไปแล้ว — ตามกติกา ${sellerWord}ต้องคืนเงินเอง + แนบสลิปคืน` : 'ยังไม่มีการโอนเงิน'}</div>
+            <div className="text-[12px] text-ink-muted2">{free ? 'ยกให้ฟรี — ไม่มีเงินเปลี่ยนมือ' : tr.paid_at ? `${buyerWord}โอนไปแล้ว — ตามกติกา ${sellerWord}ต้องคืนเงินเอง + แนบสลิปคืน · ดีลจะย้ายไปคิว "เคลียร์คืนเงิน" จนกว่าจะปิดเรื่อง` : 'ยังไม่มีการโอนเงิน'}</div>
             <input id={`cancel-${tr.id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เหตุผล (ลูกค้าจะเห็น)" className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none" />
             <div className="mt-2 flex gap-2">
               <button type="button" onClick={() => setCancelling(false)} className="flex-1 rounded-lg border border-subtle py-2 text-[12.5px] font-bold text-ink-muted2">ไม่ยกเลิก</button>
-              <button type="button" disabled={!reason.trim() || busy} onClick={() => void act(() => mk.marketAdminCancel(tr.id, reason.trim()), 'ยกเลิกดีลแล้ว', () => { void mk.marketPush(tr.id, 'cancelled'); setCancelling(false); })}
+              <button type="button" disabled={!reason.trim() || busy} onClick={() => void act(() => mk.marketAdminCancel(tr.id, reason.trim()), tr.paid_at && !free ? 'ยกเลิกดีลแล้ว · ย้ายไปคิว "เคลียร์คืนเงิน" ด้านบน' : 'ยกเลิกดีลแล้ว', () => { void mk.marketPush(tr.id, 'cancelled'); setCancelling(false); })}
                 className="flex-1 rounded-lg bg-[#b91c1c] py-2 text-[12.5px] font-bold text-white disabled:opacity-50">ยืนยันยกเลิก</button>
             </div>
           </div>

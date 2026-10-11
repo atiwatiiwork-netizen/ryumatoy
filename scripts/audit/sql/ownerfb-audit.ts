@@ -48,7 +48,7 @@ const PAY = { account_name: 'Alice A', promptpay: '0812345678' };
   ok('F2 ผู้รับเปิดหน้าโอนแล้ว ถอนได้เมื่อใส่เหตุผล · เก็บเหตุผล · ชื่อผู้รับยังอยู่', !!y.ok && row.status === 'cancelled' && row.cancel_reason === 'seller' && row.cancel_note === 'ส่งผิดคน · จะส่งใหม่' && row.to_user_id === 'uB', { y, row });
   const pw = await call(db, 'A', 'ryuma_market_push_targets', [o.id, 'withdrawn']);
   ok('F3 push ถึงผู้รับมีเหตุผล + บอกให้แนบสลิปถ้าโอนแล้ว', /เหตุผล: ส่งผิดคน/.test(pw.body ?? '') && /แนบสลิป/.test(pw.body ?? ''), pw);
-  const late = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://x/late.jpg']);
+  const late = await call(db, 'B', 'ryuma_market_pay', [o.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/late.jpg']);
   ok('F4 ผู้รับโอนไปแล้ว → แนบสลิปได้ เก็บเป็นหลักฐานให้ร้านเคลียร์ (late slip ยังทำงาน)', late.error === 'withdrawn' && late.recorded === true, late);
   const long = await call(db, 'A', 'ryuma_market_offer', ['t-oi2', 1, 500, codeB, PAY, 'uB']);
   await call(db, 'A', 'ryuma_market_cancel', [long.id, 'x'.repeat(500)]);
@@ -59,7 +59,7 @@ const PAY = { account_name: 'Alice A', promptpay: '0812345678' };
 
   // ── ข้อ 5: cool down 2 วัน ────────────────────────────────────────────────────────────
   const d = await call(db, 'A', 'ryuma_market_offer', ['t-oi4', 1, 500, codeB, PAY, 'uB']);
-  await call(db, 'B', 'ryuma_market_pay', [d.id, 'https://x/s.jpg']);
+  await call(db, 'B', 'ryuma_market_pay', [d.id, 'https://abcdefghijklmnop.supabase.co/storage/v1/object/public/logos/s.jpg']);
   await call(db, 'A', 'ryuma_market_seller_confirm', [d.id]);
   const fin = await call(db, 'X', 'ryuma_market_finalize', [d.id, null]);
   const reason = async () => (await q(db, `select ryuma_market_block_reason('t-oi4', 'uB', 1) as r`))[0].r;

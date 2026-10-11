@@ -271,9 +271,12 @@ function PayPanel({ tr, price, due, serverNow, now, flash, reload }: {
     flash('ส่งสลิปแล้ว · แจ้งคนขายให้เช็คเงินแล้ว');
   };
   const release = async () => {
+    if (busy) return; // กดซ้ำ = ครั้งที่ 2 ได้ "ไม่พบรายการ" (จำลองกระดาน 2026-10-11)
+    setBusy(true);
     const r = await mk.marketRelease(tr.id);
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
     await reload();
+    setBusy(false);
     flash('ปล่อยการจองแล้ว');
   };
   return (
@@ -299,7 +302,7 @@ function PayPanel({ tr, price, due, serverNow, now, flash, reload }: {
       </label>
       <button type="button" disabled={!slip || busy} onClick={() => void send()}
         className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">{busy && slip ? 'กำลังส่ง…' : 'ส่งสลิป · แจ้งคนขาย + ร้าน'}</button>
-      <button type="button" onClick={() => void release()} className="text-[12px] text-ink-faint underline">ยกเลิกการจอง (ยังไม่ได้โอน)</button>
+      <button type="button" disabled={busy} onClick={() => void release()} className="text-[12px] text-ink-faint underline disabled:opacity-50">ยกเลิกการจอง (ยังไม่ได้โอน)</button>
     </div>
   );
 }
@@ -315,10 +318,14 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
   const [busy, setBusy] = useState(false);
   const at = st === 'paid' || st === 'reviewing' ? 2 : st === 'seller_ok' || st === 'pending_admin' ? 3 : st === 'done' || st === 'approved' ? 4 : 1;
   const slaLeft = sellerSlaLeft(tr, new Date(now));
+  const [reminded, setReminded] = useState(false);
   const escalate = async () => {
+    if (busy) return;
+    setBusy(true);
     const r = await mk.marketEscalate(tr.id, `${sender}ยังไม่ยืนยันเกิน 12 ชม.`);
-    if (!r.ok) { flash(mk.marketErrText(r)); return; }
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
     await reload();
+    setBusy(false);
     void mk.marketPush(tr.id, 'reviewing');
     notifyAdminLine(`🔎 ${direct ? '[เปลี่ยนใบพรี]' : 'ตลาดใบพรี:'} ผู้ซื้อขอให้ตรวจสอบ (${sender}เงียบเกิน 12 ชม.) · ดีล ${tr.id}`);
     flash('ส่งเรื่องให้ร้านตรวจสอบแล้ว');
@@ -391,10 +398,11 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
         {st === 'reviewing' && <><b>ร้านกำลังตรวจสอบดีลนี้</b> · แอดมินจะติดต่อ{sender}และอาจขอหลักฐานการโอนจากคุณ</>}
       </div>
       {st === 'paid' && slaLeft <= 0 && (
-        <button type="button" onClick={() => void escalate()} className="rounded-btn border-[1.5px] border-accent px-5 py-3 text-[14px] font-bold text-primary-soft">แจ้งร้านให้ตรวจสอบ</button>
+        <button type="button" disabled={busy} onClick={() => void escalate()} className="rounded-btn border-[1.5px] border-accent px-5 py-3 text-[14px] font-bold text-primary-soft disabled:opacity-50">แจ้งร้านให้ตรวจสอบ</button>
       )}
       {st === 'paid' && slaLeft > 0 && !free && (
-        <button type="button" onClick={() => { void mk.marketPush(tr.id, 'remind'); flash(`ส่งแจ้งเตือนหา${sender}แล้ว`); }} className="text-[12px] text-ink-faint underline">เตือน{sender}อีกครั้ง</button>
+        <button type="button" disabled={reminded} onClick={() => { setReminded(true); void mk.marketPush(tr.id, 'remind'); flash(`ส่งแจ้งเตือนหา${sender}แล้ว · เตือนซ้ำได้ชั่วโมงละครั้ง`); }}
+          className="text-[12px] text-ink-faint underline disabled:no-underline disabled:opacity-60">{reminded ? `เตือน${sender}แล้ว ✓` : `เตือน${sender}อีกครั้ง`}</button>
       )}
       {lineOa && <a href={`https://line.me/R/ti/p/${encodeURIComponent(lineOa)}`} target="_blank" rel="noreferrer" className="text-center text-[12px] text-ink-faint underline">ติดต่อร้าน (LINE {lineOa})</a>}
     </div>

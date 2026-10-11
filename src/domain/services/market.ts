@@ -123,10 +123,14 @@ export function activeListingOf(db: Database, ticketId: string, now: Date = new 
 /** ตั๋วถูกล็อกเพราะลงขายอยู่ — ทุก mutation ที่แตะเงิน/การรับของของตั๋วต้องเช็คตัวนี้ (ด่านต้องอยู่ใน mutation) */
 export const marketLocked = (db: Database, ticketId: string, now: Date = new Date()) => !!activeListingOf(db, ticketId, now);
 
-/** ตั๋วนี้เคยผ่านตลาด (ขาย/ถูกแตกขาย/เป็นตั๋วลูก) — ลบทิ้งไม่ได้ ไม่งั้นหลักฐานว่าใครขายให้ใครหาย */
-export function hasMarketHistory(db: Database, t: PreorderTicket): boolean {
+/** ดีลนี้นับเป็น "ประวัติ" ไหม = โอนสิทธิ์แล้ว / มีเงินเปลี่ยนมือ / ยังค้างอยู่ — ลงขายแล้วถอน/หมดอายุเฉยๆ ไม่นับ
+ *  (v83 · audit 1005 รอบ 4: เดิมนับทุกแถว → ลงขายแล้วถอนครั้งเดียว แอดมินแก้/ลบตั๋วไม่ได้ตลอดไป) · ตรงกับ ryuma_transfer_counts */
+const transferCounts = (tr: TicketTransfer, now: Date) => TRANSFER_DONE.has(tr.status) || !!tr.paid_at || isActiveTransfer(tr, now);
+
+/** ตั๋วนี้เคยผ่านตลาด (ขาย/ถูกแตกขาย/เป็นตั๋วลูก/มีดีลค้าง) — ลบทิ้งไม่ได้ ไม่งั้นหลักฐานว่าใครขายให้ใครหาย */
+export function hasMarketHistory(db: Database, t: PreorderTicket, now: Date = new Date()): boolean {
   return !!t.split_from
-    || db.transfers.some((tr) => tr.ticket_id === t.id || tr.child_ticket_id === t.id)
+    || db.transfers.some((tr) => (tr.ticket_id === t.id || tr.child_ticket_id === t.id) && transferCounts(tr, now))
     || db.tickets.some((x) => x.split_from === t.id);
 }
 
@@ -266,6 +270,9 @@ function permanentBlock(db: Database, t: PreorderTicket, userId: string): string
   // ตั๋วในรอบ "หาของ" แม้เรื่องหาของถูกลบไปแล้ว (R2B-19 · เหมือน points.ts)
   if (isSourcingTicket(db, t) || (t.batch_id && db.batches.find((b) => b.id === t.batch_id)?.label === 'หาของ')) return 'ตั๋วงานหาของขายในตลาดไม่ได้';
   if (t.product_status === 'open') return 'ยังเปิดจองอยู่ — ขายได้หลังปิดรอบ';
+  // รอบพิเศษที่ร้านยังเปิดขายอยู่ (เปิด + ไม่ซ่อน + ยังมีของ) = ยังเปิดจอง (ข้อ 1A · v83)
+  const b = t.batch_id ? db.batches.find((x) => x.id === t.batch_id) : undefined;
+  if (b && b.status === 'open' && b.published !== false && (b.stock_qty ?? 0) > 0) return 'ยังเปิดจองอยู่ — ขายได้หลังปิดรอบ';
   if (!SELLABLE_PRODUCT_STATUSES.includes(t.product_status)) return 'ของถึงมือแล้ว ขายในตลาดไม่ได้';
   return null;
 }

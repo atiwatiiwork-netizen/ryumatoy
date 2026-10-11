@@ -151,7 +151,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     ok('M4 ticketTransferred: ไฟนอลแล้ว / ใบแม่ที่ถูกแตก / ตั๋วลูก = true · ตั๋วธรรมดา = false',
       ticketTransferred(db, db.tickets.find((t) => t.id === 't-oiA01')!) && ticketTransferred(db, db.tickets.find((t) => t.id === 't-oiA03')!) && ticketTransferred(db, db.tickets.find((t) => t.id === 'tc-child01')!) && !ticketTransferred(db, db.tickets.find((t) => t.id === 't-oiA02')!));
     const listedOnly = { ...db, transfers: [{ id: 'tr-x', ticket_id: 't-oiA02', from_user_id: 'uA', asking_price: 1, status: 'cancelled', listed_at: when } as TicketTransfer] };
-    ok('M5 ใบที่แค่เคยลงขายแล้วถอน: มีประวัติตลาด (ลบไม่ได้) แต่ยังไม่นับว่าเปลี่ยนมือ (แก้มัดจำได้)', hasMarketHistory(listedOnly, listedOnly.tickets.find((t) => t.id === 't-oiA02')!) && !ticketTransferred(listedOnly, listedOnly.tickets.find((t) => t.id === 't-oiA02')!));
+    // กติกา v83 (audit 1005 รอบ 4): ลงแล้วถอนโดยไม่มีเงินเปลี่ยนมือ = ไม่ใช่ประวัติ (เดิมนับ → แอดมินลบ/แก้ตั๋วไม่ได้ตลอดไป)
+    ok('M5 ใบที่แค่เคยลงขายแล้วถอน: ไม่นับเป็นประวัติตลาด (แอดมินลบ/แก้ได้) และไม่นับว่าเปลี่ยนมือ (แก้มัดจำได้)', !hasMarketHistory(listedOnly, listedOnly.tickets.find((t) => t.id === 't-oiA02')!) && !ticketTransferred(listedOnly, listedOnly.tickets.find((t) => t.id === 't-oiA02')!));
     ok('M6 แก้มัดจำตั๋วที่เปลี่ยนมือแล้ว = ไม่ทำอะไร · ตั๋วธรรมดาแก้ได้', editTicketDeposit('t-oiA01', 500)(db) === db && editTicketDeposit('t-oiA02', 500)(db).tickets.find((t) => t.id === 't-oiA02')?.deposit_paid === 500);
     // ตัวซ่อมตั๋ว: ออเดอร์ A มี 2 รายการสินค้าเดียวกัน · ตั๋วของรายการที่ 2 มีอยู่แล้ว แต่ตั๋วรายการแรกหาย → ห้ามมินต์ทับ id เดิม
     const d2: Database = structuredClone(SEED_DATABASE);
