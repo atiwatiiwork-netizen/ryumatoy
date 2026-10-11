@@ -4,7 +4,7 @@
  * รัน: npm run audit:sql
  */
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser, rpc } from './pgdb';
+import { bootDb, asUser, rpc, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -33,6 +33,7 @@ const PAY = { account_name: 'Alice A', promptpay: '0812345678' };
                     values ($1,$2,'P1','uA','uA',1,300,1390,0,'active','production',now())`, [`t-oi${i}`, `NR-2026-10-50${i}`]);
   }
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}'), ('market_public', '{"enabled": true}')`);
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   const codeB = (await call(db, 'B', 'ryuma_wallet_code')).code as string;
 

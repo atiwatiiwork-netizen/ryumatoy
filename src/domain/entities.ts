@@ -334,6 +334,9 @@ export interface RemainingPayment {
 
 /** ประกาศขายใบพรี 1 รายการ (ตลาดใบพรี v71). ทุกการเปลี่ยนสถานะผ่าน RPC `ryuma_market_*` เท่านั้น —
  *  แอปไม่เขียนตารางนี้เอง (adapter ไม่ sync) · ลูกค้าเห็นเฉพาะแถวที่ตัวเองเป็นคนขาย/คนซื้อ (กระดานมาจาก RPC feed) */
+/** เหตุผลที่คนขายยังไม่ยืนยันรับเงิน (v84): สลิปถูกแต่เงินไม่เข้า · ได้เงินไม่ครบ/เกิน · สลิปผิด */
+export type SellerFlag = 'not_arrived' | 'wrong_amount' | 'wrong_slip';
+
 export interface TicketTransfer {
   id: string;
   ticket_id: string;
@@ -354,6 +357,12 @@ export interface TicketTransfer {
   review_reason?: 'seller_silent' | 'not_received' | 'admin' | 'late_slip' | 'late_slip_done';
   review_note?: string;
   review_evidence?: string[];
+  /** v84 (เจ้าของ 2026-10-11): คนขายเช็คสลิปแล้ว "ยังไม่ได้รับเงิน" — แจ้งกลับผู้ซื้อก่อน (ดีลยัง paid) */
+  seller_flag?: SellerFlag | null;
+  seller_flag_note?: string | null;
+  seller_flag_at?: string | null;
+  /** สลิปเก่าที่ผู้ซื้อแนบใหม่ทับ (หลักฐาน · พร้อมเหตุผลของคนขายรอบนั้น) */
+  slip_history?: { slip?: string | null; paid_at?: string | null; flag?: SellerFlag | null; flag_note?: string | null; flag_at?: string | null; buyer_note?: string | null; replaced_at?: string }[];
   reviewing_at?: string;
   finalized_by?: string;    // แอดมินที่กดไฟนอล
   prev_ticket_no?: string;

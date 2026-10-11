@@ -146,7 +146,7 @@ function Controls({ engine, db }: { engine: MarketSandbox; db: Database }) {
         </div>}>
         <div className="text-[11.5px] leading-relaxed text-ink-faint">
           {engine.auto
-            ? 'ลงขาย → อีกไม่กี่วินาทีจะมีคนจอง แล้วโอน+แนบสลิปให้ · ซื้อของคนอื่น → คนขายยืนยันรับเงินให้เอง · ขั้นโอนสิทธิ์เป็นของคุณที่ฝั่งร้านด้านล่าง'
+            ? 'ลงขาย → อีกไม่กี่วินาทีจะมีคนสมมุติมาจอง แล้วโอน+แนบสลิปให้ · ส่วนการตอบของอีกฝั่ง (คนขายยืนยัน/แจ้งยังไม่ได้รับเงิน · ผู้ซื้อแนบสลิปใหม่/ส่งเรื่อง) คุณเลือกเองที่ปุ่มของแต่ละดีล · ขั้นโอนสิทธิ์อยู่ฝั่งร้านด้านล่าง'
             : 'ปิดตอบเองอยู่ — กดสั่งคู่ค้าทีละขั้นที่ปุ่มของแต่ละดีลด้านล่าง'}
         </div>
         {deals.length === 0 ? (
@@ -209,9 +209,12 @@ function DealRow({ engine, db, tr }: { engine: MarketSandbox; db: Database; tr: 
   let hint = '';
   if (seller && st === 'listed') btns.push(['🤖 ให้มีคนจอง', () => engine.botReserve(tr.id)]);
   if (seller && st === 'reserved' && botBuyer) { btns.push(['🤖 ผู้ซื้อโอน + แนบสลิป', () => engine.botPay(tr.id)], ['🤖 ผู้ซื้อปล่อยการจอง', () => engine.botRelease(tr.id)]); }
-  if (seller && (st === 'paid' || st === 'reviewing')) hint = 'ถึงตาคุณ: เปิด “ซื้อขายของฉัน” ในจอซ้าย → เช็คสลิป → ยืนยันรับเงิน / แจ้งไม่ได้รับ';
+  if (seller && st === 'paid' && !tr.seller_flag) hint = 'ถึงตาคุณ: เปิด “ซื้อขายของฉัน” ในจอซ้าย → เช็คสลิป → “ได้รับเงินแล้ว” หรือ “ยังไม่ได้รับเงิน” (เลือกเหตุผล)';
+  if (seller && st === 'paid' && tr.seller_flag && botBuyer) { hint = 'คุณแจ้งผู้ซื้อแล้ว — เลือกว่าผู้ซื้อจะตอบอะไร'; btns.push(['🤖 ผู้ซื้อแนบสลิปใหม่', () => engine.botReslip(tr.id)], ['🤖 ผู้ซื้อยืนยันสลิปถูก → ส่งร้าน', () => engine.botEscalate(tr.id)]); }
+  if (seller && st === 'reviewing') hint = 'ร้านกำลังตรวจสอบ — ฝั่งร้านด้านล่างตัดสิน (ยืนยันแล้วโอนสิทธิ์ / ยกเลิก) หรือคุณกด “ได้รับเงินแล้ว” เองก็ได้';
   if (!seller && st === 'reserved') hint = 'ถึงตาคุณ: โอนตาม QR แล้วแนบรูปสลิป (รูปอะไรก็ได้ · ไม่ได้อัปโหลดจริง)';
-  if (!seller && st === 'paid') btns.push(['🤖 คนขายยืนยันรับเงิน', () => engine.botConfirm(tr.id)], ['🤖 คนขายแจ้งไม่ได้รับเงิน', () => engine.botReject(tr.id)]);
+  if (!seller && st === 'paid' && !tr.seller_flag) { hint = 'เลือกว่าคนขายจะตอบอะไร:'; btns.push(['🤖 คนขายยืนยันรับเงิน', () => engine.botConfirm(tr.id)], ['🤖 คนขาย: สลิปถูกแต่เงินไม่เข้า', () => engine.botFlag(tr.id, 'not_arrived')], ['🤖 คนขาย: ได้เงินไม่ครบ/เกิน', () => engine.botFlag(tr.id, 'wrong_amount')], ['🤖 คนขาย: สลิปผิด', () => engine.botFlag(tr.id, 'wrong_slip')]); }
+  if (!seller && st === 'paid' && tr.seller_flag) { hint = 'ถึงตาคุณ: คนขายแจ้งยังไม่ได้รับเงิน — เปิดดีลในจอซ้าย แนบสลิปใหม่ หรือส่งเรื่องให้ร้าน'; btns.push(['🤖 คนขายเจอเงินแล้ว · ยืนยัน', () => engine.botConfirm(tr.id)]); }
   if (!seller && st === 'reviewing' && tr.from_user_id !== SB_ME) btns.push(['🤖 คนขายยืนยันรับเงิน', () => engine.botConfirm(tr.id)]);
   if (st === 'seller_ok') hint = 'ถึงตาร้าน: กดค้าง “โอนสิทธิ์” ในคิวงานร้านด้านล่าง';
   return (

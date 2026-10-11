@@ -1,4 +1,4 @@
-import type { Database, PreorderTicket, TicketTransfer, User } from '../entities';
+import type { Database, PreorderTicket, SellerFlag, TicketTransfer, User } from '../entities';
 import { depositFor } from './pricing';
 import { isSourcingTicket } from './money';
 import { TRANSFER_DONE, ticketRoot, ticketPayer, orderTicketId } from './tickets';
@@ -42,6 +42,7 @@ export const MARKET = {
   holdGraceMin: 10,     // ผ่อนผันหลังบ้าน: โอนทันแต่แนบสลิปช้า ยังไม่โดนตัดสิทธิ์ (SQL ใช้ตัวเลขเดียวกัน)
   sellerSlaH: 12,       // ข้อ 15 — คนขายต้องยืนยันรับเงินใน 12 ชม. (เกิน → เข้าตรวจสอบ · ข้อ 12)
   sellerRemindH: [2, 8],
+  flagReplyH: 24,       // v84 — คนขายแจ้ง "ยังไม่ได้รับเงิน" แล้วผู้ซื้อเงียบเกิน 24 ชม. → เข้างานแอดมิน (กันดีลค้างตลอดไป)
   listingDays: 14,      // ข้อ 17 — ประกาศหมดอายุ (ต่ออายุได้)
   maxActive: 5,         // ข้อ 4 — ประกาศค้างพร้อมกันต่อคน
   resellDays: 2,        // ข้อ 5 — ได้ใบมาแล้วต้องถือ 2 วันก่อนส่งต่อ (cool down · เจ้าของ 2026-10-05 · เดิม 3)
@@ -81,8 +82,20 @@ export function effectiveStatus(tr: TicketTransfer, now: Date = new Date()): Tic
   return tr.status;
 }
 
+/** เหตุผลที่คนขายยังไม่ยืนยันรับเงิน (v84 · เจ้าของ 2026-10-11) — ข้อความเดียวกับ push ฝั่ง SQL */
+export const SELLER_FLAG_LABEL: Record<SellerFlag, string> = {
+  not_arrived: 'สลิปถูก แต่เงินไม่เข้า',
+  wrong_amount: 'สลิปถูก แต่ได้เงินไม่ครบ / เกิน',
+  wrong_slip: 'สลิปผิด',
+};
+/** ดีลที่คนขายแจ้ง "ยังไม่ได้รับเงิน" แล้ว รอผู้ซื้อตรวจสลิป (ดีลยัง paid · ใบยังล็อก) */
+export const flaggedPaid = (tr: TicketTransfer, st: TicketTransfer['status'] = effectiveStatus(tr)) => st === 'paid' && !!tr.seller_flag;
+/** เปิดกระดิ่งแล้ว = มีเครื่องรับแจ้งเตือนผูกกับบัญชี (นิยามเดียวกับภารกิจ "เปิดกระดิ่ง" · ด่าน SQL ryuma_has_bell v84) */
+export const hasBell = (db: Database, uid: string) => db.pushSubscriptions.some((s) => s.user_id === uid);
+
 /** ป้ายสถานะที่อ่านรู้เรื่องทั้งสองแบบ — ดีลตรงไม่มี "ลงขาย/จอง" มีแต่ "ข้อเสนอ/รอผู้รับโอน" */
 export function dealStatusLabel(tr: TicketTransfer, st: TicketTransfer['status'] = effectiveStatus(tr)): string {
+  if (flaggedPaid(tr, st)) return isDirect(tr) ? 'คนส่งแจ้งยังไม่ได้รับเงิน · รอผู้รับตรวจสลิป' : 'คนขายแจ้งยังไม่ได้รับเงิน · รอผู้ซื้อตรวจสลิป';
   if (!isDirect(tr)) return TRANSFER_STATUS_LABEL[st];
   // v75: ผู้รับโอนแล้วแต่ดีลปิดไปก่อน — ร้านเก็บสลิปไว้ รอเคลียร์คืนเงิน (audit รอบ B R1-01)
   if ((st === 'cancelled' || st === 'expired') && tr.review_reason === 'late_slip') return 'โอนแล้ว · รอร้านเคลียร์คืนเงิน';
@@ -314,8 +327,9 @@ export function myDeals(db: Database, uid: string, now: Date = new Date()) {
   const st = (tr: TicketTransfer) => effectiveStatus(tr, now);
   const isTodo = (tr: TicketTransfer) => {
     const role = dealRole(tr, uid);
-    return (role === 'seller' && (st(tr) === 'paid' || (st(tr) === 'reviewing' && tr.review_reason === 'seller_silent')))
-      || (role === 'buyer' && st(tr) === 'reserved');
+    // v84: คนขายแจ้งยังไม่ได้รับเงิน → ลูกบอลอยู่ที่ผู้ซื้อ (ตรวจสลิป/แนบใหม่/ส่งร้าน) ไม่ใช่คนขาย
+    return (role === 'seller' && ((st(tr) === 'paid' && !tr.seller_flag) || (st(tr) === 'reviewing' && tr.review_reason === 'seller_silent')))
+      || (role === 'buyer' && (st(tr) === 'reserved' || flaggedPaid(tr, st(tr))));
   };
   const todo = mine.filter(isTodo);
   return {
@@ -355,12 +369,17 @@ export function marketQueue(db: Database, now: Date = new Date()) {
   const live = db.transfers.map((tr) => ({ tr, st: effectiveStatus(tr, now) }));
   const ready = live.filter((x) => x.st === 'seller_ok' || x.st === 'pending_admin').map((x) => x.tr);
   const reviewing = live.filter((x) => x.st === 'reviewing').map((x) => x.tr);
-  const overdue = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) <= 0).map((x) => x.tr);
-  const waiting = live.filter((x) => x.st === 'paid' && sellerSlaLeft(x.tr, now) > 0).map((x) => x.tr);
+  // v84: คนขายตอบแล้ว (แจ้งยังไม่ได้รับเงิน) = ไม่ใช่ "เงียบ" — แยกกลุ่มรอผู้ซื้อตรวจสลิป (ดูเฉยๆ ไม่นับเป็นงาน)
+  const flaggedAll = live.filter((x) => flaggedPaid(x.tr, x.st)).map((x) => x.tr);
+  const flagStale = (tr: TicketTransfer) => ms(tr.seller_flag_at ?? undefined) + MARKET.flagReplyH * 3_600_000 <= now.getTime();
+  const flagged = flaggedAll.filter((tr) => !flagStale(tr));
+  const flaggedStale = flaggedAll.filter(flagStale);
+  const overdue = live.filter((x) => x.st === 'paid' && !x.tr.seller_flag && sellerSlaLeft(x.tr, now) <= 0).map((x) => x.tr);
+  const waiting = live.filter((x) => x.st === 'paid' && !x.tr.seller_flag && sellerSlaLeft(x.tr, now) > 0).map((x) => x.tr);
   // v73: ข้อเสนอเปลี่ยนใบที่รอผู้รับ (ดูเฉยๆ ไม่ใช่งานแอดมิน) + สลิปเติมมัดจำรอตรวจ (งานแอดมิน แยกหัวข้อ)
   const offers = live.filter((x) => x.st === 'reserved' && isDirect(x.tr)).map((x) => x.tr);
   const topups = topupQueue(db);
   // v75: ผู้รับโอนเงินแล้วแต่ดีลปิดไปก่อน (คนส่งถอน/หมดเวลา/ตั๋วเปลี่ยน) — ต้องเคลียร์คืนเงิน (งานแอดมิน · audit รอบ B R1-01)
   const lateSlips = db.transfers.filter((tr) => tr.review_reason === 'late_slip');
-  return { ready, reviewing, overdue, waiting, offers, topups, lateSlips, jobs: ready.length + reviewing.length + overdue.length + topups.length + lateSlips.length };
+  return { ready, reviewing, overdue, waiting, flagged, flaggedStale, offers, topups, lateSlips, jobs: ready.length + reviewing.length + overdue.length + flaggedStale.length + topups.length + lateSlips.length };
 }

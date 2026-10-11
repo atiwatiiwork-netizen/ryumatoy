@@ -109,6 +109,12 @@ export const marketRelease = (id: string) => call('ryuma_market_release', { p_id
 export const marketPayout = (id: string) => call('ryuma_market_payout', { p_id: id });
 export const marketPay = (id: string, slipUrl: string) => call('ryuma_market_pay', { p_id: id, p_slip: slipUrl });
 export const marketSellerConfirm = (id: string) => call('ryuma_market_seller_confirm', { p_id: id });
+/** v84: คนขาย "ยังไม่ได้รับเงิน" + เหตุผล → แจ้งผู้ซื้อก่อน (ดีลยัง paid · ยังไม่เข้าร้าน) */
+export const marketSellerFlag = (id: string, reason: 'not_arrived' | 'wrong_amount' | 'wrong_slip', note?: string, evidence: string[] = []) =>
+  call('ryuma_market_seller_flag', { p_id: id, p_reason: reason, p_note: note ?? null, p_evidence: evidence });
+/** v84: ผู้ซื้อตอบธงของคนขาย — 'reslip' แนบสลิปใหม่/เพิ่ม · 'escalate' มั่นใจว่าสลิปถูก ส่งเรื่องให้คนขาย + ร้าน */
+export const marketBuyerReply = (id: string, action: 'reslip' | 'escalate', slip?: string, note?: string) =>
+  call('ryuma_market_buyer_reply', { p_id: id, p_action: action, p_slip: slip ?? null, p_note: note ?? null });
 export const marketSellerReject = (id: string, note: string, evidence: string[] = []) =>
   call('ryuma_market_seller_reject', { p_id: id, p_note: note, p_evidence: evidence });
 export const marketEscalate = (id: string, note?: string) => call('ryuma_market_escalate', { p_id: id, p_note: note ?? null });
@@ -139,7 +145,8 @@ export const marketLateSlipResolve = (id: string, note: string) => call('ryuma_m
  */
 export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'reviewing' | 'remind' | 'done' | 'sold' | 'cancelled'
   | 'offer' | 'declined' | 'withdrawn' // v73 เปลี่ยนใบพรี
-  | 'late_slip'; // v75 ผู้รับโอนแล้วแต่ดีลปิดไปก่อน → แจ้งคนส่ง + แอดมิน
+  | 'late_slip' // v75 ผู้รับโอนแล้วแต่ดีลปิดไปก่อน → แจ้งคนส่ง + แอดมิน
+  | 'flagged' | 'reslip'; // v84 คนขายแจ้งยังไม่ได้รับเงิน → ผู้ซื้อ · ผู้ซื้อแนบสลิปใหม่ → คนขาย + แอดมิน
 export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
   const sandbox = marketSandbox();
   if (sandbox) { sandbox.push(id, kind); return; }
@@ -201,6 +208,10 @@ export const MARKET_ERR_TH: Record<string, string> = {
   owner_changed: 'ตั๋วเปลี่ยนเจ้าของไปแล้ว',
   ticket_moving: 'ตั๋วเข้าขั้นตอนจัดส่งแล้ว',
   ticket_missing: 'ไม่พบตั๋วใบนี้',
+  no_bell: 'เปิดกระดิ่งแจ้งเตือนก่อน — ทุกขั้นของดีลแจ้งผ่านการแจ้งเตือน (โปรไฟล์ › การแจ้งเตือน)',
+  bad_reason: 'เลือกเหตุผลก่อน',
+  no_flag: 'คนขายยังไม่ได้แจ้งปัญหา — รอคนขายเช็คเงิน',
+  bad_action: 'ทำรายการไม่สำเร็จ — รีเฟรชหน้าอีกครั้ง',
   // v75 รอบ B
   code_changed: 'เลขกระเป๋านี้ไม่ใช่ของคนที่ยืนยันไว้แล้ว (อาจข้ามเที่ยงคืน) — ขอเลขใหม่จากผู้รับแล้วค้นอีกครั้ง',
   recipient_paying: 'ผู้รับเปิดหน้าโอนเงินแล้ว ถอนเองไม่ได้ — ถ้าจำเป็นให้ติดต่อร้านยกเลิก',

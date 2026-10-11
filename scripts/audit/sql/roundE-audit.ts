@@ -3,7 +3,7 @@
  * รัน: npm run audit:sql
  */
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser, rpc } from './pgdb';
+import { bootDb, asUser, rpc, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -44,6 +44,7 @@ async function boot() {
     ('t-hunt','NR-H-1','PH','uA','uA',1,500,1500,0,'active','production')`);
   await db.query(`update preorder_tickets set batch_id = 'BH' where id = 't-hunt'`);
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}'), ('market_public', '{"enabled": true}')`);
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   return db;
 }

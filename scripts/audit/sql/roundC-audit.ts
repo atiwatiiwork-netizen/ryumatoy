@@ -5,7 +5,7 @@
  */
 import type { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
-import { bootDb, asUser, rpc, splitSql } from './pgdb';
+import { bootDb, asUser, rpc, splitSql, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -58,6 +58,7 @@ async function boot() {
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}'), ('market_public', '{"enabled": true}')`);
   await db.query(`update order_items set std_deposit = null`); // จำลองข้อมูลก่อน v76
   await db.query(`update products set deposit_amount = 400 where id = 'P1'`); // ร้านขึ้นมัดจำหลังลูกค้าซื้อ (R1-22)
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   // รัน v76 ซ้ำ = เติม std_deposit ให้รายการเก่า (migration รันซ้ำได้)
   for (const s of splitSql(readFileSync(`${DIR}/migration_roundC_v76.sql`, 'utf8'))) await db.exec(s);

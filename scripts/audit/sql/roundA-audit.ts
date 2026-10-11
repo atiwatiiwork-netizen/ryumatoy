@@ -7,7 +7,7 @@
  *   patch       = แอปรุ่นใหม่ ส่งเฉพาะช่องที่เปลี่ยน + market_rev ที่โหลดมา (syncTablePatch)
  */
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser, rpc } from './pgdb';
+import { bootDb, asUser, rpc, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -76,6 +76,7 @@ async function boot() {
   await tk('legacy-9', 'NR-2026-10-0009', 'uA', 1, 300, 1390);
   await tk('legacy-11', 'NR-2026-10-0011', 'uA', 1, 300, 1390);
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}')`);
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   return db;
 }

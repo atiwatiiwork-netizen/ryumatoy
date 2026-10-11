@@ -10,14 +10,15 @@ import { notifyAdminLine } from '@/lib/notify';
 import { baht } from '@/lib/theme';
 import { productLabel } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
-import { dealRole, effectiveStatus, sellerSlaLeft, soldOutInShop, isDirect, dealStatusLabel, sellerMask, MARKET, TRANSFER_STATUS_LABEL } from '@/domain/services/market';
+import { dealRole, effectiveStatus, sellerSlaLeft, soldOutInShop, isDirect, dealStatusLabel, sellerMask, flaggedPaid, MARKET, SELLER_FLAG_LABEL, TRANSFER_STATUS_LABEL } from '@/domain/services/market';
 import * as mk from '@/lib/market';
 import { marketSandbox } from '@/lib/marketSandbox';
-import type { Database, TicketTransfer } from '@/domain/entities';
+import type { Database, SellerFlag, TicketTransfer } from '@/domain/entities';
 import { BackBar, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { StubArt, LotPill, productSub, MoneySplit, HoldRing, SlideToConfirm, PromptPayCard, DealSteps, useMarketFeed, useNow, mmss, slipSrc } from './MarketUi';
 import { PayoutLine } from './PayoutPicker';
+import { BellGate, useBellOk } from './BellGate';
 
 type Flash = (m: string) => void;
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
@@ -129,6 +130,7 @@ function PublicPanel({ id, row, price, due, total, shopPrice, now, flash, reload
   id: string; row: mk.MarketRow; price: number; due: number; total?: number; shopPrice: number; now: number; flash: Flash; reload: () => Promise<void>; preview: boolean;
 }) {
   const takenLeft = row.status === 'reserved' && !row.reserved_by_me && row.hold_until ? new Date(row.hold_until).getTime() - now : 0;
+  const bell = useBellOk();
   const reserve = async () => {
     const r = await mk.marketReserve(id);
     if (!r.ok) { flash(mk.marketErrText(r)); if (r.error === 'reserved' || r.error === 'gone') await reload(); return; }
@@ -138,7 +140,7 @@ function PublicPanel({ id, row, price, due, total, shopPrice, now, flash, reload
   };
   return (
     <div className="flex flex-col gap-3">
-      <MoneySplit price={price} due={due} total={total} shopPrice={shopPrice} />
+      <MoneySplit price={price} due={due} paid={row.paid} total={total} shopPrice={shopPrice} />
       <div className="flex items-center gap-3 rounded-2xl border border-subtle bg-surface-2 px-3.5 py-3">
         <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[#f1d27a] to-[#b45309] font-mono text-[11px] font-bold text-[#0a0809]">{row.seller.slice(-2)}</span>
         <div className="min-w-0 flex-1 text-[12.5px]">
@@ -156,6 +158,9 @@ function PublicPanel({ id, row, price, due, total, shopPrice, now, flash, reload
         <div className="flex items-center justify-center gap-2 rounded-xl border border-[#fbbf24]/35 bg-[#fbbf24]/10 px-3 py-3 text-[12.5px] text-[#fbbf24]">
           <HoldRing msLeft={takenLeft} total={MARKET.holdMin * 60_000} size={24} stroke={3} />มีคนกำลังจอง <b className="font-mono">{mmss(takenLeft)}</b> · ถ้าเขาปล่อย ใบนี้กลับมาให้จองได้
         </div>
+      ) : !bell ? (
+        // เจ้าของ 2026-10-11: ผู้ซื้อต้องเปิดกระดิ่งก่อนกดซื้อ — คนขายยืนยัน/แจ้งปัญหา/ร้านโอนสิทธิ์ แจ้งผ่าน push (ด่าน SQL v84 no_bell)
+        <BellGate action="จอง" />
       ) : (
         <SlideToConfirm label={`ปัดเพื่อจองใบนี้ · ${MARKET.holdMin} นาที`} doneLabel="กำลังจอง…" onConfirm={reserve} />
       )}
@@ -226,7 +231,7 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
         </div>
       </div>
       <DealSteps at={1} labels={free ? FREE_STEPS : DIRECT_STEPS} />
-      <MoneySplit price={price} due={due} total={tr.snap?.total} />
+      <MoneySplit price={price} due={due} paid={tr.snap?.paid} total={tr.snap?.total} seller="คนส่ง" />
       <div className="flex gap-2 rounded-xl bg-[#16a34a]/[0.08] px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-muted2">
         <Icon name="verified" size={16} className="mt-px shrink-0 text-[#4ade80]" />
         <span>{free ? 'ไม่มีเงินโอน — ' : 'โอนเงินตรงให้คนส่ง · '}ร้านโอนสิทธิ์ให้คุณหลังคนส่งยืนยันเท่านั้น · ส่วนต่างที่ค้าง {baht(due)} จ่ายร้านตอนของถึงไทย (ใช้แต้ม/คูปองได้ตามปกติ) · ได้ใบมาแล้วต้องถือ {MARKET.resellDays} วันก่อนเปลี่ยนต่อ</span>
@@ -396,6 +401,9 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
       </div>
     );
   }
+  if (flaggedPaid(tr, st as TicketTransfer['status'])) {
+    return <FlagReply tr={tr} price={price} sender={sender} flash={flash} reload={reload} lineOa={lineOa} />;
+  }
   return (
     <div className="flex flex-col gap-3">
       <DealSteps at={at as 1 | 2 | 3} labels={direct ? (free ? FREE_STEPS : DIRECT_STEPS) : undefined} />
@@ -451,8 +459,6 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   db: Database; uid: string; tr: TicketTransfer; st: string; price: number; due: number; now: number; flash: Flash; reload: () => Promise<void>; ticketNo?: string;
 }) {
   const [rejecting, setRejecting] = useState(false);
-  const [note, setNote] = useState('');
-  const [proof, setProof] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const direct = isDirect(tr);
   const free = direct && price <= 0;
@@ -487,7 +493,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   if (direct && st === 'reserved') {
     return (
       <div className="flex flex-col gap-3">
-        <MoneySplit price={price} due={due} />
+        <MoneySplit price={price} due={due} paid={tr.snap?.paid} seller="คุณ" />
         <div className="flex items-center gap-3 rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-muted2">
           <HoldRing msLeft={holdLeft} total={MARKET.offerHours * 3_600_000} size={40} stroke={4}><span className="text-[9px]">{ringLabel(holdLeft)}</span></HoldRing>
           <div>
@@ -511,7 +517,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   if (st === 'listed' || st === 'reserved') {
     return (
       <div className="flex flex-col gap-3">
-        <MoneySplit price={price} due={due} />
+        <MoneySplit price={price} due={due} paid={tr.snap?.paid} seller="คุณ" />
         <div className="rounded-2xl border border-subtle bg-surface-2 px-4 py-3 text-[12.5px] leading-relaxed text-ink-muted2">
           <b className="text-ink">ลงขายอยู่</b>{daysLeft != null ? ` · เหลือ ${daysLeft} วันก่อนหมดอายุ` : ''}<br />
           ใบนี้ถูกล็อก 🔒 จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะขายหรือถอนประกาศ
@@ -555,8 +561,8 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
       <div className="flex flex-col gap-3">
         <div className="rounded-2xl border border-[#fbbf24]/35 bg-surface-2 p-3.5">
           <div className="flex items-center justify-between gap-2 text-[12px]">
-            <b className="text-[13.5px]">{direct ? 'ผู้รับแนบสลิปแล้ว' : 'ผู้ซื้อแนบสลิปแล้ว'}</b>
-            <span className="rounded-md bg-[#fbbf24]/10 px-2 py-0.5 font-mono text-[10.5px] font-bold text-[#fbbf24]">{Number.isFinite(slaLeft) && slaLeft > 0 ? `ตอบภายใน ${Math.ceil(slaLeft / 3_600_000)} ชม.` : 'เกินเวลา — ร้านตรวจสอบอยู่'}</span>
+            <b className="text-[13.5px]">{direct ? 'ผู้รับแนบสลิป' : 'ผู้ซื้อแนบสลิป'}{(tr.slip_history?.length ?? 0) > 0 ? 'ใหม่แล้ว 📎' : 'แล้ว'}</b>
+            <span className="rounded-md bg-[#fbbf24]/10 px-2 py-0.5 font-mono text-[10.5px] font-bold text-[#fbbf24]">{tr.seller_flag ? `รอ${direct ? 'ผู้รับ' : 'ผู้ซื้อ'}ตรวจสลิป` : Number.isFinite(slaLeft) && slaLeft > 0 ? `ตอบภายใน ${Math.ceil(slaLeft / 3_600_000)} ชม.` : 'เกินเวลา — ร้านตรวจสอบอยู่'}</span>
           </div>
           <div className="mt-2.5 flex items-center gap-3">
             {slipSrc(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" /></a>}
@@ -568,31 +574,29 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
               <PayoutLine info={myPayout} full size={22} />
             </div>
           )}
+          {tr.seller_flag && (
+            <div className="mt-2.5 rounded-xl border border-[#fbbf24]/40 bg-[#fbbf24]/[0.08] px-3 py-2 text-[12px] leading-relaxed text-[#fbbf24]">
+              คุณแจ้ง{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}แล้ว: <b>{SELLER_FLAG_LABEL[tr.seller_flag]}</b>{tr.seller_flag_note ? ` — “${tr.seller_flag_note}”` : ''} · รอเขาแนบสลิปใหม่หรือส่งเรื่องให้ร้าน · ถ้าเจอเงินแล้วกด “ได้รับเงินแล้ว” ได้เลย
+            </div>
+          )}
           <ol className="mt-3 list-decimal space-y-0.5 pl-5 text-[12px] text-ink-muted2">
             <li>เปิดแอปธนาคารของคุณ</li><li>ดูว่ามีเงินเข้า {baht(price)} จริง</li><li>กดยืนยัน — ร้านจะโอนสิทธิ์ให้{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}ต่อ</li>
           </ol>
         </div>
         {confirmBtn}
-        {st === 'paid' && !rejecting && (
+        {st === 'paid' && !tr.seller_flag && !rejecting && (
           <button type="button" onClick={() => setRejecting(true)} className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13.5px] font-bold text-ink-muted2">ยังไม่ได้รับเงิน…</button>
         )}
-        {rejecting && (
-          <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
-            <div className="text-[13px] font-bold">แจ้งร้านว่ายังไม่ได้รับเงิน</div>
-            <div className="mt-0.5 text-[11.5px] text-ink-faint">แนบรูปหน้ารายการเงินเข้าช่วงเวลานั้น — แอดมินจะเทียบกับสลิปของ{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}</div>
-            <textarea id="mk-reject-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น เช็คแล้วไม่มีเงินเข้า 650 บาทตอน 14:05"
-              className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none focus:border-accent" rows={2} />
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px] font-bold text-primary-soft">
-              <input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (!f) return; try { setProof(await uploadImage(f, 'mkproof')); } catch { flash('อัปโหลดไม่สำเร็จ'); } }} />
-              <Icon name="camera" size={16} />{proof ? 'แนบหลักฐานแล้ว ✓' : 'แนบรูปหน้ารายการเงินเข้า'}
-            </label>
-            <div className="mt-3 flex gap-2">
-              <button type="button" onClick={() => setRejecting(false)} className="flex-1 rounded-btn border border-subtle bg-surface-3 py-2.5 text-[13px] font-bold text-ink-muted2">ยกเลิก</button>
-              <button type="button" disabled={busy || !note.trim()} onClick={() => void run(() => mk.marketSellerReject(tr.id, note.trim(), proof ? [proof] : []), 'ส่งเรื่องให้ร้านตรวจสอบแล้ว',
-                () => { void mk.marketPush(tr.id, 'reviewing'); notifyAdminLine(`🔎 ${direct ? '[เปลี่ยนใบพรี]' : 'ตลาดใบพรี:'} คนขายแจ้งยังไม่ได้รับเงิน ${baht(price)} · ดีล ${tr.id}`); })}
-                className="flex-1 rounded-btn bg-cta py-2.5 text-[13px] font-bold text-white disabled:opacity-50">ส่งให้ร้านตรวจสอบ</button>
-            </div>
-          </div>
+        {/* ผู้ซื้อไม่ตอบ/คุยไม่จบ → คนขายส่งเรื่องให้ร้านเองได้ (ดีลไม่ค้างตลอดไป · ร้านเห็นในคิวเมื่อเงียบเกิน 24 ชม. ด้วย) */}
+        {st === 'paid' && tr.seller_flag && (
+          <button type="button" disabled={busy} onClick={() => void run(() => mk.marketSellerReject(tr.id, `แจ้ง${direct ? 'ผู้รับ' : 'ผู้ซื้อ'}แล้ว: ${SELLER_FLAG_LABEL[tr.seller_flag!]}${tr.seller_flag_note ? ` — ${tr.seller_flag_note}` : ''} · ยังไม่ได้ข้อสรุป`), 'ส่งเรื่องให้ร้านตรวจแล้ว',
+            () => { void mk.marketPush(tr.id, 'reviewing'); notifyAdminLine(`🔎 ${direct ? '[เปลี่ยนใบพรี]' : 'ตลาดใบพรี:'} คนขายแจ้งยังไม่ได้รับเงิน (${SELLER_FLAG_LABEL[tr.seller_flag!]}) แล้วส่งเรื่องให้ร้าน · ${baht(price)} · ดีล ${tr.id}`); })}
+            className="rounded-btn border border-subtle bg-surface-3 px-5 py-3 text-[13px] font-bold text-ink-muted2 disabled:opacity-50">{direct ? 'ผู้รับ' : 'ผู้ซื้อ'}ไม่ตอบ / ยังไม่ได้ข้อสรุป — ส่งเรื่องให้ร้านตรวจ</button>
+        )}
+        {rejecting && !tr.seller_flag && (
+          <FlagForm direct={direct} busy={busy} flash={flash} onClose={() => setRejecting(false)}
+            onSubmit={(reason, note, proof) => void run(() => mk.marketSellerFlag(tr.id, reason, note, proof ? [proof] : []), `แจ้ง${direct ? 'ผู้รับ' : 'ผู้ซื้อ'}แล้ว · รอเขาตรวจสลิป`,
+              () => { setRejecting(false); void mk.marketPush(tr.id, 'flagged'); })} />
         )}
       </div>
     );
@@ -624,6 +628,98 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
       {(st === 'expired' || st === 'cancelled') && ticketNo && (
         <WalletLink no={ticketNo} className="rounded-btn border border-accent px-5 py-3 text-center text-[14px] font-bold text-primary-soft">{moneyIn ? `ดูใบพรี ${ticketNo}` : `ไปที่ใบพรี ${ticketNo}`}</WalletLink>
       )}
+    </div>
+  );
+}
+
+// ── คนขายแจ้ง "ยังไม่ได้รับเงิน" (v84 · เจ้าของ 2026-10-11) — เลือกเหตุผล 3 แบบ แจ้งกลับผู้ซื้อก่อน (ยังไม่เข้าร้าน) ──────
+const FLAG_REASONS: SellerFlag[] = ['not_arrived', 'wrong_amount', 'wrong_slip'];
+function FlagForm({ direct, busy, flash, onClose, onSubmit }: {
+  direct: boolean; busy: boolean; flash: Flash; onClose: () => void; onSubmit: (reason: SellerFlag, note: string, proof: string | null) => void;
+}) {
+  const [pick, setPick] = useState<SellerFlag | null>(null);
+  const [note, setNote] = useState('');
+  const [proof, setProof] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const buyer = direct ? 'ผู้รับ' : 'ผู้ซื้อ';
+  return (
+    <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
+      <div className="text-[13.5px] font-bold">ยังไม่ได้รับเงิน · แจ้ง{buyer}</div>
+      <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-faint">{buyer}จะได้แจ้งเตือนให้ตรวจสลิป — แนบสลิปใหม่ หรือถ้ามั่นใจว่าถูก ส่งเรื่องให้คุณ + ร้านตรวจ</div>
+      <div className="mt-2.5 flex flex-col gap-1.5">
+        {FLAG_REASONS.map((r) => (
+          <button key={r} type="button" onClick={() => setPick(r)}
+            className={cx('rounded-xl border px-3 py-2.5 text-left text-[13px] font-semibold', pick === r ? 'border-accent bg-[#b91c1c]/15 text-primary-soft' : 'border-subtle bg-surface-3 text-ink-muted2')}>
+            {pick === r ? '● ' : '○ '}{SELLER_FLAG_LABEL[r]}
+          </button>
+        ))}
+      </div>
+      <textarea id="mk-flag-note" value={note} onChange={(e) => setNote(e.target.value.slice(0, 300))} rows={2}
+        placeholder={pick === 'wrong_amount' ? 'เช่น ได้มา 1,500 ขาดอีก 300' : 'รายละเอียดเพิ่ม (ถ้ามี) เช่น เช็คแล้วไม่มีเงินเข้าตอน 14:05'}
+        className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none focus:border-accent" />
+      <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px] font-bold text-primary-soft">
+        <input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (!f) return; setUploading(true); try { setProof(await uploadImage(f, 'mkproof')); } catch { flash('อัปโหลดไม่สำเร็จ'); } finally { setUploading(false); } }} />
+        <Icon name="camera" size={16} />{proof ? 'แนบหลักฐานแล้ว ✓' : uploading ? 'กำลังอัปโหลด…' : 'แนบรูปหน้ารายการเงินเข้า (ถ้ามี)'}
+      </label>
+      <div className="mt-3 flex gap-2">
+        <button type="button" onClick={onClose} className="flex-1 rounded-btn border border-subtle bg-surface-3 py-2.5 text-[13px] font-bold text-ink-muted2">ยกเลิก</button>
+        <button type="button" disabled={busy || uploading || !pick} onClick={() => pick && onSubmit(pick, note.trim(), proof)}
+          className="flex-1 rounded-btn bg-cta py-2.5 text-[13px] font-bold text-white disabled:opacity-50">{busy ? 'กำลังส่ง…' : `แจ้ง${buyer}`}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── ผู้ซื้อ: คนขายแจ้งยังไม่ได้รับเงิน → แนบสลิปใหม่ หรือส่งเรื่องให้คนขาย + ร้าน (v84) ─────────────────
+function FlagReply({ tr, price, sender, flash, reload, lineOa }: {
+  tr: TicketTransfer; price: number; sender: string; flash: Flash; reload: () => Promise<void>; lineOa?: string;
+}) {
+  const [slip, setSlip] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const direct = isDirect(tr);
+  const send = async (action: 'reslip' | 'escalate') => {
+    if (busy || (action === 'reslip' && !slip)) return;
+    setBusy(true);
+    const r = await mk.marketBuyerReply(tr.id, action, slip ?? undefined, note.trim() || undefined);
+    if (!r.ok) { setBusy(false); flash(mk.marketErrText(r)); return; }
+    await reload();
+    setBusy(false);
+    if (action === 'reslip') {
+      void mk.marketPush(tr.id, 'reslip');
+      flash(`ส่งสลิปใหม่แล้ว · แจ้ง${sender}ให้เช็คอีกครั้ง`);
+    } else {
+      void mk.marketPush(tr.id, 'reviewing');
+      notifyAdminLine(`🔎 ${direct ? '[เปลี่ยนใบพรี]' : 'ตลาดใบพรี:'} ${sender}แจ้งยังไม่ได้รับเงิน (${tr.seller_flag ? SELLER_FLAG_LABEL[tr.seller_flag] : ''}) แต่ผู้${direct ? 'รับ' : 'ซื้อ'}ยืนยันสลิปถูก · ${baht(price)} · ดีล ${tr.id}`);
+      flash(`ส่งเรื่องให้${sender} + ร้านตรวจแล้ว`);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-2xl border border-[#fbbf24]/45 bg-[#fbbf24]/[0.08] p-3.5">
+        <div className="text-[14px] font-bold text-[#fbbf24]">⚠️ {sender}ยังไม่ได้รับเงิน — ตรวจสลิปของคุณ</div>
+        <div className="mt-1 text-[13px] text-ink">{tr.seller_flag ? SELLER_FLAG_LABEL[tr.seller_flag] : ''}</div>
+        {tr.seller_flag_note && <div className="mt-0.5 text-[12px] text-ink-muted2">“{tr.seller_flag_note}”</div>}
+        <div className="mt-2.5 flex items-center gap-3">
+          {slipSrc(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer"><img src={tr.slip_url} alt="สลิปที่ส่งไป" className="h-20 w-14 rounded-lg bg-white object-cover" /></a>}
+          <div className="text-[11.5px] leading-relaxed text-ink-faint">สลิปที่คุณส่งไป · {fmt(tr.paid_at)}<br />ยอดที่ต้องโอน <b className="font-mono text-ink">{baht(price)}</b></div>
+        </div>
+      </div>
+      <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
+        <div className="text-[13px] font-bold">แนบสลิปใหม่ / สลิปเพิ่ม</div>
+        <div className="mt-0.5 text-[11.5px] text-ink-faint">แนบผิดรูป หรือโอนขาดแล้วโอนเพิ่ม — แนบสลิปที่ถูกต้อง {sender}จะได้แจ้งเตือนให้เช็คอีกครั้ง</div>
+        <label className={cx('mt-2 flex cursor-pointer items-center gap-3 rounded-xl border-[1.5px] border-dashed px-3 py-2.5', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.07]' : 'border-accent')}>
+          <input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (!f) return; setBusy(true); try { setSlip(await uploadImage(f, 'mkslip')); } catch { flash('อัปโหลดสลิปไม่สำเร็จ'); } finally { setBusy(false); } }} />
+          {slip ? <img src={slip} alt="สลิปใหม่" className="h-12 w-9 rounded object-cover" /> : <Icon name="camera" size={18} className="text-primary-soft" />}
+          <span className="text-[12.5px] font-bold text-primary-soft">{slip ? 'แนบแล้ว ✓ · แตะเพื่อเปลี่ยน' : busy ? 'กำลังอัปโหลด…' : 'แตะแนบสลิป'}</span>
+        </label>
+        <input id="mk-reply-note" value={note} onChange={(e) => setNote(e.target.value.slice(0, 200))} placeholder={`ข้อความถึง${sender}/ร้าน (ถ้ามี)`}
+          className="mt-2 w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[13px] text-ink outline-none focus:border-accent" />
+        <button type="button" disabled={busy || !slip} onClick={() => void send('reslip')} className="mt-2 w-full rounded-btn bg-cta py-3 text-[14px] font-bold text-white shadow-cta disabled:opacity-50">ส่งสลิปใหม่ · ให้{sender}เช็คอีกครั้ง</button>
+      </div>
+      <button type="button" disabled={busy} onClick={() => void send('escalate')}
+        className="rounded-btn border-[1.5px] border-accent px-5 py-3 text-[13.5px] font-bold text-primary-soft disabled:opacity-50">มั่นใจว่าสลิปถูก — ส่งเรื่องให้{sender} + ร้านตรวจ</button>
+      {lineOa && <a href={`https://line.me/R/ti/p/${encodeURIComponent(lineOa)}`} target="_blank" rel="noreferrer" className="text-center text-[12px] text-ink-faint underline">ติดต่อร้าน (LINE {lineOa})</a>}
     </div>
   );
 }

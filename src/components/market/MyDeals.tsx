@@ -26,6 +26,8 @@ const TONE: Record<string, string> = {
 /** งานถัดไปของฉันในดีลนี้ (ข้อความสั้นใต้ชื่อ) — ดีลตรง (v73) ใช้คำ "ส่ง/รับ" แทน "ขาย/ซื้อ" */
 function nextStep(tr: TicketTransfer, uid: string, st: string): string {
   const seller = dealRole(tr, uid) === 'seller';
+  // v84: คนขายแจ้งยังไม่ได้รับเงิน → ผู้ซื้อต้องตรวจสลิป
+  if (st === 'paid' && tr.seller_flag) return seller ? `แจ้ง${isDirect(tr) ? 'ผู้รับ' : 'ผู้ซื้อ'}แล้ว · รอเขาตรวจสลิป` : `⚠️ ${isDirect(tr) ? 'คนส่ง' : 'คนขาย'}ยังไม่ได้รับเงิน · ตรวจสลิปของคุณ`;
   if (isDirect(tr)) {
     const free = (tr.asking_price ?? 0) <= 0;
     if (st === 'reserved') return seller ? `ส่งข้อเสนอแล้ว · รอผู้รับ${free ? 'กดรับ' : 'โอน'}ใน 24 ชม.` : `🎁 มีคนเปลี่ยนใบให้คุณ · ${free ? 'กดรับ' : 'โอน + แนบสลิป'}ภายใน 24 ชม.`;

@@ -5,7 +5,7 @@
  * รัน: npm run audit:sql
  */
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser } from './pgdb';
+import { bootDb, asUser, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -24,6 +24,7 @@ const run = (db: PGlite, who: Who, sql: string, params: unknown[] = []) =>
   await db.exec('set session_replication_role = replica;');
   await db.query(`insert into users (id, display_name, auth_id, approved, member_code, is_admin, rank, phone) values
     ('uA','A',$1,true,'RYU-0011',false,'bronze',null), ('uB','B',$2,true,'RYU-0022',false,'bronze','0811111111'), ('uX','X',$3,true,'RYU-0001',true,'bronze','0800000000')`, [AUTH.A, AUTH.B, AUTH.X]);
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
 
   // ── #7 เบอร์ครั้งแรก ─────────────────────────────────────────────────────────────────────

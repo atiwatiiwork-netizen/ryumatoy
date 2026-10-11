@@ -3,7 +3,7 @@
  * รัน: npm run audit:sql  (ไฟล์นี้ถูกเรียกต่อจาก roundA-audit)
  */
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser, rpc } from './pgdb';
+import { bootDb, asUser, rpc, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
@@ -42,6 +42,7 @@ async function boot() {
   }
   for (const [uid, ep] of [['uA', 'epA'], ['uB', 'epB'], ['uX', 'epX']]) await db.query(`insert into push_subscriptions (id, user_id, endpoint, p256dh, auth) values ($1,$2,$3,'k','a')`, ['ps-' + uid, uid, ep]);
   await db.query(`insert into app_config (key, value) values ('market_direct', '{"enabled": true}')`);
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   return db;
 }

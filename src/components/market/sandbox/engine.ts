@@ -8,8 +8,8 @@
  * - ฝั่งร้าน (โอนสิทธิ์/ยกเลิก/ตรวจสอบ) ใช้คิวแอดมินตัวจริง (AdminQueue) บนข้อมูลจำลอง
  * ⚠ ตัวเลขเงินคิดด้วยสูตรตัวเดียวกับของจริง (splitShare / depositGap / effectiveStatus) — ต่างกันแค่ที่เก็บข้อมูล
  */
-import type { Database, Order, PayoutInfo, PreorderTicket, Product, RankName, TicketTransfer, User } from '@/domain/entities';
-import { MARKET, MARKET_PUBLIC_KEY, activeListingOf, depositGap, effectiveStatus, isActiveTransfer, isDirect, nextTransferNo, resellAllowedAt, sellerMask, splitShare } from '@/domain/services/market';
+import type { Database, Order, PayoutInfo, PreorderTicket, Product, RankName, SellerFlag, TicketTransfer, User } from '@/domain/entities';
+import { MARKET, MARKET_PUBLIC_KEY, SELLER_FLAG_LABEL, activeListingOf, depositGap, effectiveStatus, hasBell, isActiveTransfer, isDirect, nextTransferNo, resellAllowedAt, sellerMask, splitShare } from '@/domain/services/market';
 import { productLabel } from '@/domain/services/catalog';
 import { approveRemainingPayment } from '@/data/mutations';
 import type { Mutation, Store } from '@/data/store';
@@ -192,6 +192,7 @@ export class MarketSandbox {
 
   /** สลิปเติมมัดจำที่ "คุณ" ส่ง (ผ่าน dispatch ตัวจริง) → ร้านสมมุติอนุมัติให้ใน 3 วินาที */
   private afterUpdate(before: Database) {
+    if (!hasBell(before, SB_ME) && hasBell(this.db, SB_ME)) this.log('me', 'คุณเปิดกระดิ่งแล้ว 🔔 (จำลอง) — ลงขาย/จองได้แล้ว');
     const fresh = this.db.remainingPayments.filter((r) => r.status === 'pending' && !before.remainingPayments.some((b) => b.id === r.id));
     for (const rp of fresh) {
       this.log('me', `คุณส่งสลิป${rp.purpose === 'topup' ? 'เติมมัดจำ' : 'ส่วนต่าง'} ${baht(rp.amount)} → รอร้านตรวจ`);
@@ -243,6 +244,8 @@ export class MarketSandbox {
       case 'ryuma_market_pay': return this.pay(SB_ME, id, String(a.p_slip ?? ''));
       case 'ryuma_market_seller_confirm': return this.sellerConfirm(SB_ME, id);
       case 'ryuma_market_seller_reject': return this.sellerReject(SB_ME, id, String(a.p_note ?? ''), (a.p_evidence ?? []) as string[]);
+      case 'ryuma_market_seller_flag': return this.sellerFlag(SB_ME, id, String(a.p_reason ?? '') as SellerFlag, String(a.p_note ?? ''), (a.p_evidence ?? []) as string[]);
+      case 'ryuma_market_buyer_reply': return this.buyerReply(SB_ME, id, String(a.p_action ?? ''), String(a.p_slip ?? ''), String(a.p_note ?? ''));
       case 'ryuma_market_escalate': return this.escalate(a.p_note === 'แอดมินส่งเข้าตรวจ', id, String(a.p_note ?? ''));
       case 'ryuma_market_finalize': return this.finalize(id);
       case 'ryuma_market_admin_cancel': return this.adminCancel(id, String(a.p_reason ?? ''));
@@ -277,6 +280,7 @@ export class MarketSandbox {
     const t = this.ticket(ticketId);
     const why = this.blockReason(t, SB_ME, qty);
     if (why || !t) return { error: why ?? 'not_found' };
+    if (!hasBell(this.db, SB_ME)) return { error: 'no_bell' };
     const s = qty >= t.qty ? t : { ...t, ...splitShare(t, qty).child };
     const now = Date.now();
     const id = `tr-sbm${++this.seq}`;
@@ -310,6 +314,7 @@ export class MarketSandbox {
     const st = effectiveStatus(tr);
     if (st === 'reserved') return tr.to_user_id === uid ? { ok: true, again: true, hold_until: tr.hold_until, server_now: new Date().toISOString() } : { error: 'reserved', hold_until: tr.hold_until };
     if (st !== 'listed') return { error: 'gone', status: st };
+    if (uid === SB_ME && !hasBell(this.db, SB_ME)) return { error: 'no_bell' };
     if (this.db.transfers.some((x) => x.id !== id && x.to_user_id === uid && !isDirect(x) && effectiveStatus(x) === 'reserved')) return { error: 'one_at_a_time' };
     const hold = iso(Date.now() + MARKET.holdMin * MIN);
     this.patch(id, { status: 'reserved', to_user_id: uid, hold_until: hold });
@@ -341,7 +346,6 @@ export class MarketSandbox {
     if (tr.status !== 'reserved' || ms(tr.hold_until) + MARKET.holdGraceMin * MIN <= Date.now()) return { error: 'hold_expired' };
     this.patch(id, { status: 'paid', slip_url: slip, paid_at: new Date().toISOString() });
     this.log(uid === SB_ME ? 'me' : 'bot', `${this.who(uid)}โอน ${baht(tr.asking_price)} + แนบสลิป → รอ${tr.from_user_id === SB_ME ? 'คุณ' : 'คนขาย'}เช็คเงินเข้า`);
-    if (uid === SB_ME && this.auto && tr.from_user_id !== SB_ME) this.later(4500, () => this.botConfirm(id, true));
     return { ok: true, paid_at: new Date().toISOString() };
   }
 
@@ -353,6 +357,40 @@ export class MarketSandbox {
     this.patch(id, { status: 'seller_ok', seller_confirmed_at: new Date().toISOString() });
     this.log(uid === SB_ME ? 'me' : 'bot', `${uid === SB_ME ? 'คุณ' : this.who(uid)}ยืนยัน "ได้รับเงินแล้ว" → รอร้านโอนสิทธิ์ (ฝั่งร้านด้านขวา)`);
     return { ok: true };
+  }
+
+  private sellerFlag(uid: string, id: string, reason: SellerFlag, note: string, evidence: string[]): Res {
+    const tr = this.tr(id);
+    if (!['not_arrived', 'wrong_amount', 'wrong_slip'].includes(reason)) return { error: 'bad_reason' };
+    if (!tr || tr.from_user_id !== uid) return { error: 'not_found' };
+    if (tr.status !== 'paid') return { error: 'bad_status', status: tr.status };
+    if (tr.seller_flag) return { ok: true, again: true };
+    this.patch(id, { seller_flag: reason, seller_flag_note: note.trim() || null, seller_flag_at: new Date().toISOString(), review_evidence: evidence.length ? evidence : tr.review_evidence });
+    this.log(uid === SB_ME ? 'me' : 'bot', `${uid === SB_ME ? 'คุณ' : this.who(uid)}แจ้งผู้ซื้อ: ยังไม่ได้รับเงิน — ${SELLER_FLAG_LABEL[reason]}${note.trim() ? ` (“${note.trim()}”)` : ''}`);
+    return { ok: true };
+  }
+
+  private buyerReply(uid: string, id: string, action: string, slip: string, note: string): Res {
+    const tr = this.tr(id);
+    if (!tr || tr.to_user_id !== uid) return { error: 'not_found' };
+    if (tr.status !== 'paid') return { error: 'bad_status', status: tr.status };
+    if (!tr.seller_flag) return { error: 'no_flag' };
+    const who = uid === SB_ME ? 'คุณ' : this.who(uid);
+    if (action === 'reslip') {
+      if (!slip) return { error: 'bad_slip' };
+      const now = new Date().toISOString();
+      this.patch(id, { slip_url: slip, paid_at: now, seller_flag: null, seller_flag_note: null, seller_flag_at: null,
+        slip_history: [...(tr.slip_history ?? []), { slip: tr.slip_url, paid_at: tr.paid_at, flag: tr.seller_flag, flag_note: tr.seller_flag_note, flag_at: tr.seller_flag_at, buyer_note: note.trim() || null, replaced_at: now }] });
+      this.log(uid === SB_ME ? 'me' : 'bot', `${who}แนบสลิปใหม่ → คนขายได้เวลาเช็คใหม่ ${MARKET.sellerSlaH} ชม.`);
+      return { ok: true, paid_at: now };
+    }
+    if (action === 'escalate') {
+      this.patch(id, { status: 'reviewing', review_reason: 'not_received', reviewing_at: new Date().toISOString(),
+        review_note: `คนขายแจ้ง: ${SELLER_FLAG_LABEL[tr.seller_flag]}${tr.seller_flag_note ? ` — ${tr.seller_flag_note}` : ''} · ผู้ซื้อยืนยันว่าสลิปถูก${note.trim() ? `: ${note.trim()}` : ''}` });
+      this.log(uid === SB_ME ? 'me' : 'bot', `${who}ยืนยันว่าสลิปถูก → ส่งเรื่องให้คนขาย + ร้านตรวจ`);
+      return { ok: true };
+    }
+    return { error: 'bad_action' };
   }
 
   private sellerReject(uid: string, id: string, note: string, evidence: string[]): Res {
@@ -449,9 +487,11 @@ export class MarketSandbox {
       done: [to(tr.to_user_id), `🎉 ใบพรีเข้ากระเป๋าแล้ว! — ${n} · ${tr.new_ticket_no ?? ''}`],
       sold: [to(tr.from_user_id), `🤝 ขายสำเร็จแล้ว — ${n}`],
       cancelled: ['ทั้งสองฝั่ง', `❌ ดีลถูกยกเลิก — ${n}`],
+      flagged: [to(tr.to_user_id), `⚠️ คนขายยังไม่ได้รับเงิน — ${tr.seller_flag ? SELLER_FLAG_LABEL[tr.seller_flag] : ''} · แนบสลิปใหม่ หรือกดส่งเรื่องให้ร้าน`],
+      reslip: [`${to(tr.from_user_id)} + แอดมิน`, `📎 ผู้ซื้อแนบสลิปใหม่แล้ว — ${n} · ${price} เช็คบัญชีอีกครั้ง`],
     };
     const m = M[kind];
-    if (m) this.log('push', `แจ้งเตือนถึง ${m[0]}: ${m[1]}`);
+    if (m) this.log('push', `แจ้งเตือนถึง ${m[0].trim()}: ${m[1]}`);
   }
 
   // ── คู่ค้าสมมุติ (ปุ่มในแผง + โหมดตอบเอง) ───────────────────────────────────────────
@@ -486,6 +526,25 @@ export class MarketSandbox {
     if (fromAuto && !this.auto) return;
     this.sellerConfirm(tr.from_user_id, id);
     this.pushed(id, 'seller_ok');
+  }
+  botFlag(id: string, reason: SellerFlag) {
+    const tr = this.tr(id);
+    if (!tr || tr.from_user_id === SB_ME || tr.status !== 'paid' || tr.seller_flag) return;
+    const notes: Record<SellerFlag, string> = { not_arrived: 'เช็คแอปธนาคารแล้วยังไม่มียอดเข้า', wrong_amount: `ได้มาไม่ครบ ยอดต้องเป็น ${baht(tr.asking_price)}`, wrong_slip: 'สลิปนี้ไม่ใช่บัญชีของฉัน' };
+    this.sellerFlag(tr.from_user_id, id, reason, notes[reason], []);
+    this.pushed(id, 'flagged');
+  }
+  botReslip(id: string) {
+    const tr = this.tr(id);
+    if (!tr || !tr.to_user_id || tr.to_user_id === SB_ME || !tr.seller_flag) return;
+    this.buyerReply(tr.to_user_id, id, 'reslip', sampleSlip(tr.asking_price), 'แนบสลิปที่ถูกให้แล้วครับ');
+    this.pushed(id, 'reslip');
+  }
+  botEscalate(id: string) {
+    const tr = this.tr(id);
+    if (!tr || !tr.to_user_id || tr.to_user_id === SB_ME || !tr.seller_flag) return;
+    this.buyerReply(tr.to_user_id, id, 'escalate', '', 'โอนแล้วจริง มีสลิปจากแอปธนาคาร');
+    this.pushed(id, 'reviewing');
   }
   botReject(id: string) {
     const tr = this.tr(id);

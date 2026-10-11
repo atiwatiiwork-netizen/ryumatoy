@@ -21,6 +21,7 @@ import { QrPanel, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { MoneySplit, StubArt, LotPill } from './MarketUi';
 import { PayoutPicker, payoutAccountsOf, payoutLabel, primaryPayoutId } from './PayoutPicker';
+import { BellGate, useBellOk } from './BellGate';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -103,6 +104,7 @@ export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { tick
   const needPayout = !(direct && !priceMissing && price === 0);
   const verb = direct ? 'เปลี่ยนใบ' : 'ลงขาย';
   const bonus = monthlyBonusForTicket(db, t);
+  const bell = useBellOk(); // ต้องเปิดกระดิ่งก่อนลงขาย/ส่งข้อเสนอ (เจ้าของ 2026-10-11 · ด่าน SQL v84 no_bell)
 
   const saveTopup = async () => {
     if (!slip || busy) return;
@@ -241,6 +243,7 @@ export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { tick
           </div>
         ) : (
           <div className="flex flex-col gap-3">
+            <BellGate action={direct ? 'ส่งข้อเสนอ' : 'ลงขาย'} />
             {/* ③ บัญชีรับเงิน — เลือกจากที่ลงทะเบียน / เพิ่มใหม่ (ใช้ร่วมทั้งสองโหมด) */}
             {needPayout
               ? <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} payer={direct ? 'ผู้รับ' : 'ผู้ซื้อ'} />
@@ -276,7 +279,7 @@ export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { tick
 
             {/* ⑤ ผู้รับจะเห็นแบบนี้ */}
             <div className="text-[12px] font-semibold text-ink-muted">{direct ? 'ผู้รับจะเห็นแบบนี้' : 'ผู้ซื้อจะเห็นแบบนี้'}</div>
-            <MoneySplit price={price} due={pv.due} />
+            <MoneySplit price={price} due={pv.due} paid={pv.paid} seller={direct ? 'คนส่ง' : 'คนขาย'} />
 
             {direct && (
               // เลขกระเป๋าผู้รับ → ค้น → ยืนยัน "ใช่คนนี้ไหม" (เจ้าของ: ไม่ต้องสนชื่อ ขอแค่ยอด+ใบตรง — ชื่อโชว์แค่กันส่งผิดคน)
@@ -317,9 +320,9 @@ export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { tick
               {needPayout && payout && <li>💳 รับเงินเข้า {payoutLabel(payout)}</li>}
             </ul>
             {err && <div role="alert" className="rounded-xl border border-[#b91c1c]/40 bg-[#b91c1c]/[0.1] px-3 py-2 text-[12.5px] font-semibold text-[#f87171]">{err}</div>}
-            <button type="button" disabled={busy || priceMissing || (needPayout && !payout) || (direct && !target?.ok)} onClick={() => void submit()}
+            <button type="button" disabled={busy || !bell || priceMissing || (needPayout && !payout) || (direct && !target?.ok)} onClick={() => void submit()}
               className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">
-              {busy ? 'กำลังส่ง…' : direct
+              {busy ? 'กำลังส่ง…' : !bell ? '🔔 เปิดกระดิ่งด้านบนก่อน' : direct
                 ? `ส่งข้อเสนอให้ ${target?.ok ? target.name : 'ผู้รับ'} ${q < t.qty ? `· ${q} ชิ้น ` : ''}· ${price > 0 ? baht(price) : 'ยกให้ฟรี'}`
                 : `ลงประกาศ ${q < t.qty ? `${q} ชิ้น ` : ''}· ${baht(price)}`}
             </button>

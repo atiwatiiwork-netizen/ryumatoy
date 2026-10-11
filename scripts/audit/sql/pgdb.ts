@@ -102,3 +102,7 @@ export async function rpc<T = Record<string, unknown>>(db: PGlite, fn: string, a
   const r = await db.query<{ r: T }>(`select ${fn}(${ph}) as r`, args as unknown[]);
   return r.rows[0]?.r as T;
 }
+
+/** ทุกคนในฐานจำลองมีกระดิ่ง (เครื่องรับแจ้งเตือน) — v84 บังคับเปิดกระดิ่งก่อนลงขาย/เปลี่ยนใบ/จอง · เทสต์ไหนจะทดสอบ "ไม่มีกระดิ่ง" ให้ลบแถวเอง */
+export const BELL_ALL = `insert into push_subscriptions (id, user_id, endpoint, p256dh, auth)
+  select 'ps-' || id, id, 'https://push.test/' || id, 'k', 'a' from users on conflict do nothing`;

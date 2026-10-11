@@ -6,14 +6,14 @@
  */
 import { readFileSync } from 'node:fs';
 import type { PGlite } from '@electric-sql/pglite';
-import { bootDb, asUser, rpc, splitSql } from './pgdb';
+import { bootDb, asUser, rpc, splitSql, BELL_ALL } from './pgdb';
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail?: unknown) => {
   if (cond) { pass++; console.log('PASS', name); } else { fail++; console.log('FAIL', name, detail === undefined ? '' : JSON.stringify(detail)); }
 };
 const AUTH: Record<string, string> = {};
-const who = ['S1', 'S2', 'S3', 'B1', 'B2', 'B3', 'X'] as const;
+const who = ['S1', 'S2', 'S3', 'B1', 'B2', 'B3', 'X', 'S4', 'B4', 'N'] as const;
 type Who = typeof who[number];
 who.forEach((w, i) => { AUTH[w] = `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`; });
 type Res = Record<string, any> & { THROWN?: string };
@@ -41,6 +41,7 @@ async function boot() {
   await u('uS3', 'Nick', 'S3', 'RYU-0034', 'bronze'); await u('uB1', 'Bea', 'B1', 'RYU-0045', 'bronze');
   await u('uB2', 'Ben', 'B2', 'RYU-0056', 'silver'); await u('uB3', 'Noaddr', 'B3', 'RYU-0067', 'bronze', { addr: false, pay: false });
   await u('uX', 'Admin', 'X', 'RYU-0001', 'bronze', { admin: true });
+  await u('uS4', 'Sora', 'S4', 'RYU-0078', 'silver'); await u('uB4', 'Bow', 'B4', 'RYU-0089', 'bronze'); await u('uN', 'Nobell', 'N', 'RYU-0090', 'bronze');
   await db.query(`insert into manufacturers (id, name) values ('mk-bandai','Bandai'),('mk-mh','MegaHouse'),('mk-bp','Banpresto') on conflict do nothing`);
   await db.query(`insert into franchises (id, name, abbr) values ('fr-op','One Piece','OP'),('fr-nr','Naruto','NR') on conflict do nothing`);
   await db.query(`insert into products (id, series_name, price_total, deposit_amount, status, is_stock, manufacturer_id, franchise_id) values
@@ -68,6 +69,9 @@ async function boot() {
     ['t-s2k', 'uS2', 'P3', 1, 800, 2200, 0, 'arrived', null],
     ['t-s3a', 'uS3', 'P2', 1, 1500, 3700, 0, 'shipping', null],
     ['t-s3n', 'uS3', 'P2', 0, 1500, 3700, 0, 'shipping', null],
+    ['t-s4a', 'uS4', 'P2', 1, 1500, 3700, 0, 'shipping', null],
+    ['t-n1', 'uN', 'P2', 1, 1500, 3700, 0, 'shipping', null],
+    ['t-x1', 'uX', 'P2', 1, 1500, 3700, 0, 'shipping', null],
   ];
   let k = 0;
   for (const [id, owner, pid, qty, dep, rem, paid, ps, batch] of T) {
@@ -83,6 +87,7 @@ async function boot() {
   await db.query(`insert into push_subscriptions (id, user_id, endpoint, p256dh, auth) values
     ('ps1','uB1','https://push/b1','k','a'),('ps2','uB2','https://push/b2','k','a'),('ps3','uX','https://push/x','k','a'),('ps4','uS2','https://push/s2','k','a')`);
   await db.query(`insert into push_prefs (user_id, maker_ids, franchise_ids) values ('uB2', '{mk-bandai}', '{}')`); // B2 ปิดค่าย Bandai
+  await db.query(BELL_ALL); // v84: ต้องเปิดกระดิ่งก่อนลงขาย/จอง
   await db.exec('set session_replication_role = origin;');
   return db;
 }
@@ -274,6 +279,54 @@ async function boot() {
   for (let i = 0; i < 21; i++) lastWrong = await call(db, 'S2', 'ryuma_market_offer', ['t-s2k', 1, 0, wrong, null, 'uB1']);
   const right = await call(db, 'S2', 'ryuma_market_offer', ['t-s2k', 1, 0, codeB1, null, 'uB1']);
   ok('K1 [รอบ4] เดาเลขผิดครบเพดาน → ต่อให้เดาถูกก็ถูกปฏิเสธ (เดิมเดาถูกยังผ่าน = เดาได้ไม่จำกัด)', lastWrong.error === 'too_many' && right.error === 'too_many', { lastWrong, right });
+
+  // ── M. v84 (เจ้าของลองเล่น 2026-10-11): ต้องเปิดกระดิ่ง · คนขายแจ้ง "ยังไม่ได้รับเงิน" + เหตุผล → ผู้ซื้อตอบ ─────────
+  await raw(db, `delete from push_subscriptions where user_id in ('uN', 'uX')`);
+  const nb1 = await call(db, 'N', 'ryuma_market_list', ['t-n1', 1, 1500]);
+  const ls4 = await call(db, 'S4', 'ryuma_market_list', ['t-s4a', 1, 1600]);
+  const nb2 = await call(db, 'N', 'ryuma_market_reserve', [ls4.id]);
+  const adm = await call(db, 'X', 'ryuma_market_list', ['t-x1', 1, 1500]);
+  ok('M1 ไม่มีกระดิ่ง: ลงขายไม่ได้ · จองไม่ได้ (no_bell) · แอดมินยกเว้น (ไว้ทดสอบ)', nb1.error === 'no_bell' && nb2.error === 'no_bell' && !!ls4.ok && !!adm.ok, { nb1, nb2, ls4, adm });
+  if (adm.ok) await call(db, 'X', 'ryuma_market_cancel', [adm.id, null]);
+  await raw(db, BELL_ALL); // คืนกระดิ่งให้ทุกคน (แอดมินต้องได้ push ในข้อถัดไป)
+  const nf = await call(db, 'B4', 'ryuma_market_seller_flag', [ls4.id, 'wrong_slip', null, null]);
+  await call(db, 'B4', 'ryuma_market_reserve', [ls4.id]);
+  const early = await call(db, 'S4', 'ryuma_market_seller_flag', [ls4.id, 'wrong_slip', null, null]);
+  await call(db, 'B4', 'ryuma_market_pay', [ls4.id, SLIP]);
+  const noflag = await call(db, 'B4', 'ryuma_market_buyer_reply', [ls4.id, 'escalate', null, null]);
+  const badr = await call(db, 'S4', 'ryuma_market_seller_flag', [ls4.id, 'whatever', null, null]);
+  ok('M2 ด่าน: คนนอกแจ้งไม่ได้ · ยังไม่โอนแจ้งไม่ได้ · ยังไม่มีธงผู้ซื้อตอบไม่ได้ · เหตุผลแปลกไม่รับ',
+    nf.error === 'not_found' && early.error === 'bad_status' && noflag.error === 'no_flag' && badr.error === 'bad_reason', { nf, early, noflag, badr });
+  const PROOF = SLIP.replace('1.jpg', 'proof.jpg');
+  const fl = await call(db, 'S4', 'ryuma_market_seller_flag', [ls4.id, 'wrong_slip', 'ไม่เจอยอด 1,600', [PROOF, 'https://evil.example.com/x.jpg']]);
+  const d1 = await deal(db, ls4.id);
+  const pf1 = await call(db, 'S4', 'ryuma_market_push_targets', [ls4.id, 'flagged']);
+  const pf1b = await call(db, 'S4', 'ryuma_market_push_targets', [ls4.id, 'flagged']);
+  const rm = await call(db, 'B4', 'ryuma_market_push_targets', [ls4.id, 'remind']);
+  ok('M3 คนขายแจ้ง "สลิปผิด": ดีลยัง paid (ใบยังล็อก) · มีธง+โน้ต · หลักฐานเก็บเฉพาะรูปร้าน · push ถึงผู้ซื้อ (ครั้งเดียว) · ไม่เตือนคนขายซ้ำ',
+    !!fl.ok && d1?.status === 'paid' && d1?.seller_flag === 'wrong_slip' && d1?.seller_flag_note === 'ไม่เจอยอด 1,600'
+    && JSON.stringify(d1?.review_evidence) === JSON.stringify([PROOF]) && JSON.stringify(pf1.targets ?? []).includes('push.test/uB4')
+    && /สลิปผิด/.test(pf1.body ?? '') && (pf1b.targets ?? []).length === 0 && (rm.targets ?? []).length === 0, { fl, d1, pf1, pf1b, rm });
+  const SLIP2 = SLIP.replace('1.jpg', '2.jpg');
+  const paid0 = d1.paid_at;
+  await new Promise((r) => setTimeout(r, 20));
+  const rs = await call(db, 'B4', 'ryuma_market_buyer_reply', [ls4.id, 'reslip', SLIP2, 'แนบสลิปที่ถูกแล้วครับ']);
+  const d2 = await deal(db, ls4.id);
+  const pr = await call(db, 'B4', 'ryuma_market_push_targets', [ls4.id, 'reslip']);
+  ok('M4 ผู้ซื้อแนบสลิปใหม่: สลิปเปลี่ยน · เวลาโอนเริ่มนับใหม่ (คนขายได้ 12 ชม.) · ธงหาย · สลิปเก่า+เหตุผลเก็บในประวัติ · push ถึงคนขาย+แอดมิน',
+    !!rs.ok && d2?.slip_url === SLIP2 && new Date(d2?.paid_at) > new Date(paid0) && d2?.seller_flag === null
+    && d2?.slip_history?.length === 1 && d2.slip_history[0].slip === SLIP && d2.slip_history[0].flag === 'wrong_slip'
+    && JSON.stringify(pr.targets ?? []).includes('push.test/uS4') && JSON.stringify(pr.targets ?? []).includes('push.test/uX'), { rs, d2, pr });
+  const fl2 = await call(db, 'S4', 'ryuma_market_seller_flag', [ls4.id, 'not_arrived', null, null]);
+  const pf2 = await call(db, 'S4', 'ryuma_market_push_targets', [ls4.id, 'flagged']);
+  const escB = await call(db, 'B4', 'ryuma_market_buyer_reply', [ls4.id, 'escalate', null, 'โอนจาก KBank 14:05 จริง']);
+  const d3 = await deal(db, ls4.id);
+  ok('M5 คนขายแจ้งอีกรอบ (push ส่งได้อีก) → ผู้ซื้อมั่นใจ ส่งเรื่อง → ร้านตรวจสอบ (โน้ตรวมคำของสองฝั่ง)',
+    !!fl2.ok && (pf2.targets ?? []).length > 0 && !!escB.ok && d3?.status === 'reviewing' && d3?.review_reason === 'not_received'
+    && /สลิปถูกแต่เงินไม่เข้า/.test(d3?.review_note ?? '') && /ผู้ซื้อยืนยันว่าสลิปถูก: โอนจาก KBank/.test(d3?.review_note ?? ''), { fl2, escB, note: d3?.review_note });
+  const cf = await call(db, 'S4', 'ryuma_market_seller_confirm', [ls4.id]);
+  const fin4 = await call(db, 'X', 'ryuma_market_finalize', [ls4.id, null]);
+  ok('M6 เคลียร์กันได้ → คนขายกดยืนยันจากหน้าตรวจสอบ → ร้านโอนสิทธิ์ได้ตามปกติ', !!cf.ok && !!fin4.ok && (await ticket(db, 't-s4a'))?.owner_id === 'uB4', { cf, fin4 });
 
   // ── L. v83 รันซ้ำได้ + เติมจำนวนชิ้นให้แถวเก่าที่ว่าง (จำลองข้อมูลจริงก่อนรัน) ─────────────
   await db.exec(`alter table preorder_tickets alter column qty drop not null`);

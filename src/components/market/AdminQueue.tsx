@@ -11,7 +11,7 @@ import { sendPush, subsForUsers, pushEnabled } from '@/lib/push';
 import * as mk from '@/lib/market';
 import { productLabel } from '@/domain/services/catalog';
 import { pairItemsWithTickets, ticketPayer } from '@/domain/services/tickets';
-import { marketQueue, effectiveStatus, sellerSlaLeft, isDirect, dealStatusLabel, depositGap } from '@/domain/services/market';
+import { MARKET, marketQueue, effectiveStatus, sellerSlaLeft, isDirect, dealStatusLabel, depositGap, SELLER_FLAG_LABEL } from '@/domain/services/market';
 import type { Database, RemainingPayment, TicketTransfer } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
@@ -37,6 +37,8 @@ export function QueueTab({ db, flash }: { db: Database; flash: Flash }) {
     { title: '🔎 รอตรวจสอบ', hint: 'คนขายแจ้งไม่ได้รับเงิน / เงียบเกินเวลา — ขอหลักฐานสองฝั่งแล้วตัดสิน', rows: q.reviewing },
     { title: '⏰ คนขายเงียบเกิน 12 ชม.', hint: 'ผู้ซื้อโอนแล้ว — เตือน/โทรหาคนขาย หรือส่งเข้าตรวจสอบ', rows: q.overdue },
     { title: '⏳ รอคนขายเช็คเงิน', hint: 'ยังอยู่ในเวลา 12 ชม.', rows: q.waiting },
+    { title: `⏰ ผู้ซื้อเงียบเกิน ${MARKET.flagReplyH} ชม. หลังคนขายแจ้ง`, hint: 'คนขายแจ้งยังไม่ได้รับเงินแล้วผู้ซื้อไม่ตอบ — ทักผู้ซื้อ หรือยกเลิกดีล (ถ้าเงินเข้าจริงให้คนขายคืน)', rows: q.flaggedStale },
+    { title: '📎 รอผู้ซื้อตรวจสลิป', hint: 'คนขายแจ้ง "ยังไม่ได้รับเงิน" แล้ว — รอผู้ซื้อแนบสลิปใหม่หรือส่งเรื่องมา (ดูเฉยๆ ยังไม่ต้องทำอะไร)', rows: q.flagged },
     { title: '📨 ข้อเสนอเปลี่ยนใบ · รอผู้รับ', hint: 'ส่งแล้ว ผู้รับมี 24 ชม. โอน/กดรับ — ไม่ต้องทำอะไร แค่รู้ไว้ (ยกเลิกได้ถ้าจำเป็น)', rows: q.offers },
   ];
   if (groups.every((g) => g.rows.length === 0) && q.topups.length === 0 && q.lateSlips.length === 0) {
@@ -73,7 +75,7 @@ function LateSlipCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fla
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const t = db.tickets.find((x) => x.id === tr.ticket_id);
-  const safeSlip = tr.slip_url && /^https?:\/\//i.test(tr.slip_url) ? tr.slip_url : null;
+  const safeSlip = slipSrc(tr.slip_url);
   const resolve = async () => {
     if (busy || !note.trim()) return;
     setBusy(true);
@@ -263,6 +265,8 @@ function DealAdminCard({ db, tr, flash }: { db: Database; tr: TicketTransfer; fl
         {/* กันเกรียน (v79): คนส่งที่ถอนข้อเสนอบ่อย — ร้านเห็นทันทีในการ์ด */}
         {direct && senderWithdrawals > 0 && <><span className="text-ink-faint">คนส่งเคยถอน</span><span className={senderWithdrawals >= 3 ? 'font-bold text-[#f87171]' : ''}>{senderWithdrawals} ครั้งใน 30 วัน</span></>}
         {st === 'paid' && Number.isFinite(sla) && <><span className="text-ink-faint">เวลา{sellerWord}</span><span className={sla <= 0 ? 'font-bold text-[#f87171]' : ''}>{sla > 0 ? `เหลือ ${Math.ceil(sla / 3_600_000)} ชม.` : `เกินมา ${Math.ceil(-sla / 3_600_000)} ชม.`}</span></>}
+        {tr.seller_flag && <><span className="text-ink-faint">คนขายแจ้ง</span><span className="text-[#fbbf24]">{SELLER_FLAG_LABEL[tr.seller_flag]}{tr.seller_flag_note ? ` — “${tr.seller_flag_note}”` : ''}</span></>}
+        {(tr.slip_history?.length ?? 0) > 0 && <><span className="text-ink-faint">สลิปเดิม</span><span>{tr.slip_history!.map((h, k) => slipSrc(h.slip) ? <a key={k} href={h.slip!} target="_blank" rel="noreferrer" className="mr-2 underline">สลิป {k + 1}</a> : null)}</span></>}
         {tr.review_reason && <><span className="text-ink-faint">ตรวจสอบเพราะ</span><span>{tr.review_reason === 'not_received' ? 'คนขายแจ้งไม่ได้รับเงิน' : tr.review_reason === 'seller_silent' ? 'คนขายเงียบเกินเวลา' : 'แอดมินส่งเข้าตรวจ'}{tr.review_note ? ` — “${tr.review_note}”` : ''}</span></>}
       </div>
       <div className="mt-3 flex gap-2 overflow-x-auto">

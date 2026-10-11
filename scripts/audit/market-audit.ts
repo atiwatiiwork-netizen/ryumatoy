@@ -13,7 +13,7 @@ import { unmatchedApprovedItems, hasPreorderTicket, ticketPayer } from '../../sr
 import { userTakenInBatch } from '../../src/domain/services/reservations';
 import { qualifyingCount } from '../../src/domain/services/campaigns';
 import { missionStateFor } from '../../src/domain/services/missions';
-import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket, dealStatusLabel, directEnabled, directVisibleTo, anyMarketVisibleTo, marketVisibleTo } from '../../src/domain/services/market';
+import { SELLER_FLAG_LABEL, hasBell, MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket, dealStatusLabel, directEnabled, directVisibleTo, anyMarketVisibleTo, marketVisibleTo } from '../../src/domain/services/market';
 import { crc16ccitt, promptPayPayload, promptPayTarget } from '../../src/lib/promptpay';
 import { closerOf, ticketEarnBlock, simulateAll } from '../../src/domain/services/points';
 import { MarketSandbox, SB_ME } from '../../src/components/market/sandbox/engine';
@@ -449,6 +449,11 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const sumOf = (d: Database) => d.tickets.reduce((s, t) => [s[0] + t.deposit_paid, s[1] + t.remaining_amount, s[2] + t.remaining_paid, s[3] + t.qty], [0, 0, 0, 0]).join('/');
   const before = sumOf(sb.db);
   const pay = { promptpay: '0812345678', account_name: 'คุณ ทดลอง' };
+  // v84 (เจ้าของ 2026-10-11): ลงขาย/จองต้องเปิดกระดิ่งก่อน — "คุณ" ยังไม่มีกระดิ่งตอนเริ่ม
+  const nb = await sb.call('ryuma_market_list', { p_ticket_id: multi.id, p_qty: 1, p_price: 800, p_payout: pay });
+  const nbr = await sb.call('ryuma_market_reserve', { p_id: sb.feedRows().find((r) => r.status === 'listed' && !r.mine)!.id });
+  sb.store.update((d) => ({ ...d, pushSubscriptions: [...d.pushSubscriptions, { id: 'ps-sb', user_id: SB_ME, endpoint: 'sandbox://bell', p256dh: '-', auth: '-', created_at: new Date().toISOString() } as any] }));
+  ok('P0 ยังไม่เปิดกระดิ่ง: ลงขาย/จองไม่ได้ (no_bell) · เปิดแล้วผ่าน', nb.error === 'no_bell' && nbr.error === 'no_bell' && hasBell(sb.db, SB_ME), { nb, nbr });
   const l = await sb.call('ryuma_market_list', { p_ticket_id: multi.id, p_qty: 1, p_price: 800, p_payout: pay });
   const own = await sb.call('ryuma_market_reserve', { p_id: l.id });
   const gold = mine.find((t) => t.deposit_paid < (sb.db.orders.flatMap((o) => o.items).find((i) => `t-${i.id}` === t.id)?.std_deposit ?? 0) * t.qty)!;
@@ -488,6 +493,49 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
   const ac = await sb.call('ryuma_market_admin_cancel', { p_id: t4.id, p_reason: 'ทดสอบ' });
   ok('P5 จองหมดเวลา → กลับเป็นลงขาย · ร้านยกเลิกหลังโอน → คิว "เคลียร์คืนเงิน" (ตรง SQL v83)',
     back?.status === 'listed' && !!ac.ok && marketQueue(sb.db).lateSlips.some((x) => x.id === t4.id), { back: back?.status, ac });
+  // ฝั่งซื้อ: คนขาย(บอท)แจ้งสลิปผิด → งานของ "คุณ" · ไม่นับเป็นคนขายเงียบ → แนบสลิปใหม่ → คนขายแจ้งอีก (เงินไม่เข้า) → ยืนยันว่าถูก ส่งเรื่อง
+  const t5 = sb.feedRows().find((r) => r.status === 'listed' && !r.mine)!;
+  await sb.call('ryuma_market_reserve', { p_id: t5.id });
+  await sb.call('ryuma_market_pay', { p_id: t5.id, p_slip: 'data:image/png;base64,s1' });
+  const early = await sb.call('ryuma_market_buyer_reply', { p_id: t5.id, p_action: 'reslip', p_slip: 'x' });
+  sb.botFlag(t5.id, 'wrong_slip');
+  const f1 = sb.db.transfers.find((x) => x.id === t5.id)!;
+  const q1 = marketQueue(sb.db);
+  ok('P6 คนขายแจ้ง "สลิปผิด": สถานะยังโอนแล้ว · เป็นงานของผู้ซื้อ · คิวร้าน = รอผู้ซื้อตรวจสลิป (ไม่ใช่เงียบ/ไม่นับงาน) · ก่อนแจ้งตอบไม่ได้',
+    early.error === 'no_flag' && f1.status === 'paid' && f1.seller_flag === 'wrong_slip' && myDeals(sb.db, SB_ME).todo.some((x) => x.id === t5.id)
+    && !myDeals(sb.db, f1.from_user_id).todo.some((x) => x.id === t5.id) && q1.flagged.some((x) => x.id === t5.id)
+    && !q1.overdue.concat(q1.waiting, q1.flaggedStale).some((x) => x.id === t5.id) && dealStatusLabel(f1).includes('ยังไม่ได้รับเงิน'), { early, f1: f1.seller_flag });
+  const bad = await sb.call('ryuma_market_buyer_reply', { p_id: t5.id, p_action: 'reslip', p_slip: '' });
+  const rs = await sb.call('ryuma_market_buyer_reply', { p_id: t5.id, p_action: 'reslip', p_slip: 'data:image/png;base64,s2', p_note: 'ขอโทษครับ แนบผิด' });
+  const f2r = sb.db.transfers.find((x) => x.id === t5.id)!;
+  ok('P7 แนบสลิปใหม่: ธงหาย · สลิปเปลี่ยน · เก็บสลิปเดิม+เหตุผลไว้ในประวัติ · กลับเป็นงานคนขาย',
+    bad.error === 'bad_slip' && !!rs.ok && !f2r.seller_flag && f2r.slip_url === 'data:image/png;base64,s2' && f2r.slip_history?.length === 1
+    && f2r.slip_history[0].slip === 'data:image/png;base64,s1' && f2r.slip_history[0].flag === 'wrong_slip' && f2r.slip_history[0].buyer_note === 'ขอโทษครับ แนบผิด'
+    && myDeals(sb.db, f2r.from_user_id).todo.some((x) => x.id === t5.id), f2r);
+  sb.botFlag(t5.id, 'not_arrived');
+  const ba = await sb.call('ryuma_market_buyer_reply', { p_id: t5.id, p_action: 'nope' });
+  const es = await sb.call('ryuma_market_buyer_reply', { p_id: t5.id, p_action: 'escalate', p_note: 'โอนจริง มีรายการในแอป' });
+  const f3 = sb.db.transfers.find((x) => x.id === t5.id)!;
+  ok('P8 ผู้ซื้อยืนยันว่าสลิปถูก → เข้าตรวจสอบ (เหตุผล: คนขายแจ้งไม่ได้รับ) โน้ตมีทั้งสองฝั่ง',
+    ba.error === 'bad_action' && !!es.ok && f3.status === 'reviewing' && f3.review_reason === 'not_received'
+    && !!f3.review_note?.includes(SELLER_FLAG_LABEL.not_arrived) && !!f3.review_note?.includes('โอนจริง มีรายการในแอป') && marketQueue(sb.db).reviewing.some((x) => x.id === t5.id), f3.review_note);
+  // ฝั่งขาย: "คุณ" แจ้ง (เหตุผลผิด = ไม่ได้) · แจ้งซ้ำ = again · ผู้ซื้อ(บอท)แนบใหม่ → เวลาเช็คนับใหม่ · คิวร้าน: เงียบเกิน 24 ชม. = งาน
+  const myT = sb.db.tickets.find((t) => t.owner_id === SB_ME && ['production', 'shipping', 'arrived'].includes(t.product_status) && !sb.db.transfers.some((x) => x.ticket_id === t.id && ['listed', 'reserved', 'paid', 'reviewing', 'seller_ok'].includes(effectiveStatus(x))) && depositGap(sb.db, t) === 0)!;
+  const l2 = await sb.call('ryuma_market_list', { p_ticket_id: myT.id, p_qty: myT.qty, p_price: 500, p_payout: pay });
+  sb.botReserve(String(l2.id)); sb.botPay(String(l2.id));
+  const brs = await sb.call('ryuma_market_seller_flag', { p_id: l2.id, p_reason: 'whatever' });
+  const fl = await sb.call('ryuma_market_seller_flag', { p_id: l2.id, p_reason: 'wrong_amount', p_note: 'ได้ 300 ขาด 200' });
+  const fl2 = await sb.call('ryuma_market_seller_flag', { p_id: l2.id, p_reason: 'wrong_slip' });
+  const g1 = sb.db.transfers.find((x) => x.id === l2.id)!;
+  const stale = { ...sb.db, transfers: sb.db.transfers.map((x) => (x.id === l2.id ? { ...x, seller_flag_at: new Date(Date.now() - 25 * H).toISOString() } : x)) };
+  const qs = marketQueue(stale), qf = marketQueue(sb.db);
+  const paidBefore = g1.paid_at;
+  sb.botReslip(String(l2.id));
+  const g2 = sb.db.transfers.find((x) => x.id === l2.id)!;
+  ok('P9 คุณแจ้ง "ได้เงินไม่ครบ": เหตุผลมั่วไม่ได้ · แจ้งซ้ำไม่ทับ · ไม่ใช่งานคุณแล้ว · เงียบเกิน 24 ชม. → งานร้าน · บอทแนบใหม่ → ธงหาย เวลาเช็คนับใหม่',
+    !!l2.ok && g1.status === 'paid' && brs.error === 'bad_reason' && !!fl.ok && !!fl2.again && g1.seller_flag === 'wrong_amount' && g1.seller_flag_note === 'ได้ 300 ขาด 200'
+    && !myDeals(stale, SB_ME).todo.some((x) => x.id === l2.id) && qs.flaggedStale.some((x) => x.id === l2.id) && qs.jobs === qf.jobs + 1 && !qf.flaggedStale.some((x) => x.id === l2.id)
+    && !g2.seller_flag && g2.paid_at !== paidBefore && g2.slip_history?.length === 1 && myDeals(sb.db, SB_ME).todo.some((x) => x.id === l2.id), { g1: g1.seller_flag, g2: g2.seller_flag, jobs: [qs.jobs, qf.jobs], pa: [paidBefore, g2.paid_at] });
   sb.dispose();
   console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);
