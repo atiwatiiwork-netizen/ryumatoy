@@ -5,7 +5,7 @@
  * ที่อยู่เดียวกัน = ช่องเดียว หลายบรรทัดสินค้า.
  */
 
-import type { Database, PreorderTicket, DeliveryMethod } from '../entities';
+import type { Database, PreorderTicket, DeliveryMethod, ActivityLog } from '../entities';
 import { productLabel } from './catalog';
 
 /** ผู้ส่ง — คงที่ทุกช่อง (spec ข้อ 2). */
@@ -135,3 +135,48 @@ export const labelSlots = (db: Database, tickets: PreorderTicket[]): LabelSlot[]
   out.forEach((s, i) => { s.queueNo = i + 1; });
   return out;
 };
+
+/* ── สถานะ "พิมพ์ใบปะหน้าแล้วหรือยัง" (เจ้าของ 2026-10-11) ───────────────────────────────────
+ * ปัญหา: ติ๊กพิมพ์ไปแล้ว มีรายการใหม่เข้ามา → งงว่าช่องไหนเคยกดสร้างรูปไปแล้ว.
+ * จดไว้ใน activity_logs (ไม่ต้องรัน SQL · เห็นทุกเครื่อง · แอดมินอ่านได้คนเดียว — มีที่อยู่ลูกค้า)
+ * แถวละ 1 ช่องต่อการพิมพ์ 1 ครั้ง: target_id = id ตั๋วในช่องคั่นด้วย "," · summary = ผู้รับ+ที่อยู่ที่ "พิมพ์ลงใบจริง"
+ * (ใช้เทียบตรงตัวว่าที่อยู่เปลี่ยนหลังพิมพ์ไหม + เป็นหลักฐานว่าใบที่ติดกล่องจ่าหน้าไปที่ไหน)
+ * ⚠ client โหลดประวัติแค่ 400 แถวล่าสุด — ใบที่ค้างคิวนานจนแถวพิมพ์หลุดหน้าต่าง จะกลับมาเป็น "ยังไม่พิมพ์" (พิมพ์ซ้ำได้ ไม่เสียหาย) */
+export const LABEL_PRINT_ACTION = 'print_label';
+export const labelPrintSummary = (to: ShipTo): string => `พิมพ์ใบปะหน้า → ${to.name} ${to.phone} · ${to.address || '—'}`;
+export const labelPrintTarget = (slot: LabelSlot): { targetId: string; targetLabel: string } => ({
+  targetId: slot.tickets.map((t) => t.id).join(','),
+  targetLabel: slot.tickets.map((t) => t.ticket_no).join(' '),
+});
+
+/** new = ยังไม่เคยพิมพ์ · added = เคยพิมพ์แล้วแต่มีตั๋วใหม่มารวมช่อง (ใบเก่าขาดรายการ ต้องพิมพ์ใหม่ทั้งช่อง)
+ *  readdressed = พิมพ์ครบแต่ที่อยู่/ชื่อ/เบอร์เปลี่ยนหลังพิมพ์ · printed = พิมพ์แล้วตรงกับปัจจุบัน */
+export type SlotPrintKind = 'new' | 'added' | 'readdressed' | 'printed';
+export interface SlotPrintState {
+  kind: SlotPrintKind;
+  at?: string;            // พิมพ์ล่าสุดเมื่อไหร่ (แถวใหม่สุดที่แตะช่องนี้)
+  by?: string;            // ใครกด
+  labels: number;         // ตั๋วในช่องนี้กระจายอยู่ในใบปะหน้ากี่ใบ (>1 = เคยพิมพ์แยกกัน)
+  newTicketNos: string[]; // added: ตั๋วที่ยังไม่อยู่ในใบไหนเลย
+}
+export function slotPrintState(db: Database, slot: LabelSlot): SlotPrintState {
+  const ids = new Set(slot.tickets.map((t) => t.id));
+  // ใหม่สุดก่อนเสมอ — ไม่พึ่งลำดับใน array (โหลดจาก DB กับ logActivity prepend บังเอิญตรงกัน แต่ไม่รับประกัน)
+  const rows = db.activityLogs
+    .filter((l) => l.action === LABEL_PRINT_ACTION && !!l.target_id)
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+  const latest = new Map<string, ActivityLog>(); // ตั๋ว → แถวพิมพ์ล่าสุดที่มีตั๋วนี้
+  for (const l of rows) {
+    for (const tid of l.target_id!.split(',')) if (ids.has(tid) && !latest.has(tid)) latest.set(tid, l); // id ที่ไม่อยู่ในช่องแล้ว = ข้าม
+    if (latest.size === ids.size) break;
+  }
+  if (latest.size === 0) return { kind: 'new', labels: 0, newTicketNos: [] };
+  const used = [...new Set(latest.values())];
+  const newest = used.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+  const base = { at: newest.created_at, by: newest.actor_name, labels: used.length };
+  const missing = slot.tickets.filter((t) => !latest.has(t.id));
+  if (missing.length) return { kind: 'added', ...base, newTicketNos: missing.map((t) => t.ticket_no) };
+  const expect = labelPrintSummary(slot.to);
+  if (used.some((l) => l.summary !== expect)) return { kind: 'readdressed', ...base, newTicketNos: [] };
+  return { kind: 'printed', ...base, newTicketNos: [] };
+}
