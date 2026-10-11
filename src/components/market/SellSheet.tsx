@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useStore } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { store } from '@/data/store';
 import { submitRemainingPayment, payoutInfoOf } from '@/data/mutations';
 import { isTransientPersistError, persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
@@ -37,9 +36,10 @@ type LookedUp = mk.WalletLookupRes & { code: string };
  *        ③ เลือกบัญชีรับเงิน (ลงทะเบียนไว้/สร้างใหม่) ④ จำนวนชิ้น + ยอด ⑤ (direct) เลขกระเป๋าผู้รับ → ยืนยันคน → ส่ง
  * ด่านจริงอยู่ที่ RPC (ryuma_market_list / ryuma_market_offer) — หน้านี้แค่บอกเหตุผลก่อนกด
  */
-export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: PreorderTicket; mode?: SellMode; onClose: () => void }) {
+export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { ticket: PreorderTicket; mode?: SellMode; onClose: () => void; onListed?: (id: string) => void }) {
   const db = useDatabase();
   const dispatch = useDispatch();
+  const store = useStore(); // ทดลองเล่น/โหมดจำลอง = store ในกรอบนั้น · หน้าจริง = store ตัวจริง
   const router = useRouter();
   const { flash } = useToast();
   const uid = useCurrentUserId();
@@ -49,19 +49,36 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   // หลายชิ้น: ตั้งต้นทั้งใบ (audit รอบ C R2B-06: เดิมตั้งต้น 1 ชิ้นแต่ยอดเท่าทุนของทั้งใบ)
   // ร่างที่พิมพ์ค้างไว้ (จำนวน/ยอด/เลขกระเป๋า) อยู่รอดถ้าแผงปิดไปเผลอๆ หรือหน้า re-render (DNA react-state · audit รอบ E R1-52)
   const draftKey = `sellsheet:${ticket.id}:${mode}`;
-  const draft = (() => { try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') as { qty?: number; priceStr?: string; code?: string } | null; } catch { return null; } })();
+  const draft = (() => { try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') as { qty?: number; priceStr?: string; code?: string; cost?: number } | null; } catch { return null; } })();
   const [qty, setQty] = useState(draft?.qty ?? (ticket.qty || 1));
   const pv0 = listingPreview(t, t.qty, 0);
-  const [priceStr, setPriceStr] = useState(draft?.priceStr ?? String(Math.round(pv0.paid)));
+  /** ทุนของชิ้นที่จะขาย (จ่ายร้านไปแล้ว) — ราคาที่ตั้งไว้ "ตามทุน" ต้องเลื่อนตามเมื่อทุนเปลี่ยน */
+  const costOf = (n: number) => Math.round(listingPreview(t, Math.min(Math.max(1, n), t.qty), 0).paid);
+  // ร่างเก่าจำทุนตอนพิมพ์ไว้ด้วย: เติมมัดจำผ่านแล้วค่อยกลับมา → ราคาเลื่อนตามทุนใหม่ (กำไรเท่าเดิม) ไม่ค้างต่ำกว่าทุน
+  const [priceStr, setPriceStr] = useState(() => {
+    if (draft?.priceStr == null) return String(Math.round(pv0.paid));
+    if (draft.cost == null || draft.priceStr.trim() === '') return draft.priceStr;
+    return String(Math.max(0, Number(draft.priceStr) - draft.cost + costOf(draft.qty ?? t.qty)));
+  });
   // บัญชีหลัก = ตัวที่ตรงกับ payout_info (เลือกล่าสุด) ไม่งั้นตัวแรก
   const [payoutId, setPayoutId] = useState<string | undefined>(() => primaryPayoutId(me) ?? payoutAccountsOf(me)[0]?.id);
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // direct: เลขกระเป๋าผู้รับ + ผลค้น (ผูกกับเลขที่ค้น — เปลี่ยนเลขแล้วผลเดิมใช้ไม่ได้)
   const [code, setCode] = useState(draft?.code ?? '');
+  const cost = costOf(qty);
   useEffect(() => {
-    try { sessionStorage.setItem(draftKey, JSON.stringify({ qty, priceStr, code })); } catch { /* โหมดส่วนตัว — ไม่เป็นไร */ }
-  }, [draftKey, qty, priceStr, code]);
+    try { sessionStorage.setItem(draftKey, JSON.stringify({ qty, priceStr, code, cost })); } catch { /* โหมดส่วนตัว — ไม่เป็นไร */ }
+  }, [draftKey, qty, priceStr, code, cost]);
+  // ทุนเปลี่ยน (เปลี่ยนจำนวนชิ้น / สลิปเติมมัดจำผ่าน ระหว่างเปิดแผงอยู่) → ราคาเลื่อนตาม กำไรเท่าเดิม
+  //   (จำลองกระดาน 2026-10-11: เดิมราคาค้างที่ทุนเก่า → ลด 3 เหลือ 1 ชิ้นกำไรเกินจริง · เติมมัดจำแล้วราคาต่ำกว่าทุน)
+  const lastCost = useRef(cost);
+  useEffect(() => {
+    const d = cost - lastCost.current;
+    lastCost.current = cost;
+    // ช่องว่าง = ยังไม่ได้ตั้ง · ยกให้ฟรี (เปลี่ยนใบ ฿0) = ฟรีต่อ ไม่เลื่อน
+    if (d !== 0) setPriceStr((s) => (s.trim() === '' || (direct && Number(s) === 0) ? s : String(Math.max(0, (Number(s) || 0) + d))));
+  }, [cost, direct]);
   const clearDraft = () => { try { sessionStorage.removeItem(draftKey); } catch { /* ignore */ } };
   const codeRef = useRef(draft?.code ?? '');
   const [target, setTarget] = useState<LookedUp | null>(null);
@@ -79,6 +96,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
   const blocked = !!reason && !(gap > 0 && reason.startsWith('ต้องเติมมัดจำ')) && !(pendingTopup && gap > 0 && reason === 'มีสลิปส่วนต่างรอตรวจ');
   const fullPayTopup = gap > 0 && !pendingTopup && topupIsFullPayment(db, t);
   const pv = listingPreview(t, q, price);
+  const changeQty = (n: number) => setQty(Math.min(Math.max(1, n), t.qty)); // ราคาเลื่อนตามทุนใน effect ด้านบน
   const account = db.paymentAccounts.find((a) => a.active) ?? db.paymentAccounts[0];
   const payout: PayoutAccount | undefined = payoutAccountsOf(me).find((a) => a.id === payoutId);
   // ยกให้ฟรี (ดีลตรง ฿0) ไม่มีเงินให้รับ → ไม่ต้องมีบัญชี (audit รอบ C R1-58)
@@ -160,7 +178,8 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
     }
     clearDraft();
     onClose();
-    router.push(`/market/${r.id}`);
+    // เปิดจากกระดานในกรอบพรีวิวของแอดมิน → เปิดดีลในกรอบเดิม (ไม่ออกจากหน้าแอดมิน)
+    if (onListed) onListed(r.id); else router.push(`/market/${r.id}`);
   };
 
   return (
@@ -183,7 +202,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
           <div className="mb-1 font-bold text-[#4ade80]">✓ ระบบอ่านตั๋วให้แล้ว</div>
           <Row k="ราคาเต็มของใบ" v={baht(pv0.total)} />
           <Row k="จ่ายร้านไปแล้ว (มัดจำ + ส่วนต่างที่จ่าย)" v={baht(pv0.paid)} />
-          <Row k="ค้างจ่ายร้าน → ผู้รับรับต่อ" v={baht(pv0.due)} hl />
+          <Row k={`ค้างจ่ายร้าน → ${direct ? 'ผู้รับ' : 'ผู้ซื้อ'}รับต่อ`} v={baht(pv0.due)} hl />
         </div>
 
         {blocked ? (
@@ -224,7 +243,7 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
           <div className="flex flex-col gap-3">
             {/* ③ บัญชีรับเงิน — เลือกจากที่ลงทะเบียน / เพิ่มใหม่ (ใช้ร่วมทั้งสองโหมด) */}
             {needPayout
-              ? <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} />
+              ? <PayoutPicker selectedId={payoutId} onSelect={(a) => setPayoutId(a?.id)} payer={direct ? 'ผู้รับ' : 'ผู้ซื้อ'} />
               : <div className="rounded-2xl border border-subtle bg-surface-3 px-3.5 py-3 text-[12.5px] text-ink-muted2">🎁 ยกให้ฟรี — ไม่มีเงินโอน จึงไม่ต้องใช้บัญชีรับเงิน</div>}
 
             {/* ④ จำนวนชิ้น + ยอด */}
@@ -232,9 +251,9 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
               <div className="flex items-center justify-between rounded-xl border border-subtle bg-surface-3 px-3 py-2.5">
                 <span className="text-[13px]">{verb}กี่ชิ้น <span className="text-ink-faint">(ใบนี้มี {t.qty})</span></span>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setQty(Math.max(1, q - 1))} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle"><Icon name="minus" size={14} /></button>
+                  <button type="button" onClick={() => changeQty(q - 1)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle"><Icon name="minus" size={14} /></button>
                   <b className="w-6 text-center font-mono">{q}</b>
-                  <button type="button" onClick={() => setQty(Math.min(t.qty, q + 1))} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle"><Icon name="plus" size={14} /></button>
+                  <button type="button" onClick={() => changeQty(q + 1)} className="grid h-8 w-8 place-items-center rounded-lg border border-subtle"><Icon name="plus" size={14} /></button>
                 </div>
               </div>
             )}
@@ -247,7 +266,8 @@ export function SellSheet({ ticket, mode = 'market', onClose }: { ticket: Preord
                 <span className={cx('shrink-0 font-mono text-[13px] font-bold', pv.profit >= 0 ? 'text-[#4ade80]' : 'text-[#f87171]')}>{pv.profit >= 0 ? '+' : '−'}{baht(Math.abs(pv.profit))}</span>
               </div>
               <div className="mt-2 flex gap-1.5">
-                {[{ l: 'เท่าทุน', v: pv.paid }, ...(direct ? [{ l: 'ยกให้ฟรี', v: 0 }] : []), { l: '+100', v: price + 100 }, { l: '+300', v: price + 300 }, ...(direct ? [] : [{ l: '+500', v: price + 500 }])].map((c) => (
+                {/* ปุ่มลัด = กำไรจากทุนของชิ้นที่ขาย (กดซ้ำได้ค่าเดิม · จำลองกระดาน 2026-10-11: เดิมบวกจากราคาปัจจุบัน กด 2 ครั้งเป็น +600) */}
+                {[{ l: 'เท่าทุน', v: pv.paid }, ...(direct ? [{ l: 'ยกให้ฟรี', v: 0 }] : []), { l: '+100', v: pv.paid + 100 }, { l: '+300', v: pv.paid + 300 }, ...(direct ? [] : [{ l: '+500', v: pv.paid + 500 }])].map((c) => (
                   <button type="button" key={c.l} onClick={() => setPriceStr(String(Math.round(c.v)))} className="flex-1 rounded-lg border border-subtle bg-surface-3 py-1.5 font-mono text-[12px] font-semibold text-ink-muted2">{c.l}</button>
                 ))}
               </div>

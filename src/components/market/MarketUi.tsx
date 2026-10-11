@@ -9,6 +9,7 @@ import { promptPayPayload, formatPromptPay } from '@/lib/promptpay';
 import { copyText, digitsOnly } from '@/lib/clipboard';
 import { bankDisplayName } from '@/lib/thaiBanks';
 import { marketFeed, type MarketRow } from '@/lib/market';
+import { marketSandbox } from '@/lib/marketSandbox';
 import { cx } from '@/components/ui';
 
 /**
@@ -58,8 +59,13 @@ export function useMarketFeed(enabled = true, demoDb?: Database) {
     const t = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 15_000);
     return () => clearInterval(t);
   }, [enabled, refresh]);
+  // โหมดทดลองเล่น: คู่ค้าสมมุติเปลี่ยนข้อมูลเองตลอด → กระดานตามทันทีทุกครั้งที่ข้อมูลจำลองเปลี่ยน (หน้าจริงยัง poll 15 วิ)
+  useEffect(() => { if (enabled && marketSandbox()) void refresh(); }, [enabled, demoDb, refresh]);
   return { rows, error, closed, refresh, serverNow: () => Date.now() + skew.current };
 }
+
+/** รูปสลิปที่โชว์ได้: ลิงก์ http(s) หรือรูปในหน้าเว็บ (สลิปตัวอย่างของโหมดทดลอง) — กันค่าแปลก (javascript:) */
+export const slipSrc = (u?: string | null): string | null => (u && (/^https?:\/\//i.test(u) || /^data:image\//i.test(u)) ? u : null);
 
 /** นาฬิกาที่เดินเอง (สำหรับนับถอยหลัง) */
 export function useNow(ms = 1000) {

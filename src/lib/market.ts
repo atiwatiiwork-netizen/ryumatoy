@@ -1,5 +1,6 @@
 import { supabase } from '@/data/supabaseClient';
 import { simActive, SIM_BLOCKED } from '@/lib/sim';
+import { marketSandbox } from '@/lib/marketSandbox';
 
 /**
  * สะพานไปหา RPC ตลาดใบพรี (migration v71 · ryuma-p2p-spec).
@@ -72,6 +73,9 @@ export interface MarketRow {
 export const isMissingRpc = (r: MarketRes) => r.error === 'no_rpc';
 
 async function call<T = MarketRes>(fn: string, args: Record<string, unknown> = {}): Promise<T & MarketRes> {
+  // โหมดทดลองเล่นของแอดมิน: ทุก RPC ตลาดไปเครื่องจำลองในหน้าเว็บ — ไม่ถึงฐานข้อมูลจริงเลย (lib/marketSandbox)
+  const sandbox = marketSandbox();
+  if (sandbox) return (await sandbox.call(fn, args)) as T & MarketRes;
   if (!supabase) return { error: 'no_server' } as T & MarketRes;
   // โหมด "ดูเป็นลูกค้า": RPC ตลาดวิ่งด้วย session แอดมินตัวจริง (มีผลจริง · ขอเลขกระเป๋า/นับโควตา/บันทึกเปิดดูบัญชี)
   //   → อ่านกระดานได้อย่างเดียว ที่เหลือไม่ส่ง (audit รอบ E R2B-09 / R2A-09)
@@ -137,6 +141,8 @@ export type MarketPushKind = 'listed' | 'reserved' | 'paid' | 'seller_ok' | 'rev
   | 'offer' | 'declined' | 'withdrawn' // v73 เปลี่ยนใบพรี
   | 'late_slip'; // v75 ผู้รับโอนแล้วแต่ดีลปิดไปก่อน → แจ้งคนส่ง + แอดมิน
 export async function marketPush(id: string, kind: MarketPushKind): Promise<void> {
+  const sandbox = marketSandbox();
+  if (sandbox) { sandbox.push(id, kind); return; }
   if (!supabase || simActive()) return;
   try {
     const token = await Promise.race([

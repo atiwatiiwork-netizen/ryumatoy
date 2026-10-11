@@ -16,6 +16,7 @@ import { missionStateFor } from '../../src/domain/services/missions';
 import { MARKET, effectiveStatus, marketLocked, hasMarketHistory, standardDepositPerUnit, depositGap, splitShare, nextTransferNo, sellerMask, sellBlockReason, marketQueue, myDeals, listingPreview, marketPublicEnabled, boughtFromMarket, dealStatusLabel, directEnabled, directVisibleTo, anyMarketVisibleTo, marketVisibleTo } from '../../src/domain/services/market';
 import { crc16ccitt, promptPayPayload, promptPayTarget } from '../../src/lib/promptpay';
 import { closerOf, ticketEarnBlock, simulateAll } from '../../src/domain/services/points';
+import { MarketSandbox, SB_ME } from '../../src/components/market/sandbox/engine';
 import { ticketSelectable } from '../../src/domain/services/payments';
 import { setMarketPublic, setPayoutInfo, setMarketDirect, setPayoutAccounts, payoutInfoOf } from '../../src/data/mutations';
 import { THAI_BANKS, bankOf, maskAccount } from '../../src/lib/thaiBanks';
@@ -435,5 +436,59 @@ const moneyKey = (db: Database) => { const m = cashIn(db); return `${m.deposits}
     (sim.find((r) => r.userId === S)?.wouldEarn ?? 0) >= 20 && !sim.some((r) => r.userId === 'u-admin' && r.wouldEarn > 0), sim.slice(0, 4));
 }
 
-console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);
-if (fail) process.exit(1);
+// ── P) เครื่องจำลอง "🎮 ทดลองเล่น" (แอดมิน) — กติกาเดียวกับของจริง · ไม่มีอะไรถึงฐานข้อมูล ─────────────────
+(async () => {
+  const sb = new MarketSandbox(structuredClone(SEED_DATABASE));
+  sb.auto = false;
+  const rows0 = sb.feedRows();
+  const makers = new Set(rows0.map((r) => sb.db.products.find((p) => p.id === r.product_id)?.manufacturer_id));
+  ok('P1 โลกจำลอง: กระดานมีประกาศ ≥ 12 ใบ หลายค่าย หลายคนขาย · ชื่อคนขายถูกปิด', rows0.length >= 12 && makers.size >= 2
+    && new Set(rows0.map((r) => r.seller)).size >= 4 && rows0.every((r) => /^R•••\d\d$/.test(r.seller)), { n: rows0.length, makers: [...makers] });
+  const mine = sb.db.tickets.filter((t) => t.owner_id === SB_ME);
+  const multi = mine.find((t) => t.qty === 3)!;
+  const sumOf = (d: Database) => d.tickets.reduce((s, t) => [s[0] + t.deposit_paid, s[1] + t.remaining_amount, s[2] + t.remaining_paid, s[3] + t.qty], [0, 0, 0, 0]).join('/');
+  const before = sumOf(sb.db);
+  const pay = { promptpay: '0812345678', account_name: 'คุณ ทดลอง' };
+  const l = await sb.call('ryuma_market_list', { p_ticket_id: multi.id, p_qty: 1, p_price: 800, p_payout: pay });
+  const own = await sb.call('ryuma_market_reserve', { p_id: l.id });
+  const gold = mine.find((t) => t.deposit_paid < (sb.db.orders.flatMap((o) => o.items).find((i) => `t-${i.id}` === t.id)?.std_deposit ?? 0) * t.qty)!;
+  const topup = await sb.call('ryuma_market_list', { p_ticket_id: gold.id, p_qty: 1, p_price: 100, p_payout: pay });
+  const open = await sb.call('ryuma_market_list', { p_ticket_id: mine.find((t) => t.product_status === 'open')!.id, p_qty: 1, p_price: 100, p_payout: pay });
+  ok('P2 ลงขาย: แตก 1/3 ได้ · ซื้อของตัวเองไม่ได้ · ใบมัดจำครึ่งต้องเติมก่อน · ใบยังเปิดจองขายไม่ได้',
+    !!l.ok && own.error === 'own_listing' && topup.error === 'topup_needed' && open.error === 'still_open', { l, own, topup, open });
+  sb.botReserve(String(l.id));
+  sb.botPay(String(l.id));
+  const paidTr = sb.db.transfers.find((x) => x.id === l.id)!;
+  const conf = await sb.call('ryuma_market_seller_confirm', { p_id: l.id });
+  const fin = await sb.call('ryuma_market_finalize', { p_id: l.id });
+  const child = sb.db.tickets.find((t) => t.id === fin.child_ticket_id);
+  ok('P3 ขายครบวง (บอทจอง→โอน→คุณยืนยัน→ร้านโอนสิทธิ์): ตั๋วลูก 1 ชิ้นไปผู้ซื้อ · เลข -T1 · เงินรวมทุกใบไม่ขยับ',
+    paidTr.status === 'paid' && !!conf.ok && !!fin.ok && !!child && child.qty === 1 && child.owner_id === paidTr.to_user_id
+    && /-T1$/.test(child.ticket_no) && sumOf(sb.db) === before, { fin, child: child?.ticket_no, before, after: sumOf(sb.db) });
+  // ฝั่งซื้อ: จอง → แนบสลิป → (บอท) ยืนยัน → โอนสิทธิ์ → ใบเข้ากระเป๋า + ติดถือ 2 วัน
+  const target = sb.feedRows().find((r) => r.status === 'listed' && !r.mine)!;
+  const rv = await sb.call('ryuma_market_reserve', { p_id: target.id });
+  const two = await sb.call('ryuma_market_reserve', { p_id: sb.feedRows().find((r) => r.status === 'listed' && !r.mine && r.id !== target.id)!.id });
+  const pd = await sb.call('ryuma_market_pay', { p_id: target.id, p_slip: 'data:image/png;base64,xx' });
+  sb.botConfirm(target.id);
+  const f2 = await sb.call('ryuma_market_finalize', { p_id: target.id });
+  const got = sb.db.tickets.find((t) => t.owner_id === SB_ME && t.ticket_no === f2.new_ticket_no);
+  ok('P4 ซื้อครบวง: จองได้ทีละใบ · ใบเข้ากระเป๋า "ฉัน" · ขายต่อทันทีไม่ได้ (ถือ 2 วัน) · ข้ามเวลา 2 วันแล้วขายได้',
+    !!rv.ok && two.error === 'one_at_a_time' && !!pd.ok && !!f2.ok && !!got
+    && (await sb.call('ryuma_market_list', { p_ticket_id: got.id, p_qty: 1, p_price: 999, p_payout: pay })).error === 'resell_hold'
+    && (sb.fastForward(2 * D + H, '+2 วัน'), !!(await sb.call('ryuma_market_list', { p_ticket_id: got.id, p_qty: 1, p_price: 999, p_payout: pay })).ok), { rv, two, pd, f2 });
+  // จองแล้วไม่โอน → ข้ามเวลา 15+10 นาที → กลับขึ้นกระดาน · ร้านยกเลิกหลังโอน → คิวเคลียร์คืนเงิน
+  const t3 = sb.feedRows().find((r) => r.status === 'listed' && !r.mine)!;
+  await sb.call('ryuma_market_reserve', { p_id: t3.id });
+  sb.fastForward(26 * 60_000, '+26 นาที');
+  const back = sb.feedRows().find((r) => r.id === t3.id);
+  const t4 = sb.feedRows().find((r) => r.status === 'listed' && !r.mine)!;
+  await sb.call('ryuma_market_reserve', { p_id: t4.id });
+  await sb.call('ryuma_market_pay', { p_id: t4.id, p_slip: 'data:image/png;base64,xx' });
+  const ac = await sb.call('ryuma_market_admin_cancel', { p_id: t4.id, p_reason: 'ทดสอบ' });
+  ok('P5 จองหมดเวลา → กลับเป็นลงขาย · ร้านยกเลิกหลังโอน → คิว "เคลียร์คืนเงิน" (ตรง SQL v83)',
+    back?.status === 'listed' && !!ac.ok && marketQueue(sb.db).lateSlips.some((x) => x.id === t4.id), { back: back?.status, ac });
+  sb.dispose();
+  console.log(`\nmarket-audit: ${pass} passed, ${fail} failed`);
+  if (fail) process.exit(1);
+})();

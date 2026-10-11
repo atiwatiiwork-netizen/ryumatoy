@@ -1,5 +1,6 @@
 import { supabase } from '@/data/supabaseClient';
 import { simActive, SIM_BLOCKED } from './sim';
+import { marketSandbox } from './marketSandbox';
 
 /**
  * Upload an image to the public `logos` Storage bucket and return its public URL.
@@ -9,7 +10,8 @@ import { simActive, SIM_BLOCKED } from './sim';
  */
 export async function uploadImage(file: File, prefix: string): Promise<string> {
   if (simActive()) throw new Error(SIM_BLOCKED); // โหมดจำลองดูเป็นลูกค้า — ห้ามอัปโหลดจริง
-  if (!supabase) {
+  // โหมดทดลองเล่นตลาด (แอดมิน): สลิป/หลักฐานอยู่ในหน้าเว็บอย่างเดียว ไม่ขึ้นที่เก็บรูปจริง
+  if (!supabase || marketSandbox()) {
     return new Promise((resolve) => {
       const r = new FileReader();
       r.onload = () => resolve(r.result as string);

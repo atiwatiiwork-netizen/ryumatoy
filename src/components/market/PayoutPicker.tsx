@@ -1,10 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { useDatabase, useDispatch } from '@/state/DataProvider';
+import { useDatabase, useDispatch, useStore } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { store } from '@/data/store';
 import { setPayoutAccounts, payoutInfoOf, samePayout } from '@/data/mutations';
 import { persistFailText } from '@/data/persistErrors';
 import { promptPayTarget, formatPromptPay } from '@/lib/promptpay';
@@ -84,9 +83,10 @@ const blankForm = (name = '') => ({ bank: 'promptpay', account_no: '', promptpay
  * ใช้ร่วมกับลงขายกระดาน) — บัญชีที่เลือกถูกก๊อปปี้ลง users.payout_info ("บัญชีหลัก" ที่กระดานล็อกตอนลงประกาศ)
  * ⚠ คอมโพเนนต์ระดับไฟล์ + ร่างฟอร์มอยู่ใน state ของตัวเอง (DNA react-state)
  */
-export function PayoutPicker({ selectedId, onSelect }: { selectedId?: string; onSelect: (a: PayoutAccount | null) => void }) {
+export function PayoutPicker({ selectedId, onSelect, payer = 'ผู้รับ' }: { selectedId?: string; onSelect: (a: PayoutAccount | null) => void; payer?: string }) {
   const db = useDatabase();
   const dispatch = useDispatch();
+  const store = useStore(); // ทดลองเล่น/โหมดจำลอง = store ในกรอบนั้น · หน้าจริง = store ตัวจริง
   const { flash } = useToast();
   const uid = useCurrentUserId();
   const me = db.users.find((u) => u.id === uid);
@@ -155,7 +155,7 @@ export function PayoutPicker({ selectedId, onSelect }: { selectedId?: string; on
   return (
     <div className="rounded-2xl border border-subtle bg-surface-3 p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[13.5px] font-bold">บัญชีรับเงิน <span className="font-normal text-ink-faint">· ผู้รับจะโอนเข้าบัญชีนี้</span></div>
+        <div className="text-[13.5px] font-bold">บัญชีรับเงิน <span className="font-normal text-ink-faint">· {payer}จะโอนเข้าบัญชีนี้</span></div>
         {!adding && accounts.length < 6 && <button type="button" onClick={() => setAdding(true)} className="text-[12px] font-bold text-primary-soft underline">+ เพิ่มบัญชี</button>}
       </div>
       {accounts.length > 0 && (

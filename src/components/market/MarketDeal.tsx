@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { useDatabase } from '@/state/DataProvider';
+import { useDatabase, useStore } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
-import { store } from '@/data/store';
 import { uploadImage } from '@/lib/upload';
 import { notifyAdminLine } from '@/lib/notify';
 import { baht } from '@/lib/theme';
@@ -13,10 +12,11 @@ import { productLabel } from '@/domain/services/catalog';
 import { livePrice } from '@/domain/services/pricing';
 import { dealRole, effectiveStatus, sellerSlaLeft, soldOutInShop, isDirect, dealStatusLabel, sellerMask, MARKET, TRANSFER_STATUS_LABEL } from '@/domain/services/market';
 import * as mk from '@/lib/market';
+import { marketSandbox } from '@/lib/marketSandbox';
 import type { Database, TicketTransfer } from '@/domain/entities';
 import { BackBar, cx } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { StubArt, LotPill, productSub, MoneySplit, HoldRing, SlideToConfirm, PromptPayCard, DealSteps, useMarketFeed, useNow, mmss } from './MarketUi';
+import { StubArt, LotPill, productSub, MoneySplit, HoldRing, SlideToConfirm, PromptPayCard, DealSteps, useMarketFeed, useNow, mmss, slipSrc } from './MarketUi';
 import { PayoutLine } from './PayoutPicker';
 
 type Flash = (m: string) => void;
@@ -29,6 +29,12 @@ const ringLabel = (msLeft: number) => msLeft <= 0 ? 'หมด' : msLeft >= 3_60
 /** ชื่อคู่ดีล — RLS ไม่ให้เห็นแถว user ของอีกฝั่ง → ใช้คำกลางๆ แทน mask ที่เดาจาก id (audit รอบ E R1-17: เดิม mask
  *  จาก id ไม่ตรงกับ mask จากรหัสสมาชิกที่ server โชว์ตอนค้นเลข) · เห็นแถว user ได้ (แอดมิน) = mask จากรหัสสมาชิก */
 const whoMask = (db: Database, id: string | undefined, fallback: string) => { const u = db.users.find((x) => x.id === id); return u ? ` ${sellerMask(u)} ` : fallback; };
+/** ลิงก์ไปหน้าใบพรีในกระเป๋า — โหมดทดลองเล่นของแอดมินไม่มีหน้าใบพรีจริง (ใบอยู่ในเครื่องจำลอง) → ป้ายบอกแทนการพาออกจากหน้า */
+function WalletLink({ no, className, children }: { no: string; className?: string; children: ReactNode }) {
+  if (marketSandbox()) return <div className={cx(className, 'opacity-80')}>{children} <span className="block text-[11px] font-normal">โหมดทดลอง · ดูที่แท็บ “ใบพรีของฉัน” ในกรอบ</span></div>;
+  return <Link href={`/wallet/${encodeURIComponent(no)}`} className={className}>{children}</Link>;
+}
+
 const DIRECT_STEPS = ['ได้รับข้อเสนอ', 'โอน + สลิป', 'คนส่งเช็ค', 'ร้านโอนสิทธิ์'];
 const FREE_STEPS = ['ได้รับข้อเสนอ', 'กดรับ', 'คนส่งยืนยัน', 'ร้านโอนสิทธิ์'];
 
@@ -54,6 +60,7 @@ export function MarketDeal({ id, mode = 'live', onBack }: { id: string; mode?: '
   const st = tr ? effectiveStatus(tr, new Date(serverNow())) : row?.status;
   const productId = tr?.product_id ?? row?.product_id;
   const variantId = (tr?.variant_id ?? row?.variant_id) || undefined;
+  const store = useStore(); // ทดลองเล่น/โหมดจำลอง = store ในกรอบนั้น
   const reload = async () => { await store.reload(); await refresh(); };
 
   if (!productId) {
@@ -152,7 +159,7 @@ function PublicPanel({ id, row, price, due, total, shopPrice, now, flash, reload
       ) : (
         <SlideToConfirm label={`ปัดเพื่อจองใบนี้ · ${MARKET.holdMin} นาที`} doneLabel="กำลังจอง…" onConfirm={reserve} />
       )}
-      {preview && <div className="text-center text-[11px] text-ink-faint">โหมดพรีวิวของแอดมิน — ปัดได้จริงถ้าใช้บัญชีที่ไม่ใช่คนลงขาย</div>}
+      {preview && !marketSandbox() && <div className="text-center text-[11px] text-ink-faint">โหมดพรีวิวของแอดมิน — ปัดได้จริงถ้าใช้บัญชีที่ไม่ใช่คนลงขาย</div>}
     </div>
   );
 }
@@ -350,7 +357,7 @@ function BuyerTrack({ db, uid, tr, st, price, due, now, flash, reload, lineOa }:
         <div className="w-full rounded-2xl border border-subtle bg-surface-2 p-3.5 text-left text-[12.5px] text-ink-muted2">
           ต่อจากนี้เหมือนใบพรีปกติ: ของถึงไทย → จ่ายส่วนต่าง {baht(due)} → เลือกวิธีรับของ
         </div>
-        {tr.new_ticket_no && <Link href={`/wallet/${encodeURIComponent(tr.new_ticket_no)}`} className="w-full rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta">ดูใบพรี</Link>}
+        {tr.new_ticket_no && <WalletLink no={tr.new_ticket_no} className="w-full rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta">ดูใบพรี</WalletLink>}
       </div>
     );
   }
@@ -552,7 +559,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
             <span className="rounded-md bg-[#fbbf24]/10 px-2 py-0.5 font-mono text-[10.5px] font-bold text-[#fbbf24]">{Number.isFinite(slaLeft) && slaLeft > 0 ? `ตอบภายใน ${Math.ceil(slaLeft / 3_600_000)} ชม.` : 'เกินเวลา — ร้านตรวจสอบอยู่'}</span>
           </div>
           <div className="mt-2.5 flex items-center gap-3">
-            {tr.slip_url && /^https?:\/\//i.test(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" /></a>}
+            {slipSrc(tr.slip_url) && <a href={tr.slip_url} target="_blank" rel="noreferrer"><img src={tr.slip_url} alt="สลิป" className="h-24 w-[68px] rounded-lg bg-white object-cover" /></a>}
             <div><div className="text-[11px] text-ink-faint">ยอดที่ต้องเข้าบัญชีคุณ</div><div className="font-mono text-[24px] font-bold">{baht(price)}</div><div className="text-[11px] text-ink-faint">{fmt(tr.paid_at)}</div></div>
           </div>
           {myPayout?.ok && !myPayout.none && (
@@ -606,7 +613,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-2xl border border-subtle bg-surface-2 px-4 py-3.5 text-[13px] text-ink-muted2">{msg[st] ?? dealStatusLabel(tr, st as TicketTransfer['status'])}</div>
-      {back && <Link href={`/wallet/${encodeURIComponent(back.ticket_no)}`} className="rounded-btn border border-accent px-5 py-3 text-center text-[13.5px] font-bold text-primary-soft">ตอนนี้ใบนี้กลับมาอยู่กับคุณแล้ว · ดูใบ {back.ticket_no}</Link>}
+      {back && <WalletLink no={back.ticket_no} className="rounded-btn border border-accent px-5 py-3 text-center text-[13.5px] font-bold text-primary-soft">ตอนนี้ใบนี้กลับมาอยู่กับคุณแล้ว · ดูใบ {back.ticket_no}</WalletLink>}
       {/* ผู้รับโอนแล้วแต่ดีลปิด/ร้านยกเลิก (v75) — คนส่งต้องรู้ว่ามีเงินเข้าบัญชีตัวเอง และต้องคืน (R3-28) */}
       {moneyIn && (
         <div className="rounded-2xl border border-[#fbbf24]/40 bg-[#fbbf24]/[0.08] px-4 py-3 text-[12.5px] leading-relaxed text-[#fbbf24]">
@@ -615,7 +622,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
         </div>
       )}
       {(st === 'expired' || st === 'cancelled') && ticketNo && (
-        <Link href={`/wallet/${encodeURIComponent(ticketNo)}`} className="rounded-btn border border-accent px-5 py-3 text-center text-[14px] font-bold text-primary-soft">{moneyIn ? `ดูใบพรี ${ticketNo}` : `ไปที่ใบพรี ${ticketNo}`}</Link>
+        <WalletLink no={ticketNo} className="rounded-btn border border-accent px-5 py-3 text-center text-[14px] font-bold text-primary-soft">{moneyIn ? `ดูใบพรี ${ticketNo}` : `ไปที่ใบพรี ${ticketNo}`}</WalletLink>
       )}
     </div>
   );

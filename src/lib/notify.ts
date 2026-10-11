@@ -1,5 +1,6 @@
 import { supabase } from '@/data/supabaseClient';
 import { simActive } from './sim';
+import { marketSandbox } from './marketSandbox';
 
 /**
  * Fire-and-forget shop-owner notifications (LINE). Never blocks or breaks the calling
@@ -12,6 +13,8 @@ import { simActive } from './sim';
  */
 export function notifyAdminLine(message: string): void {
   if (simActive()) return; // โหมดจำลองดูเป็นลูกค้า — ห้ามส่ง LINE จริง
+  const sandbox = marketSandbox();
+  if (sandbox) { sandbox.line(message); return; } // ทดลองเล่นตลาด — จดลงบันทึก ไม่ส่งจริง
   try {
     void (async () => {
       const token = supabase
