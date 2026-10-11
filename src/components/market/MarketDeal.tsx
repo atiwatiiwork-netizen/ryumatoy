@@ -232,7 +232,7 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
         </div>
       </div>
       <DealSteps at={1} labels={free ? FREE_STEPS : DIRECT_STEPS} />
-      <MoneySplit price={price} due={due} paid={tr.snap?.paid} total={tr.snap?.total} seller="คนส่ง" />
+      <MoneySplit price={price} due={due} paid={tr.snap?.paid} total={tr.snap?.total} />
       <div className="flex gap-2 rounded-xl bg-[#16a34a]/[0.08] px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-muted2">
         <Icon name="verified" size={16} className="mt-px shrink-0 text-[#4ade80]" />
         <span>{free ? 'ไม่มีเงินโอน — ' : 'โอนเงินตรงให้คนส่ง · '}ร้านโอนสิทธิ์ให้คุณหลังคนส่งยืนยันเท่านั้น · ส่วนต่างที่ค้าง {baht(due)} จ่ายร้านตอนของถึงไทย (ใช้แต้ม/คูปองได้ตามปกติ) · ได้ใบมาแล้วต้องถือ {MARKET.resellDays} วันก่อนเปลี่ยนต่อ</span>
@@ -496,7 +496,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   if (direct && st === 'reserved') {
     return (
       <div className="flex flex-col gap-3">
-        <MoneySplit price={price} due={due} paid={tr.snap?.paid} seller="คุณ" />
+        <MoneySplit price={price} due={due} paid={tr.snap?.paid} />
         <div className="flex items-center gap-3 rounded-2xl border border-[#f1d27a]/35 bg-[#f1d27a]/[0.08] px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-muted2">
           <HoldRing msLeft={holdLeft} total={MARKET.offerHours * 3_600_000} size={40} stroke={4}><span className="text-[9px]">{ringLabel(holdLeft)}</span></HoldRing>
           <div>
@@ -520,7 +520,7 @@ function SellerPanel({ db, uid, tr, st, price, due, now, flash, reload, ticketNo
   if (st === 'listed' || st === 'reserved') {
     return (
       <div className="flex flex-col gap-3">
-        <MoneySplit price={price} due={due} paid={tr.snap?.paid} seller="คุณ" />
+        <MoneySplit price={price} due={due} paid={tr.snap?.paid} />
         <div className="rounded-2xl border border-subtle bg-surface-2 px-4 py-3 text-[12.5px] leading-relaxed text-ink-muted2">
           <b className="text-ink">ลงขายอยู่</b>{daysLeft != null ? ` · เหลือ ${daysLeft} วันก่อนหมดอายุ` : ''}<br />
           ใบนี้ถูกล็อก 🔒 จ่ายส่วนต่าง/เลือกวิธีรับของไม่ได้จนกว่าจะขายหรือถอนประกาศ

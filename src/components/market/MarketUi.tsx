@@ -156,36 +156,39 @@ export function MarketCard({ db, row, hot, onOpen, now }: { db: Database; row: M
 }
 
 // ── แยกเงิน (ข้อบังคับของตลาด: ผู้ซื้อต้องเห็นเสมอ) ─────────────────────────────────
-// เจ้าของ 2026-10-11 (รูป 1): ให้อ่านเป็น "ราคามัดจำ → ราคาที่ตั้ง (+/− จากมัดจำ) → ยอดเหลือที่ต้องจ่าย"
-//   paid = ที่คนขายจ่ายร้านไปแล้ว (มัดจำ + ส่วนต่างที่จ่ายแล้ว ถ้ามี) — ไม่ส่ง paid = ไม่โชว์แถวมัดจำ (แบบเดิม)
-export function MoneySplit({ price, due, paid, total, shopPrice, seller = 'คนขาย' }: { price: number; due: number; paid?: number; total?: number; shopPrice?: number; seller?: string }) {
+// เจ้าของ 2026-10-12: สั้นๆ 3 บรรทัด "ราคาที่ขาย → ราคามัดจำ (+/− ส่วนต่าง) → ยอดที่เหลือตอนของมา"
+//   paid = ที่คนขายจ่ายร้านไปแล้ว (มัดจำ + ส่วนต่างที่จ่ายแล้ว ถ้ามี) — ไม่ส่ง paid = ไม่โชว์แถวมัดจำ
+export function MoneySplit({ price, due, paid, total, shopPrice }: { price: number; due: number; paid?: number; total?: number; shopPrice?: number }) {
   const all = price + due;
   const diff = paid != null ? price - paid : 0;
+  const row = 'mt-1.5 flex items-center justify-between gap-2 text-[13px]';
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
       <div className="flex h-3 gap-0.5 overflow-hidden rounded-full">
         <i className="block h-full origin-left bg-gradient-to-r from-[#dc2626] to-[#f0a8a8] motion-safe:animate-riseIn" style={{ flex: Math.max(price, 1) }} />
         <i className="block h-full bg-[#2563eb]" style={{ flex: Math.max(due, 1) }} />
       </div>
-      {paid != null && (
-        <div className="mt-2.5 flex justify-between text-[12.5px]"><span className="flex items-center gap-1.5 text-ink-faint"><i className="h-2 w-2 rounded-full border border-white/30" />ราคามัดจำ · {seller}จ่ายร้านแล้ว</span><span className="font-mono tabular-nums text-ink-muted2">{baht(paid)}</span></div>
-      )}
-      <div className={cx(paid != null ? 'mt-1.5' : 'mt-2.5', 'flex items-start justify-between gap-2 text-[12.5px]')}>
-        <span className="flex items-center gap-1.5 text-ink-muted2"><i className="h-2 w-2 shrink-0 rounded-full bg-[#f0a8a8]" />ราคาที่ตั้ง · โอนให้{seller}ตอนนี้</span>
-        <span className="text-right">
-          <b className="font-mono tabular-nums">{baht(price)}</b>
-          {paid != null && (
-            <span className={cx('block font-mono text-[10.5px] font-bold', diff > 0 ? 'text-primary-soft' : diff < 0 ? 'text-[#4ade80]' : 'text-ink-faint')}>
-              {diff > 0 ? `+${baht(diff)} จากมัดจำ` : diff < 0 ? `−${baht(-diff)} จากมัดจำ` : 'เท่ามัดจำ'}
-            </span>
-          )}
-        </span>
+      <div className={cx(row, 'mt-2.5')}>
+        <span className="flex items-center gap-1.5 text-ink-muted2"><i className="h-2 w-2 shrink-0 rounded-full bg-[#f0a8a8]" />ราคาที่ขาย</span>
+        <b className="font-mono tabular-nums">{baht(price)}</b>
       </div>
-      <div className="mt-1.5 flex justify-between text-[12.5px]"><span className="flex items-center gap-1.5 text-ink-muted2"><i className="h-2 w-2 rounded-full bg-[#2563eb]" />ยอดเงินเหลือที่ต้องจ่าย · จ่ายร้านตอนของถึงไทย</span><b className="font-mono tabular-nums">{due > 0 ? baht(due) : 'จ่ายครบแล้ว'}</b></div>
-      <div className="mt-2 flex justify-between border-t border-dashed border-white/10 pt-2 text-[13px]"><span>รวมที่ต้องจ่ายทั้งหมด</span><b className="font-mono text-[15px] tabular-nums">{baht(all)}</b></div>
+      {paid != null && (
+        <div className={row}>
+          <span className="flex items-center gap-1.5 text-ink-faint">
+            <i className="h-2 w-2 shrink-0 rounded-full border border-white/30" />ราคามัดจำ
+            {diff !== 0 && <b className={cx('font-mono text-[11.5px]', diff > 0 ? 'text-primary-soft' : 'text-[#4ade80]')}>({diff > 0 ? '+' : '−'}{baht(Math.abs(diff))})</b>}
+          </span>
+          <span className="font-mono tabular-nums text-ink-muted2">{baht(paid)}</span>
+        </div>
+      )}
+      <div className={row}>
+        <span className="flex items-center gap-1.5 text-ink-muted2"><i className="h-2 w-2 shrink-0 rounded-full bg-[#2563eb]" />ยอดที่เหลือตอนของมา</span>
+        <b className="font-mono tabular-nums">{due > 0 ? baht(due) : 'จ่ายครบแล้ว'}</b>
+      </div>
+      <div className="mt-2 flex justify-between border-t border-dashed border-white/10 pt-2 text-[13px]"><span>รวมทั้งหมด</span><b className="font-mono text-[15px] tabular-nums">{baht(all)}</b></div>
       {shopPrice != null && total != null && shopPrice > 0 && (
-        <div className="mt-1.5 text-[11.5px] text-ink-faint">
-          ราคาร้าน {baht(shopPrice)} — ใบนี้{all > shopPrice ? <> แพงกว่าร้าน <b className="font-mono text-primary-soft">+{baht(all - shopPrice)}</b></> : all < shopPrice ? <> ถูกกว่าร้าน <b className="font-mono text-[#4ade80]">−{baht(shopPrice - all)}</b></> : ' เท่าราคาร้าน'}
+        <div className="mt-1 text-[11.5px] text-ink-faint">
+          ราคาร้าน {baht(shopPrice)} · {all > shopPrice ? <>แพงกว่า <b className="font-mono text-primary-soft">+{baht(all - shopPrice)}</b></> : all < shopPrice ? <>ถูกกว่า <b className="font-mono text-[#4ade80]">−{baht(shopPrice - all)}</b></> : 'เท่าราคาร้าน'}
         </div>
       )}
     </div>

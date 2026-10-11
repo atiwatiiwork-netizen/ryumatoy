@@ -279,7 +279,7 @@ export function SellSheet({ ticket, mode = 'market', onClose, onListed }: { tick
 
             {/* ⑤ ผู้รับจะเห็นแบบนี้ */}
             <div className="text-[12px] font-semibold text-ink-muted">{direct ? 'ผู้รับจะเห็นแบบนี้' : 'ผู้ซื้อจะเห็นแบบนี้'}</div>
-            <MoneySplit price={price} due={pv.due} paid={pv.paid} seller={direct ? 'คนส่ง' : 'คนขาย'} />
+            <MoneySplit price={price} due={pv.due} paid={pv.paid} />
 
             {direct && (
               // เลขกระเป๋าผู้รับ → ค้น → ยืนยัน "ใช่คนนี้ไหม" (เจ้าของ: ไม่ต้องสนชื่อ ขอแค่ยอด+ใบตรง — ชื่อโชว์แค่กันส่งผิดคน)
