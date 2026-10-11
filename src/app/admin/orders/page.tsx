@@ -12,7 +12,7 @@ import { Icon } from '@/components/Icon';
 import { computeEta, etaRangeLabel, etaDaysLabel } from '@/domain/services/shipping';
 import { approveRemainingPayment, rejectRemainingPayment, logActivity, rpOverDue } from '@/data/mutations';
 import { deliveryRequests, handoffQueue, parcelQueue, awaitingChoice } from '@/domain/services/delivery';
-import { lineImage } from '@/domain/services/catalog';
+import { lineImage, productLabel } from '@/domain/services/catalog';
 import { ticketSourceOf } from '@/domain/services/ticketSource';
 import { ticketRoot, ticketPayer } from '@/domain/services/tickets';
 import { cx } from '@/components/ui';
@@ -162,7 +162,7 @@ export default function OrdersHubPage() {
         {rpGroups.length === 0 ? <Empty text="ไม่มีส่วนต่างค้างตรวจ" /> : (
           <div className="flex flex-col gap-2.5">
             {rpGroups.map((g) => (
-              <RpGroupCard key={g.key} g={g} busy={rpBusy !== null} userName={userName} ticketOf={ticketOf} nameOf={(t) => productOf(t)?.series_name ?? '(สินค้าถูกลบ)'}
+              <RpGroupCard key={g.key} g={g} busy={rpBusy !== null} userName={userName} ticketOf={ticketOf}
                 onApprove={() => approveRps(g.rps)} onRejectAll={() => rejectRps(g.rps)} onRejectOne={(r) => rejectRps([r])} />
             ))}
           </div>
@@ -307,20 +307,37 @@ function Empty({ text }: { text: string }) {
   return <div className="py-3 text-[13px] text-ink-faint">{text}</div>;
 }
 
+/** รูปสินค้าเล็กในการ์ดสลิปส่วนต่าง — คนละรูปกับสลิป (เจ้าของ 2026-10-11: "ส่วนต่าง บอกชื่อรายการด้วย พร้อมรูป") */
+function RpThumb({ src, size }: { src?: string; size: number }) {
+  return (
+    <div className="shrink-0 overflow-hidden rounded-lg border border-subtle bg-stripe" style={{ width: size, height: size }}>
+      {src
+        ? <img src={src} alt="" className="h-full w-full object-cover" />
+        : <div className="grid h-full w-full place-items-center"><Icon name="box" size={Math.round(size * 0.42)} className="text-primary-soft/25" /></div>}
+    </div>
+  );
+}
+
+/** ชื่อรายการบนตั๋ว = สินค้า · แบบ (A/B) - ค่าย ×จำนวน · สินค้าถูกลบ → บอกตรงๆ */
+const ticketLine = (db: ReturnType<typeof useDatabase>, tk: PreorderTicket | undefined, fallbackId: string) =>
+  tk ? `${productLabel(db, tk.product_id, tk.variant_id) || '(สินค้าถูกลบ)'}${tk.qty > 1 ? ` ×${tk.qty}` : ''}` : `(ไม่พบตั๋ว ${fallbackId})`;
+
 /** การ์ดสลิปส่วนต่าง 1 กลุ่ม (1 สลิป = 1..n ใบ) — ระดับบนสุดตาม DNA react-state */
-function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectAll, onRejectOne }: {
+function RpGroupCard({ g, busy, userName, ticketOf, onApprove, onRejectAll, onRejectOne }: {
   g: RpGroup; busy: boolean;
-  userName: (uid: string) => string; ticketOf: (tid: string) => PreorderTicket | undefined; nameOf: (t: PreorderTicket) => string;
+  userName: (uid: string) => string; ticketOf: (tid: string) => PreorderTicket | undefined;
   onApprove: () => void; onRejectAll: () => void; onRejectOne: (r: RemainingPayment) => void;
 }) {
   const db = useDatabase(); // ตรวจว่าแต้มในสลิปถูก DB จองจริง (heldPointsFor)
   const multi = g.rps.length > 1;
+  const first = ticketOf(g.rps[0].ticket_id); // สลิปใบเดียว: รูป+ชื่อสินค้าของตั๋วใบนั้น (สลิปรวมดูรายใบข้างล่าง)
   return (
     <div className={cx('rounded-xl border bg-surface-3 p-3', multi ? 'border-[#d4af37]/40' : 'border-subtle')}>
       <div className="flex items-center gap-3">
         {g.slipUrl && /^https?:|^data:/.test(g.slipUrl)
           ? <a href={g.slipUrl} target="_blank" rel="noreferrer"><img src={g.slipUrl} alt="สลิป" className="h-12 w-12 rounded-lg object-cover" /></a>
           : <div className="grid h-12 w-12 place-items-center rounded-lg bg-stripe"><Icon name="copy" size={16} className="text-ink-faint" /></div>}
+        {!multi && <RpThumb src={first ? lineImage(db, first.product_id, first.variant_id) : undefined} size={48} />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 text-sm font-semibold">
             <span>{userName(g.userId)}</span>
@@ -335,7 +352,12 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
             {/* ตลาดใบพรี ข้อ 9: เติมมัดจำให้ครบก่อนลงขาย — อนุมัติตามปกติ (เข้า remaining_paid หักจากส่วนต่าง) */}
             {g.rps.some((r) => r.purpose === 'topup') && <span className="rounded-md bg-[#8b5cf6]/[0.18] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#c4b5fd]">เติมมัดจำ · เพื่อลงขายตลาด</span>}
           </div>
-          {!multi && <div className="font-mono text-[11px] text-ink-faint">{ticketOf(g.rps[0].ticket_id)?.ticket_no ?? g.rps[0].ticket_id}</div>}
+          {!multi && (
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="truncate text-[13px] font-semibold">{ticketLine(db, first, g.rps[0].ticket_id)}</span>
+              <span className="shrink-0 font-mono text-[11px] text-ink-faint">{first?.ticket_no ?? g.rps[0].ticket_id}</span>
+            </div>
+          )}
         </div>
         <button disabled={busy} onClick={onApprove} className="rounded-[9px] bg-success px-3.5 py-2 text-[13px] font-bold text-white disabled:opacity-50">{multi ? `Approve ${g.rps.length} ใบ` : 'Approve'}</button>
         <button disabled={busy} onClick={onRejectAll} className="rounded-[9px] border border-[#f87171]/40 px-2.5 py-2 text-[13px] font-bold text-[#f87171] disabled:opacity-50">ปฏิเสธ</button>
@@ -346,8 +368,9 @@ function RpGroupCard({ g, busy, userName, ticketOf, nameOf, onApprove, onRejectA
             const tk = ticketOf(r.ticket_id);
             return (
               <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[12.5px]">
+                <RpThumb src={tk ? lineImage(db, tk.product_id, tk.variant_id) : undefined} size={28} />
                 <span className="w-[130px] shrink-0 font-mono text-[11px] text-ink-faint">{tk?.ticket_no ?? r.ticket_id}</span>
-                <span className="min-w-0 flex-1 truncate">{tk ? nameOf(tk) : ''}</span>
+                <span className="min-w-0 flex-1 truncate font-semibold">{ticketLine(db, tk, r.ticket_id)}</span>
                 <span className="tabular-nums">{baht(r.amount)}{r.coupon_discount ? <span className="text-[#4ade80]"> (คูปอง −{baht(r.coupon_discount)})</span> : null}{(r.points_redeemed ?? 0) > 0 ? <span className="font-bold text-[#f1d27a]"> (⭐ แต้ม −{baht(r.points_redeemed ?? 0)}{heldPointsFor(db, r.id, r.points_redeemed) === 0 && <span className="text-[#f87171]"> ⚠ ยังไม่ถูกจอง — อนุมัติไม่ได้ (รีเฟรช ถ้ายังขึ้นให้ปฏิเสธ)</span>})</span> : null}</span>
                 <button disabled={busy} onClick={() => onRejectOne(r)} title="ปฏิเสธเฉพาะใบนี้" className="grid h-6 w-6 place-items-center rounded-md border border-[#f87171]/40 text-[#f87171] disabled:opacity-40">×</button>
               </div>
