@@ -184,6 +184,7 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
   const [payout, setPayout] = useState<mk.MarketRes | null>(null);
   const [slip, setSlip] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const bell = useBellOk();
   const free = price <= 0;
   useEffect(() => { if (!free) void mk.marketPayout(tr.id).then(setPayout); }, [tr.id, free]);
   void now;
@@ -194,7 +195,7 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
     try { setSlip(await uploadImage(file, 'mkslip')); } catch { flash('อัปโหลดสลิปไม่สำเร็จ ลองใหม่อีกครั้ง'); } finally { setBusy(false); }
   };
   const accept = async () => {
-    if (busy || (!free && !slip)) return;
+    if (busy || !bell || (!free && !slip)) return;
     // ยกให้ฟรีกดครั้งเดียวก็ผูกมัดหนี้ส่วนต่าง — ถามก่อน (audit รอบ E R1-54)
     if (free && !window.confirm(`รับใบพรีนี้?\nคุณจะเป็นคนจ่ายส่วนต่างที่ค้าง ${baht(due)} ให้ร้านตอนของถึงไทย · กดรับแล้วยกเลิกเองไม่ได้`)) return;
     setBusy(true);
@@ -236,19 +237,21 @@ function OfferPanel({ db, tr, price, due, serverNow, now, flash, reload, lineOa 
         <Icon name="verified" size={16} className="mt-px shrink-0 text-[#4ade80]" />
         <span>{free ? 'ไม่มีเงินโอน — ' : 'โอนเงินตรงให้คนส่ง · '}ร้านโอนสิทธิ์ให้คุณหลังคนส่งยืนยันเท่านั้น · ส่วนต่างที่ค้าง {baht(due)} จ่ายร้านตอนของถึงไทย (ใช้แต้ม/คูปองได้ตามปกติ) · ได้ใบมาแล้วต้องถือ {MARKET.resellDays} วันก่อนเปลี่ยนต่อ</span>
       </div>
-      {!free && (payout?.ok ? (
+      {/* v84: ผู้รับต้องเปิดกระดิ่งก่อนเห็นบัญชี/โอน — กันโอนไปก่อนแล้วพลาดแจ้งเตือนคนส่ง (ด่านฝั่งคนส่งอยู่ที่ SQL block_reason) */}
+      <BellGate action={free ? 'รับใบพรี' : 'โอนเงิน'} />
+      {bell && !free && (payout?.ok ? (
         <PromptPayCard amount={price} promptpay={payout.promptpay} accountNo={payout.account_no} bank={payout.bank} accountName={payout.account_name} flash={flash} />
       ) : (
         <div className="rounded-2xl border border-subtle bg-surface-2 p-5 text-center text-[12.5px] text-ink-muted2">{payout ? mk.marketErrText(payout) : 'กำลังโหลดบัญชีคนส่ง…'}</div>
       ))}
-      {!free && (
+      {bell && !free && (
         <label className={cx('flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] border-dashed px-4 py-3.5', slip ? 'border-[#16a34a]/50 bg-[#16a34a]/[0.07]' : 'border-accent')}>
           <input type="file" accept="image/*" className="hidden" onChange={(e) => void onSlip(e.target.files?.[0])} />
           {slip ? <img src={slip} alt="สลิป" className="h-16 w-12 shrink-0 rounded-md object-cover" /> : <Icon name="camera" size={22} className="text-primary-soft" />}
           <span className={cx('text-[13px] font-bold', slip ? 'text-[#4ade80]' : 'text-primary-soft')}>{busy && !slip ? 'กำลังอัปโหลด…' : slip ? 'แนบสลิปแล้ว ✓ · แตะเพื่อเปลี่ยน' : 'แตะแนบรูปสลิปการโอน'}</span>
         </label>
       )}
-      <button type="button" disabled={busy || (!free && !slip)} onClick={() => void accept()}
+      <button type="button" disabled={busy || !bell || (!free && !slip)} onClick={() => void accept()}
         className="rounded-btn bg-cta px-5 py-3.5 text-[15px] font-bold text-white shadow-cta disabled:opacity-50">{busy && (free || slip) ? 'กำลังส่ง…' : free ? '✓ รับใบพรีนี้' : 'ส่งสลิป · แจ้งคนส่ง + ร้าน'}</button>
       <button type="button" disabled={busy} onClick={() => void decline()} className="text-[12px] text-ink-faint underline">ไม่รับข้อเสนอ{free ? '' : ' (ยังไม่ได้โอน)'}</button>
       {lineOa && <a href={`https://line.me/R/ti/p/${encodeURIComponent(lineOa)}`} target="_blank" rel="noreferrer" className="text-center text-[12px] text-ink-faint underline">ติดปัญหา? ติดต่อร้าน (LINE {lineOa})</a>}

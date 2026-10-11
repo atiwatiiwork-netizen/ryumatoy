@@ -327,6 +327,17 @@ async function boot() {
   const cf = await call(db, 'S4', 'ryuma_market_seller_confirm', [ls4.id]);
   const fin4 = await call(db, 'X', 'ryuma_market_finalize', [ls4.id, null]);
   ok('M6 เคลียร์กันได้ → คนขายกดยืนยันจากหน้าตรวจสอบ → ร้านโอนสิทธิ์ได้ตามปกติ', !!cf.ok && !!fin4.ok && (await ticket(db, 't-s4a'))?.owner_id === 'uB4', { cf, fin4 });
+  // ปุ่ม "ผู้ซื้อไม่ตอบ — ส่งเรื่องให้ร้านตรวจ" ของคนขายตอนมีธง = seller_reject เดิม → ต้องยังใช้ได้
+  const ln = await call(db, 'N', 'ryuma_market_list', ['t-n1', 1, 1500]);
+  await call(db, 'B4', 'ryuma_market_reserve', [ln.id]);
+  await call(db, 'B4', 'ryuma_market_pay', [ln.id, SLIP]);
+  const fl3 = await call(db, 'N', 'ryuma_market_seller_flag', [ln.id, 'not_arrived', null, null]);
+  const sr = await call(db, 'N', 'ryuma_market_seller_reject', [ln.id, 'แจ้งผู้ซื้อแล้ว: สลิปถูก แต่เงินไม่เข้า · ยังไม่ได้ข้อสรุป', null]);
+  const d4 = await deal(db, ln.id);
+  const prv = await call(db, 'N', 'ryuma_market_push_targets', [ln.id, 'reviewing']);
+  ok('M7 มีธงแล้วผู้ซื้อเงียบ → คนขายส่งเรื่องให้ร้านเองได้ (ตรวจสอบ · ไม่ได้รับเงิน) · push ถึงผู้ซื้อ+แอดมิน',
+    !!ln.ok && !!fl3.ok && !!sr.ok && d4?.status === 'reviewing' && d4?.review_reason === 'not_received'
+    && JSON.stringify(prv.targets ?? []).includes('push.test/uB4') && JSON.stringify(prv.targets ?? []).includes('push.test/uX'), { ln, fl3, sr, st: d4?.status, prv });
 
   // ── L. v83 รันซ้ำได้ + เติมจำนวนชิ้นให้แถวเก่าที่ว่าง (จำลองข้อมูลจริงก่อนรัน) ─────────────
   await db.exec(`alter table preorder_tickets alter column qty drop not null`);
