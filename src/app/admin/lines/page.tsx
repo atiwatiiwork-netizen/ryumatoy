@@ -401,7 +401,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
         <Link href={`/line/${line.id}`} target="_blank" className="text-[12.5px] font-semibold text-primary-soft">เปิดหน้าจริง (แท็บใหม่) →</Link>
         <div className="flex-1" />
         <button onClick={() => void toggleActive()} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', line.active ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-[#fbbf24]')}>
-          {line.active ? '✓ แสดงให้ลูกค้า' : 'ร่าง — กดเพื่อแสดง'}
+          {line.active ? '✓ ลูกค้าเห็นไลน์นี้แล้ว' : '🔒 ร่าง — กดเปิดไลน์นี้ให้ลูกค้า'}
         </button>
         {line.active && <button onClick={notifyUpdate} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold" title="ส่ง push ว่าไลน์นี้มีอัปเดต ให้ทุกคนที่เปิดกระดิ่ง">📣 แจ้งลูกค้า</button>}
         <button onClick={deleteLine} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold text-[#f87171]">ลบไลน์</button>

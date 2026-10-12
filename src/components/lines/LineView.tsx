@@ -47,7 +47,7 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
   const adminLive = mode === 'live' && isAdminUser(db, userId);
   // เหตุผลที่ลูกค้ายังไม่เห็น — ลำดับเดียวกับ lineOpenToCustomers (สวิตช์ · ร่าง · รูปหมู่ · ตัวที่เห็นได้)
   const blockedWhy = !linesPublicEnabled(db) ? 'สวิตช์ "ลูกค้าเห็นไลน์" ปิดอยู่'
-    : !line.active ? 'ไลน์นี้ยังเป็นร่าง'
+    : !line.active ? 'ไลน์นี้ยังเป็นร่าง — สวิตช์ใหญ่เปิดแล้ว แต่ต้องกดปุ่ม "ร่าง — กดเปิดไลน์นี้ให้ลูกค้า" ในหน้าแก้ไลน์นี้ด้วย'
       : !line.cover_url ? 'ยังไม่มีรูปหมู่'
         : shown.length === 0 ? 'ยังไม่มีตัวที่ลูกค้าเห็นได้' : null;
 
