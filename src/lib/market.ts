@@ -122,6 +122,28 @@ export const marketEscalate = (id: string, note?: string) => call('ryuma_market_
 export const marketFinalize = (id: string, orderItemId?: string) => call('ryuma_market_finalize', { p_id: id, p_order_item_id: orderItemId ?? null });
 export const marketAdminCancel = (id: string, reason: string) => call('ryuma_market_admin_cancel', { p_id: id, p_reason: reason });
 
+// ── v85 ตัวตรวจสภาพฐานข้อมูล ────────────────────────────────────────────────────────────
+export interface SchemaRow { step: number; version: string; item: string; ok: boolean }
+/** migration ตลาดลงครบไหม (ryuma_schema_check · แอดมินเท่านั้น) — ยิงฐานข้อมูลจริงเสมอ ไม่ผ่านโหมดทดลอง/จำลอง
+ *  (audit 2026-10-12: production ไม่มี v74 อยู่ 9 วันโดยหน้าแอดมินขึ้นว่าปกติ เพราะเช็คแค่ v71–v73)
+ *  คืน null = ไม่ได้ต่อฐานข้อมูล (พรีวิว) · error 'no_rpc' = ยังไม่ได้รัน v85 */
+export async function schemaCheck(): Promise<{ rows?: SchemaRow[]; error?: string } | null> {
+  if (!supabase) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const { data, error } = await Promise.race([
+      supabase.rpc('ryuma_schema_check'),
+      new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('schema check timed out')), RPC_TIMEOUT); }),
+    ]);
+    if (error) return { error: /does not exist|could not find/i.test(error.message ?? '') || error.code === 'PGRST202' ? 'no_rpc' : (error.message || 'error') };
+    return { rows: (data ?? []) as SchemaRow[] };
+  } catch (e) {
+    return { error: (e as Error)?.message ?? 'timeout' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ── v73 "เปลี่ยนใบพรี" (โอนตรงด้วยเลขกระเป๋า 4 หลักรายวัน) ─────────────────────────────
 export type WalletCodeRes = MarketRes & { code?: string; day?: string; resets_at?: string };
 export type WalletLookupRes = MarketRes & { user_id?: string; name?: string; avatar_url?: string | null; mask?: string };

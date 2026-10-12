@@ -39,15 +39,31 @@ export default function AdminMarketPage() {
   const [tab, setTab] = useState<Tab>('queue');
   const [probe, setProbe] = useState<'ok' | 'no_v72' | 'no_rpc' | 'no_server' | null>(null);
   const [probe73, setProbe73] = useState<'ok' | 'no_v73' | null>(null);
+  // ตัวตรวจ migration ตลาดทุกเวอร์ชัน (v85) — ไม่ครบ = ห้ามเปิดสวิตช์ (audit 2026-10-12: v74 หายจาก production 9 วันโดยไม่มีใครเห็น)
+  const [schema, setSchema] = useState<{ state: 'loading' | 'ok' | 'missing' | 'bad' | 'error' | 'preview'; bad: mk.SchemaRow[]; msg?: string }>({ state: 'loading', bad: [] });
   useEffect(() => {
     void mk.marketFeed().then((r) => setProbe(r.error === 'no_server' ? 'no_server' : mk.isMissingRpc(r) ? 'no_rpc' : r.ok && r.closed === undefined ? 'no_v72' : 'ok'));
     void mk.walletCode().then((r) => setProbe73(r.error === 'no_server' ? null : mk.isMissingRpc(r) ? 'no_v73' : 'ok'));
+    void mk.schemaCheck().then((r) => {
+      if (!r) return setSchema({ state: 'preview', bad: [] });
+      if (r.error) return setSchema({ state: r.error === 'no_rpc' ? 'missing' : 'error', bad: [], msg: r.error });
+      const rows = r.rows ?? [];
+      const bad = rows.filter((x) => !x.ok);
+      setSchema(rows.length === 0 ? { state: 'error', bad: [], msg: 'ไม่ได้ผลตรวจ — บัญชีนี้ไม่ใช่แอดมิน?' } : { state: bad.length ? 'bad' : 'ok', bad });
+    });
   }, []);
   const isPublic = marketPublicEnabled(db);
   const isDirectOn = directEnabled(db);
   const q = marketQueue(db);
+  /** เปิดสวิตช์ได้เมื่อฐานข้อมูลครบเท่านั้น (ปิดได้เสมอ) · พรีวิวที่ไม่ได้ต่อฐานข้อมูล = ไม่บล็อก */
+  const schemaBlock = schema.state === 'ok' || schema.state === 'preview' ? null
+    : schema.state === 'loading' ? 'กำลังตรวจฐานข้อมูล — รอสักครู่แล้วกดใหม่'
+    : schema.state === 'missing' ? 'ยังไม่ได้รัน migration_deploy_v85.sql — ตรวจไม่ได้ว่าฐานข้อมูลพร้อม'
+    : schema.state === 'bad' ? `ฐานข้อมูลยังไม่ครบ (${[...new Set(schema.bad.map((x) => x.version))].join(', ')}) — ห้ามเปิดจนกว่าจะรันครบ`
+    : `ตรวจฐานข้อมูลไม่สำเร็จ (${schema.msg ?? 'error'}) — รีเฟรชหน้าแล้วลองใหม่`;
 
   const toggle = async () => {
+    if (!isPublic && schemaBlock) { flash(`ยังเปิดกระดานไม่ได้ — ${schemaBlock}`); return; }
     if (!isPublic) {
       const ok = window.confirm('เปิดตลาดใบพรี (กระดาน) ให้ลูกค้าทุกคนเห็นเลยไหม?\n\n• แท็บ "ตลาด" ขึ้นที่เมนูล่างของทุกคน\n• ลูกค้าลงขาย/จองได้ทันที\n• มีคนลงขาย = push หาทุกคน (ยกเว้นคนที่ปิดค่าย/เรื่องนั้น)\n\nลองครบทุกขั้นกับบัญชีแอดมินแล้วค่อยเปิด');
       if (!ok) return;
@@ -57,8 +73,9 @@ export default function AdminMarketPage() {
     flash(isPublic ? 'ปิดกระดานจากฝั่งลูกค้าแล้ว' : 'เปิดกระดานให้ลูกค้าเห็นแล้ว 🎉');
   };
   const toggleDirect = async () => {
+    if (!isDirectOn && schemaBlock) { flash(`ยังเปิด "เปลี่ยนใบพรี" ไม่ได้ — ${schemaBlock}`); return; }
     if (!isDirectOn) {
-      const ok = window.confirm('เปิด "เปลี่ยนใบพรี" ให้ลูกค้าทุกคนเลยไหม?\n\n• ทุกคนเห็นเลขกระเป๋า 4 หลักที่หัวหน้ากระเป๋าพรี\n• ปุ่ม "เปลี่ยนใบพรี" ขึ้นในหน้าใบพรีทุกใบที่เข้าเกณฑ์\n• ส่งข้อเสนอ = push ถึงผู้รับทันที\n\nเช็คลิสต์ก่อนเปิด: แก้ RLS tickets_own + กติกาแต้ม (เฟส 2) แล้วหรือยัง?');
+      const ok = window.confirm('เปิด "เปลี่ยนใบพรี" ให้ลูกค้าทุกคนเลยไหม?\n\n• ทุกคนเห็นเลขกระเป๋า 4 หลักที่หัวหน้ากระเป๋าพรี\n• ปุ่ม "เปลี่ยนใบพรี" ขึ้นในหน้าใบพรีทุกใบที่เข้าเกณฑ์\n• ส่งข้อเสนอ = push ถึงผู้รับทันที\n\nเช็คลิสต์ก่อนเปิด: ซ้อมดีลจริงด้วยบัญชีแอดมิน 2 บัญชีครบทุกแบบ (ขาย/ยกให้/เติมมัดจำ) แล้วหรือยัง?');
       if (!ok) return;
     }
     dispatch(setMarketDirect(!isDirectOn));
@@ -92,6 +109,20 @@ export default function AdminMarketPage() {
         </div>
       </div>
 
+      {(schema.state === 'missing' || schema.state === 'bad' || schema.state === 'error') && (
+        <div className="rounded-xl border border-[#dc2626]/50 bg-[#dc2626]/[0.12] px-4 py-3 text-[12.5px] leading-relaxed text-[#fca5a5]">
+          <b>⛔ ห้ามเปิดสวิตช์ตลาด — {schemaBlock}</b>
+          {schema.state === 'bad' && (
+            <ul className="mt-1.5 list-disc pl-5">
+              {schema.bad.map((x) => <li key={x.step}><b>{x.version}</b> · {x.item}</li>)}
+            </ul>
+          )}
+          {schema.state === 'missing' && <div className="mt-1">รันไฟล์ <code>supabase/migration_deploy_v85.sql</code> ใน SQL Editor (ไฟล์เดียว · ห้ามรัน v74 ซ้ำ) แล้วรีเฟรชหน้านี้</div>}
+        </div>
+      )}
+      {schema.state === 'ok' && (
+        <div className="text-[11.5px] text-ink-faint">✓ ฐานข้อมูลตลาดครบทุกเวอร์ชัน (ตรวจด้วย ryuma_schema_check)</div>
+      )}
       {probe && probe !== 'ok' && (
         <div className="rounded-xl border border-[#d97706]/40 bg-[#d97706]/[0.12] px-4 py-3 text-[12.5px] leading-relaxed text-[#fbbf24]">
           {probe === 'no_rpc' && <><b>ยังไม่ได้รัน migration ตลาด (v71/v72)</b> — หน้าจอดูได้ แต่ลงขาย/จองจริงไม่ได้</>}
