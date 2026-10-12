@@ -2617,7 +2617,7 @@ export const setLinesPublic = (enabled: boolean) => (db: Database): Database => 
  *  · ไม่มี memberId / หาไม่เจอ → ต่อท้ายเป็นตัวใหม่ ชื่อ = ชื่อตัวละคร
  *  · ไลน์ยังไม่ระบุเรื่อง → ตั้งเป็นเรื่องของสินค้าตัวแรก (ตัวกรอง /lines + การปิดเสียงเรื่องของลูกค้าจะได้ตรงกับของจริง)
  *  · ไม่เจอไลน์ = ไม่ทำอะไรเลย (ไม่ปล่อยสินค้าเกิดลอยๆ นอกไลน์โดยที่หน้าจอคิดว่าเข้าไลน์แล้ว) */
-export const createProductsIntoLine = (lineId: string, entries: { product: Product; memberId?: string }[]) => (db: Database): Database => {
+export const createProductsIntoLine = (lineId: string, entries: { product: Product; memberId?: string; variants?: { name: string; price_total?: number; image_url?: string }[] }[]) => (db: Database): Database => {
   const line = db.productLines.find((l) => l.id === lineId);
   if (!line || entries.length === 0) return db;
   const seen = new Set(db.products.map((p) => p.id));
@@ -2633,7 +2633,11 @@ export const createProductsIntoLine = (lineId: string, entries: { product: Produ
       members = [...members, { id: id('lm'), name: e.product.character_name?.trim() || e.product.series_name, product_ids: [e.product.id] }];
     }
   }
-  const next: Database = { ...db, products: [...fresh.map((e) => e.product), ...db.products] };
+  // หลายแบบ (variants): ราคาต่อแบบ · มัดจำใช้ของสินค้าร่วมกัน (กติกาเดียวกับ bulkCreateProducts)
+  const newVariants = fresh.flatMap((e) => (e.variants ?? []).filter((v) => v.name.trim()).map((v) => ({
+    id: id('v'), product_id: e.product.id, name: v.name.trim(), price_total: v.price_total ?? e.product.price_total, deposit_amount: e.product.deposit_amount, image_url: v.image_url,
+  })));
+  const next: Database = { ...db, products: [...fresh.map((e) => e.product), ...db.products], variants: newVariants.length ? [...newVariants, ...db.variants] : db.variants };
   return upsertProductLine({ ...line, franchise_id: line.franchise_id || fresh[0].product.franchise_id, members })(next);
 };
 

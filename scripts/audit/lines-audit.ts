@@ -473,6 +473,12 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     ok('I13 หลายตัวในชุดเดียว: ลำดับตัวเดิมคงที่ (x,y) · ตัวใหม่ต่อท้าย · ผูกถูกตัว', ms.map((m) => `${m.id}:${m.product_ids.join('+')}`).join() === 'x:a3,y:a1' + `,${ms[2].id}:a2` && ms[2].name === 'C-a2', ms);
     const dark = setLinesPublic(true)(base({ productLines: [L([M('z', [])])] })); // ตัวเดียว ยังไม่ตั้งสถานะ = ลูกค้าไม่เห็นตัว → ไลน์ยังไม่นับว่าเปิด
     const lit = createProductsIntoLine('L1', [{ product: NP('b1'), memberId: 'z' }])(dark);
+    // หลายแบบ (variants) จากในไลน์ (เจ้าของ 2026-10-12): ราคาต่อแบบ · มัดจำของสินค้าใช้ทุกแบบ · แบบชื่อว่างถูกทิ้ง
+    const rv = createProductsIntoLine('L1', [{ product: NP('v1', { has_variants: true, price_total: 1500, deposit_amount: 300 }), variants: [{ name: 'แดง', price_total: 1500, image_url: 'r.jpg' }, { name: 'น้ำเงิน', price_total: 1700 }, { name: ' ', price_total: 1 }] }])(db);
+    const vs = rv.variants.filter((v) => v.product_id === 'v1');
+    ok('I15 variants: สร้าง 2 แบบ (ชื่อว่างทิ้ง) · ราคาต่อแบบ · มัดจำ = ของสินค้า · รูปแบบติดมา',
+      vs.length === 2 && vs.every((v) => v.deposit_amount === 300) && vs.map((v) => v.price_total).sort().join() === '1500,1700' && vs.find((v) => v.name === 'แดง')?.image_url === 'r.jpg' && rv.productLines[0].members.some((m) => m.product_ids.includes('v1')), vs);
+    ok('I16 ไม่มี variants → ตาราง variants ไม่ถูกแตะ (อ้างอิงเดิม)', r1.variants === db.variants);
     ok('I14 ไลน์ที่ยังไม่มีตัวที่มองเห็น → หลังลงสินค้า "เปิดให้ลูกค้า" ทันที (push ต้องตัดสินจากสภาพหลังเซฟ ไม่ใช่ตอนวาดหน้า)',
       !lineOpenToCustomers(dark, dark.productLines[0]) && lineOpenToCustomers(lit, lit.productLines[0]));
   }
