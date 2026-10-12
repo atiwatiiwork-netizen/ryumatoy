@@ -79,8 +79,15 @@ async function boardDeal(db: PGlite, ticketId: string) {
 }
 
 (async () => {
-  // ── A) chain เต็ม (repo: v74 อยู่แล้ว และ v85 รันทับ) ─────────────────────────────────────
-  const full = await bootDb('supabase');
+  // สภาพ "ตอนรัน v85" — ใช้เฉพาะไฟล์ถึง v85 (ไฟล์ใหม่กว่า เช่น v86 ทับตัวตรวจต่อ จึงไม่นำมาเทียบ)
+  const ver = (f: string) => (f === 'schema.sql' ? 0 : Number(/_v(\d+)/.exec(f)?.[1] ?? 9999));
+  const upTo = (n: number, skip: string[] = []) => {
+    const d = mkdtempSync(join(tmpdir(), 'ryuma-v85-'));
+    for (const f of readdirSync('supabase')) if (f.endsWith('.sql') && ver(f) <= n && !skip.includes(f)) copyFileSync(join('supabase', f), join(d, f));
+    return d;
+  };
+  // ── A) chain เต็มถึง v85 (v74 อยู่แล้ว และ v85 รันทับ) ──────────────────────────────────────
+  const full = await bootDb(upTo(85));
   ok('A1 chain เต็ม (รวม v85 ที่ทับ v74 ซ้ำ) บูตผ่าน 0 error', full.errors.length === 0, full.errors.slice(0, 3));
   const fullCat = await catalog(full.db);
   const chk = await q(full.db, `select * from ryuma_schema_check()`);
@@ -94,8 +101,7 @@ async function boardDeal(db: PGlite, ticketId: string) {
   ok('A5 คนไม่ล็อกอินเรียกไม่ได้ (permission denied)', /permission denied/.test(String(anon[0]?.THROWN ?? '')), anon);
 
   // ── B) จำลอง production: ทุกไฟล์ ยกเว้น v74 และ v85 ───────────────────────────────────────
-  const dir = mkdtempSync(join(tmpdir(), 'ryuma-v85-'));
-  for (const f of readdirSync('supabase')) if (f.endsWith('.sql') && f !== 'migration_roundA_v74.sql' && f !== 'migration_deploy_v85.sql') copyFileSync(join('supabase', f), join(dir, f));
+  const dir = upTo(84, ['migration_roundA_v74.sql']);
   const prod = await bootDb(dir);
   ok('B1 chain แบบ production (ไม่มี v74) บูตผ่าน 0 error', prod.errors.length === 0, prod.errors.slice(0, 3));
   await fixtures(prod.db);

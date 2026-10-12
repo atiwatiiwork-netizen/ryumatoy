@@ -181,7 +181,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: su, error: suErr } = await supabase.auth.signUp({ email, password: pin });
     if (suErr) return /already/i.test(suErr.message) ? { error: 'wrong_pin' } : { error: suErr.message };
-    if (su.user) await supabase.rpc('ryuma_link_auth', { p_user_id: lr.user_id, p_auth_id: su.user.id });
+    // v86: ผูกบัญชีต้องยืนยัน PIN อีกชั้นที่เซิร์ฟเวอร์ (กันคนอื่นยึดบัญชีที่ยังไม่เคยผูก · audit 2026-10-12 M39)
+    //   ฐานข้อมูลยังไม่ได้รัน v86 = ยังมีแค่รุ่น 2 ช่อง → ลองแบบเดิม (ช่วงรอเจ้าของรัน SQL)
+    if (su.user) {
+      const { error: lkErr } = await supabase.rpc('ryuma_link_auth', { p_user_id: lr.user_id, p_auth_id: su.user.id, p_pin: pin });
+      if (lkErr && (lkErr.code === 'PGRST202' || /could not find/i.test(lkErr.message ?? '')))
+        await supabase.rpc('ryuma_link_auth', { p_user_id: lr.user_id, p_auth_id: su.user.id });
+    }
     setAppUserId(lr.user_id); // we know the app id now — beat the adopt() race
     await store.reload();     // row is committed+linked now → make sure the store has it
     return { ok: true, user_id: lr.user_id };

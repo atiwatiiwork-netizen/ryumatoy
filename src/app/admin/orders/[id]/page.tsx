@@ -16,6 +16,9 @@ import { nextTicketNo, ticketPrefixCounts } from '@/domain/services/tickets';
 import { reserveTicketNos } from '@/lib/ticketno';
 import { store } from '@/data/store';
 import { orderPointsIssue } from '@/domain/services/points';
+import { livePrice } from '@/domain/services/pricing';
+import { lineDepositForRank } from '@/domain/services/ranks';
+import { persistFailText } from '@/data/persistErrors';
 
 export default function SlipApprovalPage() {
   const { id } = useParams<{ id: string }>();
@@ -47,9 +50,38 @@ export default function SlipApprovalPage() {
   const myHolds = db.stockReservations.filter((r) => (order.reservation_ids ?? []).includes(r.id));
   const holdsOk = myHolds.filter((r) => r.status === 'paid' || r.status === 'confirmed' || (r.status === 'active' && r.reserved_until && new Date(r.reserved_until) > new Date()));
   const holdLost = !approved && stockItems.length > 0 && holdsOk.length < stockItems.length;
+  // ── ราคา/มัดจำในออเดอร์ต่ำกว่าร้านตอนนี้ (audit 2026-10-12 M02): ออเดอร์ใหม่ฐานข้อมูลปฏิเสธเองแล้ว (v86)
+  //   แต่ออเดอร์ที่ค้างก่อน v86 / ร้านเพิ่งขึ้นราคา ต้องให้แอดมินเห็นก่อนกดอนุมัติ — สูตรเดียวกับ submitOrder
+  const rank = user?.rank ?? 'bronze';
+  const priceFlags = approved ? [] : order.items.flatMap((it) => {
+    if (it.qty <= 0) return [];
+    // ห้องประมูลที่ผู้ชนะจ่ายด้วยออเดอร์นี้ — เงื่อนไขเดียวกับด่านฐานข้อมูล (ลูกค้าเขียน pay_order_id ไม่ได้ จึงอาจยังว่าง)
+    const auc = it.qty === 1 ? db.auctions.find((a) => a.winner_user_id === order.user_id && a.product_id === it.product_id && !!a.winning_amount
+      && (a.status === 'ended' || a.status === 'awarded' || a.status === 'paid') && (!a.pay_order_id || a.pay_order_id === order.id)) : undefined;
+    const { price, deposit } = livePrice(db, { productId: it.product_id, variantId: it.variant_id, batchId: it.batch_id, auctionId: auc?.id });
+    const isStock = db.products.find((p) => p.id === it.product_id)?.is_stock ?? false;
+    const need = lineDepositForRank(db.settings, { deposit, price, isStock }, rank);
+    return (it.unit_price ?? 0) < price || (it.unit_deposit ?? 0) < need
+      ? [`${productLabel(db, it.product_id, it.variant_id)} — ในออเดอร์ ${baht(it.unit_price ?? 0)} (มัดจำ ${baht(it.unit_deposit ?? 0)}/ชิ้น) · ร้านตอนนี้ ${baht(price)} (มัดจำ ${baht(need)}/ชิ้น)`]
+      : [];
+  });
+  const isDiamond = rank === 'diamond' || rank === 'legend';
+  // ── ยอดออเดอร์ต้องตรงกับมัดจำของรายการ (สูตรเดียวกับด่านอนุมัติ v86 ryuma_orders_approve_check) ──
+  //   ต่ำกว่า = ลูกค้าแก้ตัวเลข/ราคาเปลี่ยนระหว่างสั่ง · สูงกว่า = รายการบันทึกไม่ครบ · ไม่มีรายการ = บันทึกไม่ครบ
+  //   เช็คก่อนกดอนุมัติ — ถ้าปล่อยให้ฐานข้อมูลปฏิเสธทีหลัง หน้าจอจะสร้างตั๋วไปแล้ว (เซฟไม่ขึ้น แต่สับสน)
+  const liveItems = order.items.filter((it) => it.qty > 0);
+  const preDep = order.items.reduce((s, it) => s + (db.products.find((p) => p.id === it.product_id)?.is_stock ? 0 : it.deposit_amount ?? 0), 0);
+  const stockDep = order.items.reduce((s, it) => s + (db.products.find((p) => p.id === it.product_id)?.is_stock ? it.deposit_amount ?? 0 : 0), 0);
+  const expectTotal = preDep + Math.max(0, stockDep - (order.coupon_discount ?? 0) - (order.points_redeemed ?? 0));
+  const totalProblem = approved ? null
+    : liveItems.length === 0 ? 'ออเดอร์นี้ไม่มีรายการสินค้า (บันทึกไม่ครบ) — อนุมัติไม่ได้ ให้ปฏิเสธแล้วให้ลูกค้าสั่งใหม่'
+    : (order.total_deposit ?? 0) + 1 < expectTotal ? `ยอดออเดอร์ ${baht(order.total_deposit ?? 0)} ต่ำกว่ามัดจำของรายการ ${baht(expectTotal)} (ราคาเปลี่ยนระหว่างสั่ง หรือออเดอร์ถูกแก้ตัวเลข) — อนุมัติไม่ได้`
+    : (order.total_deposit ?? 0) - 1 > expectTotal ? `ยอดออเดอร์ ${baht(order.total_deposit ?? 0)} มากกว่ามัดจำของรายการ ${baht(expectTotal)} (รายการบันทึกไม่ครบ) — อนุมัติไม่ได้`
+    : null;
 
   const approve = async () => {
     if (busy) return;
+    if (totalProblem) return flash(totalProblem);
     setBusy(true);
     // ⚠ ดึงข้อมูลสดก่อนเสมอ — ตัวรีเฟรชอัตโนมัติเว้น 40 วิ ถ้าแอดมินอีกเครื่อง (หรือแท็บอื่น)
     //   เพิ่งอนุมัติใบเดียวกันไป เครื่องนี้จะยังเห็นเป็น "รอตรวจ" แล้วอนุมัติซ้ำ = ออกตั๋ว 2 ชุด
@@ -81,7 +113,8 @@ export default function SlipApprovalPage() {
     //   สต๊อกถูกตัดถาวร, ออเดอร์ยังค้าง pending หลังรีโหลด และแอดมินไม่รู้เลย (audit persist #2)
     if (issued <= ticketsBefore) { setBusy(false); return flash('อนุมัติไม่สำเร็จ — ออเดอร์อาจถูกอนุมัติ/ปฏิเสธไปแล้ว ลองรีเฟรช'); }
     const failed = await store.flush();
-    if (failed) { setBusy(false); return flash('บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่ตัดสต๊อก ลองอนุมัติใหม่อีกครั้ง'); }
+    // ฐานข้อมูลปฏิเสธ (เช่น v86: ยอดออเดอร์ต่ำกว่ามัดจำของรายการ) → บอกเหตุผลจริง ไม่ใช่ให้กดซ้ำ
+    if (failed) { setBusy(false); return flash(persistFailText(failed, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้าและยังไม่ตัดสต๊อก ลองอนุมัติใหม่อีกครั้ง')); }
     const mySubs = subsForUsers(db, [order.user_id]);
     // in-stock (ของพร้อมส่ง) จ่ายครบตั้งแต่ซื้อ → ชวนไปเลือกวิธีรับของทันที (เคส Taweesin: ลูกค้าไม่รู้ว่าต้องเลือก)
     const hasInStock = order.items.some((it) => db.products.find((p) => p.id === it.product_id)?.is_stock);
@@ -131,7 +164,7 @@ export default function SlipApprovalPage() {
             <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-[#8b5cf6]/50 bg-[#8b5cf6]/[0.06] px-4 text-center text-[#c4b5fd]">
               <Icon name="verified" size={30} />
               <div className="mt-2 text-sm font-bold">💎 ไม่ต้องโอน</div>
-              <div className="mt-1 text-[12px] text-ink-muted2">{(order.points_redeemed ?? 0) > 0 ? `คูปอง/แต้ม (−${baht(order.points_redeemed ?? 0)}) ครอบคลุมเต็มจำนวน` : order.coupon_grant_id ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : 'สิทธิ์ Diamond · มัดจำ 0 บาท'}<br />ไม่มีสลิปเป็นเรื่องปกติ — กด "อนุมัติ" เพื่อออกตั๋วได้เลย</div>
+              <div className="mt-1 text-[12px] text-ink-muted2">{(order.points_redeemed ?? 0) > 0 ? `คูปอง/แต้ม (−${baht(order.points_redeemed ?? 0)}) ครอบคลุมเต็มจำนวน` : order.coupon_grant_id ? 'คูปองส่วนลดครอบคลุมเต็มจำนวน' : isDiamond ? 'สิทธิ์ Diamond · มัดจำ 0 บาท' : '⚠ ยอด 0 บาท แต่ลูกค้าไม่ใช่ Diamond — ตรวจรายการก่อนอนุมัติ'}<br />ไม่มีสลิปเป็นเรื่องปกติ — กด "อนุมัติ" เพื่อออกตั๋วได้เลย</div>
             </div>
           ) : (
             <div className="flex h-[420px] w-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-subtle text-ink-faint">
@@ -196,6 +229,21 @@ export default function SlipApprovalPage() {
             <div className="mb-4 flex items-center gap-2 rounded-[10px] border border-dashed border-[#f59e0b]/50 px-3 py-2.5 text-[12.5px] text-[#fbbf24]">
               <Icon name="bell" size={17} className="text-[#fbbf24]" />
               <span>โปรดตรวจสลิปกับยอด {baht(order.total_deposit)} ก่อนกดอนุมัติ · จะออก Ticket: <b className="font-mono">{nextTk}</b></span>
+            </div>
+          )}
+          {totalProblem && (
+            <div className="mb-4 flex items-start gap-2 rounded-[10px] border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] px-3 py-2.5 text-[12.5px] leading-relaxed text-primary-soft">
+              <Icon name="warning" size={17} className="mt-0.5 shrink-0" />
+              <span><b>{totalProblem}</b> · ถ้าลูกค้าโอนมาแล้ว ให้ปฏิเสธออเดอร์นี้ แล้วให้ลูกค้าสั่งใหม่ตามยอดจริง (ทักลูกค้าเรื่องส่วนต่าง)</span>
+            </div>
+          )}
+          {priceFlags.length > 0 && (
+            <div className="mb-4 flex items-start gap-2 rounded-[10px] border border-[#b91c1c]/50 bg-[#b91c1c]/[0.1] px-3 py-2.5 text-[12.5px] leading-relaxed text-primary-soft">
+              <Icon name="warning" size={17} className="mt-0.5 shrink-0" />
+              <span>
+                <b>ราคา/มัดจำในออเดอร์ต่ำกว่าราคาร้านตอนนี้</b> — ถ้าร้านเพิ่งขึ้นราคาหลังลูกค้าสั่ง ถือว่าปกติ · ถ้าไม่ได้ปรับราคา = ออเดอร์ถูกแก้ตัวเลข <b>ห้ามอนุมัติ</b>
+                <ul className="mt-1 list-disc pl-4">{priceFlags.map((f) => <li key={f}>{f}</li>)}</ul>
+              </span>
             </div>
           )}
           {holdLost && (

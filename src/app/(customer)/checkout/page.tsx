@@ -276,6 +276,14 @@ export default function CheckoutPage() {
       //   (audit 1005 #1: เดิมเข้ากิ่งล่าง ล้างตะกร้าแล้วบอก "กำลังลองส่งอัตโนมัติ ห้ามกดซ้ำ" ทั้งที่ไม่มีอะไรจะส่ง = โอนแล้วรอเก้อ)
       //   hold ยัง paid อยู่ = ของยังกันให้คนนี้ · กดส่งซ้ำผ่าน ryuma_reserve_pay ได้ (กดซ้ำ = ผ่าน)
       setBusy(false);
+      // หัวออเดอร์บันทึกแล้ว แต่รายการถูกปฏิเสธ (adapter เขียน orders ก่อน order_items คนละคำขอ · review รอบ 2):
+      //   ออเดอร์ครึ่งๆ กลางๆ อยู่ในคิวแอดมินแล้ว (สลิป/คูปอง/แต้มผูกกับมัน) → ห้ามชวนกดส่งใหม่ (จะได้ 2 ออเดอร์จากสลิปเดียว)
+      const headerSaved = /(^|\| )order_items:/.test(failed) && !/(^|\| )orders:/.test(failed);
+      if (headerSaved) {
+        cart.clear();
+        removeStore('session', 'ryuma_hold:' + stockKey);
+        return flash(`${persistFailText(failed, '')} — ออเดอร์บันทึกไม่ครบ · ห้ามกดส่งซ้ำ ทักแอดมินพร้อมสลิปนี้ได้เลย แอดมินจะจัดการให้ครับ`);
+      }
       return flash(`${persistFailText(failed, '')} — ตะกร้าและสลิปยังอยู่ แก้แล้วกดส่งใหม่ได้ · ถ้าโอนเงินไปแล้วแต่ส่งไม่ผ่าน ทักแอดมินพร้อมสลิปได้เลยครับ`);
     }
     if (failed) {

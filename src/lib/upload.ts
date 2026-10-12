@@ -25,7 +25,8 @@ export async function uploadImage(file: File, prefix: string): Promise<string> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const { error } = await Promise.race([
-      supabase.storage.from('logos').upload(path, file, { upsert: true, contentType: file.type }),
+      // upsert:false — ชื่อไฟล์ไม่ซ้ำอยู่แล้ว และ v86 ให้ลูกค้าอ่านได้เฉพาะไฟล์ตัวเอง (upsert ต้องสิทธิ์อ่าน/เขียนทับ ซึ่งปิดไว้)
+      supabase.storage.from('logos').upload(path, file, { upsert: false, contentType: file.type }),
       new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('อัปโหลดรูปช้าเกินไป — ลองใหม่อีกครั้ง')), 45_000); }),
     ]);
     if (error) throw error;

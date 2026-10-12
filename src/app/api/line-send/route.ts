@@ -21,18 +21,34 @@ import { NextResponse } from 'next/server';
  */
 export const runtime = 'edge';
 
-// เพดานต่อผู้ใช้: งานจริงยิงทีละข้อความตอนกดปุ่ม — 20/นาทีเหลือเฟือ และกันการเผาโควตา
+// เพดานต่อผู้ใช้: งานจริงยิงทีละข้อความตอนกดปุ่ม · ลูกค้า 6/นาที (สลิป/สมัคร/ดีลตลาด) · แอดมิน 20/นาที
+//   (audit 2026-10-12 M19: เดิมใครล็อกอินก็ยิงข้อความอะไรก็ได้ 20/นาที → ปลอมเป็น "รอไฟนอล" / เผาโควตา LINE ได้)
 const WINDOW_MS = 60_000;
-const MAX_PER_USER = 20;
+const MAX_ADMIN = 20;
+const MAX_CUSTOMER = 6;
 const hits = new Map<string, { n: number; until: number }>();
 
-function rateLimited(uid: string): boolean {
+function rateLimited(uid: string, max: number): boolean {
   const now = Date.now();
   const cur = hits.get(uid);
   if (!cur || now > cur.until) { hits.set(uid, { n: 1, until: now + WINDOW_MS }); return false; }
   cur.n += 1;
   if (hits.size > 5000) for (const [k, v] of hits) if (now > v.until) hits.delete(k);
-  return cur.n > MAX_PER_USER;
+  return cur.n > max;
+}
+
+/** ผู้ส่งเป็นใคร (แถว users ของตัวเอง — อ่านด้วย token ของผู้เรียก ผ่าน RLS) · null = อ่านไม่ได้ */
+async function callerMember(token: string, uid: string): Promise<{ is_admin?: boolean; member_code?: string | null; display_name?: string | null } | null> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) return null;
+  try {
+    const r = await fetch(`${url}/rest/v1/users?select=is_admin,member_code,display_name&auth_id=eq.${encodeURIComponent(uid)}&limit=1`,
+      { headers: { apikey: anon, Authorization: `Bearer ${token}` }, cache: 'no-store' });
+    if (!r.ok) return null;
+    const rows = (await r.json()) as { is_admin?: boolean; member_code?: string | null; display_name?: string | null }[];
+    return rows[0] ?? null;
+  } catch { return null; }
 }
 
 async function callerUid(req: Request): Promise<string | null> {
@@ -56,7 +72,10 @@ export async function POST(req: Request) {
 
   const uid = await callerUid(req);
   if (!uid) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  if (rateLimited(uid)) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+  const bearer = (req.headers.get('authorization') ?? '').slice(7).trim();
+  const member = await callerMember(bearer, uid);
+  const isAdmin = member?.is_admin === true;
+  if (rateLimited(uid, isAdmin ? MAX_ADMIN : MAX_CUSTOMER)) return NextResponse.json({ error: 'rate limited' }, { status: 429 });
 
   let body: { message?: string };
   try {
@@ -64,8 +83,12 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: 'invalid JSON' }, { status: 400 });
   }
-  const message = (body.message ?? '').slice(0, 1000).trim();
-  if (!message) return NextResponse.json({ error: 'message required' }, { status: 400 });
+  const raw = (body.message ?? '').slice(0, isAdmin ? 1000 : 500).trim();
+  if (!raw) return NextResponse.json({ error: 'message required' }, { status: 400 });
+  // ข้อความจากเครื่องลูกค้า: ต่อท้ายด้วยตัวตนผู้ส่งเสมอ (เซิร์ฟเวอร์เติมเอง ลูกค้าปลอมไม่ได้) — เจ้าของรู้ทันทีว่าใครส่ง
+  //   ยังไม่มีรหัสสมาชิก (สมัครใหม่รออนุมัติ) → ห้ามใช้ชื่อเฉยๆ เพราะตั้งชื่อเลียนรหัสสมาชิกคนอื่นได้ (review รอบ 2)
+  const who = member?.member_code || `ชื่อ "${(member?.display_name ?? '').slice(0, 40)}" (ยังไม่มีรหัสสมาชิก · ${uid.slice(0, 8)})`;
+  const message = isAdmin ? raw : `${raw}\n— ส่งจากบัญชีลูกค้า ${who}`;
 
   const res = await fetch('https://api.line.me/v2/bot/message/push', {
     method: 'POST',
