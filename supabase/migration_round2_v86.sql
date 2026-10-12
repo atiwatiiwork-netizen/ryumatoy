@@ -310,7 +310,7 @@ create policy "logos read own or admin" on storage.objects
   for select to authenticated using (bucket_id = 'logos' and (owner = auth.uid() or public.is_app_admin()));
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 4) reserve_ticket_nos (ทับ v71): ต้องล็อกอิน · ลูกค้าจองได้ไม่เกิน 50 เลขต่อครั้ง (แอดมิน 1,000)
+-- 4) reserve_ticket_nos (ทับ v71): ต้องล็อกอิน (ปิด anon) · ลูกค้าต้องอนุมัติแล้ว · ไม่เกิน 50/ครั้ง · นำหน้าตั๋วจริงไม่เกิน 200 (แอดมิน 1,000/ครั้ง)
 -- ─────────────────────────────────────────────────────────────────────────────
 create or replace function reserve_ticket_nos(p text, c int)
 returns int language plpgsql security definer set search_path = public as $$
@@ -319,9 +319,6 @@ declare
   real_max int;
   start_n int;
 begin
-  if auth.uid() is null and not is_app_admin() and current_user <> 'postgres' then
-    raise exception 'ryuma: ต้องเข้าสู่ระบบก่อน';
-  end if;
   if coalesce(p, '') = '' or length(p) > 32 then raise exception 'ryuma: prefix เลขตั๋วไม่ถูกต้อง'; end if;
   if cnt > (case when is_app_admin() then 1000 else 50 end) then
     raise exception 'ryuma: ขอเลขตั๋วมากเกินไปในครั้งเดียว';
