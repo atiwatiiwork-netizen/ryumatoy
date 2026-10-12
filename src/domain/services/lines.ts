@@ -181,7 +181,7 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   for (const p of sellable) {
     if (!preorderOpenForOrder(db, p)) continue;
     const { price, from } = priceOf(db, p);
-    return make({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · เปิดรับพรี`, cta: { label: 'พรีเลย', href: `/shop/${p.id}` }, product: p });
+    return make({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · Pre-Order`, cta: { label: 'พรีเลย', href: `/shop/${p.id}` }, product: p });
   }
   // 4 ติดห้องประมูล — หน้าร้านซ่อนอยู่ (ขายซ้อนไม่ได้) ห้ามตกไป "หาของ" ทั้งที่ร้านมีของ
   const inAuction = all.find((p) => inLiveAuction(db, p.id));

@@ -134,7 +134,12 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-extrabold">{member.name.trim() || `ตัวที่ ${no}`}</div>
-        <div className="truncate text-[11.5px] text-ink-muted2">{state.detail}</div>
+        {/* เปิดรับพรีอยู่ → คำ "Pre-Order" กระพริบ (เจ้าของ 2026-10-12) · พรีไปแล้วไม่กระพริบ (ป้ายเขียวด้านล่างบอกแทน) */}
+        <div className="truncate text-[11.5px] text-ink-muted2">
+          {state.kind === 'preorder' && state.detail.endsWith(' · Pre-Order')
+            ? <>{state.detail.slice(0, -'Pre-Order'.length)}<span className={cx('font-extrabold text-[#60a5fa]', !state.mine && 'animate-pulse')}>Pre-Order</span></>
+            : state.detail}
+        </div>
         {/* พรีไปแล้ว = ป้ายเขียวชัดๆ (เจ้าของ 2026-10-08: ต้องเตือนกันสั่งซ้ำ) · รวมออเดอร์ที่สลิปยังรอตรวจ */}
         {state.mine && (
           <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#16a34a]/20 px-2 py-0.5 text-[11px] font-extrabold text-[#4ade80]">
