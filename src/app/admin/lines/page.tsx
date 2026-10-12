@@ -591,7 +591,7 @@ function MemberEditor({ db, makerId, member: m, no, state, last, busy, onPatch, 
       <div className="mt-1.5 pl-8 text-[11.5px]">
         {state && (
           <div className={cx('mb-1 font-semibold', state.visible ? 'text-ink-muted2' : 'text-[#fbbf24]')}>
-            <span style={{ color: TONE_HEX[state.tone] }}>● {state.label}</span> · {state.detail}{hasPin(m) ? ' · 📍 วางป้ายแล้ว' : ' · ยังไม่วางป้าย'}
+            <span style={{ color: TONE_HEX[state.tone] }}>● {state.label}</span> · {state.detail.replace(/ · Pre-Order$/, '')}{hasPin(m) ? ' · 📍 วางป้ายแล้ว' : ' · ยังไม่วางป้าย'}
             {hasPin(m) && <button onClick={() => onPatch((x) => ({ ...x, pin_x: undefined, pin_y: undefined }))} className="ml-1.5 font-bold text-ink-faint underline">ลบป้าย</button>}
           </div>
         )}
