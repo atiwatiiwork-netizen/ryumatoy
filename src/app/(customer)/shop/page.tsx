@@ -73,10 +73,11 @@ function ShopInner() {
     [db, category, categoryId, franchiseId, manufacturerId, seriesId, status, query],
   );
   // "พรีรอบพิเศษ" is its own category → hide normal products there; batches are the only cards.
-  // ยุบไลน์ (เจ้าของ 2026-10-08): มุมมอง "ทั้งหมด" ที่ไม่ได้ค้น/กรองอะไร → ตัวที่อยู่ในไลน์ (ที่ลูกค้าเห็น) หายจากกริด
-  //   เหลือการ์ดไลน์ใบเดียวในแถบด้านบน · ค้นหา · กรองค่าย/เรื่อง/ซีรีย์/สถานะ · หมวด Pre-Order/In-Stock ยังเห็นตัวเดี่ยวครบ
-  //   (สินค้าต้องหาเจอเสมอ) · productsInVisibleLines ใช้กติกาเดียวกับแถบไลน์ (สวิตช์ปิด = ไม่ยุบ)
-  const collapseLines = category === null && !query && !manufacturerId && !franchiseId && !seriesId && !status && !categoryId;
+  // ยุบไลน์ (เจ้าของ 2026-10-08 · ขยาย 2026-10-12 "กดเปิดไลน์แล้วทำไมยังเห็นตัวเดี่ยว" ในแท็บ Pre-Order):
+  //   ทุกมุมมอง (ทั้งหมด / Pre-Order / In-Stock / กรองค่าย-เรื่อง-ซีรีย์-สถานะ) ตัวที่อยู่ในไลน์ที่ลูกค้าเห็นหายจากกริด
+  //   เหลือการ์ดไลน์ในแถบด้านบน (แถบกรองตามค่าย/เรื่องเดียวกัน) · ยกเว้น "ค้นหา" ยังเจอตัวเดี่ยวเสมอ (สินค้าต้องหาเจอได้)
+  //   · productsInVisibleLines ใช้กติกาเดียวกับแถบไลน์ (สวิตช์ปิด/ไลน์ร่าง = ไม่ยุบ)
+  const collapseLines = !query;
   const inLines = useMemo(() => (collapseLines ? productsInVisibleLines(db, uid) : new Set<string>()), [collapseLines, db, uid]);
   const results = category === 'special' ? [] : filtered.filter((p) => !inLines.has(p.id));
 
@@ -204,8 +205,8 @@ function ShopInner() {
               );
             })()}
           </div>
-          {/* ไลน์ (พรียกไลน์ v81) — เฉพาะมุมมอง "ทั้งหมด" · ลูกค้าไม่เห็นจนกว่าแอดมินเปิดสวิตช์ (คอมโพเนนต์ตัดสินเอง) */}
-          {category === null && <LineStrip makerId={manufacturerId} franchiseId={franchiseId} query={query} />}
+          {/* ไลน์ (พรียกไลน์ v81) — ทุกมุมมองยกเว้นรอบพิเศษ · ลูกค้าไม่เห็นจนกว่าแอดมินเปิดสวิตช์ (คอมโพเนนต์ตัดสินเอง) */}
+          {category !== 'special' && <LineStrip makerId={manufacturerId} franchiseId={franchiseId} query={query} />}
           {openBatches.length > 0 && (
             <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
               {openBatches.map((b) => <BatchCard key={b.id} batch={b} liveAvail={liveMap[liveKey(b.product_id, b.id)]} />)}
