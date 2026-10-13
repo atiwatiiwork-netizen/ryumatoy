@@ -3,8 +3,8 @@ import { isPendingHold } from './reservations';
 
 /**
  * ค่าส่งเพิ่มตามช่วงต้นทุน (v87 · เจ้าของ 2026-10-13: เปลี่ยนมาส่งรถ เรทเดิมขาดทุน)
- *   ต้นทุน < surcharge_from_yuan_1 → +0 (288–328 เท่าเดิม)
- *   ต้นทุน ≥ surcharge_from_yuan_1 → +surcharge_baht_1 (ตั้งต้น 329 → +40)
+ *   ต้นทุน < surcharge_from_yuan_1 → +0 (288–348 เท่าเดิม)
+ *   ต้นทุน ≥ surcharge_from_yuan_1 → +surcharge_baht_1 (ตั้งต้น 349 → +40)
  *   ต้นทุน ≥ surcharge_from_yuan_2 → +surcharge_baht_2 (ตั้งต้น 500 → +80 · แทนขั้น 1 ไม่บวกซ้อน)
  * เป็นก้อนคงที่ต่อชิ้น ไม่ใช่ต่อหยวน — ตั้งค่าได้ที่ /admin/payment
  */
@@ -21,7 +21,7 @@ export function shippingSurcharge(settings: ShopSettings, yuan: number): number 
 /**
  * Cost/price calculator (PRD intake). Selling price scales linearly with the
  * yuan cost: ฿ = baht_base + (yuan − yuan_base) × baht_per_yuan, แล้วบวกค่าส่งเพิ่มตามช่วง (shippingSurcharge).
- * e.g. 288¥ → 1550฿ ; 328¥ → 1550 + 40×5 = 1750฿ ; 400¥ → 2110 + 40 = 2150฿ ; 500¥ → 2610 + 80 = 2690฿.
+ * e.g. 288¥ → 1550฿ ; 348¥ → 1550 + 60×5 = 1850฿ ; 400¥ → 2110 + 40 = 2150฿ ; 500¥ → 2610 + 80 = 2690฿.
  * Constants live in ShopSettings so admin can adjust them as the rate moves.
  */
 export function priceFromYuan(settings: ShopSettings, yuan: number): number {

@@ -4,19 +4,19 @@
 --
 --   สูตรใหม่ (คิดในแอป · domain/services/pricing.ts):
 --     ราคา = ฐานบาท + (หยวน − ฐานหยวน) × บาทต่อหยวน + ค่าส่งเพิ่ม
---     ค่าส่งเพิ่ม: ต้นทุน < 329¥ → +0 (288–328 เท่าเดิม) · ตั้งแต่ 329¥ → +40 · ตั้งแต่ 500¥ → +80 (แทนขั้น 1)
+--     ค่าส่งเพิ่ม: ต้นทุน < 349¥ → +0 (288–348 เท่าเดิม) · ตั้งแต่ 349¥ → +40 · ตั้งแต่ 500¥ → +80 (แทนขั้น 1)
 --   ไฟล์นี้แค่เพิ่มคอลัมน์ตั้งค่า 4 ตัวบน shop_settings (แอดมินแก้ได้ที่ /admin/payment)
 --   ราคาสินค้าเดิม "ไม่ถูกแตะ" ที่นี่ — แอปจะปรับเฉพาะพรีที่เปิดรับและยังไม่มีคนพรี ตอนแอดมินกดปุ่ม/บันทึกสูตร
 --   ก่อนรัน: แอปใช้ค่าตั้งต้นเดียวกันอยู่แล้ว (อ่านไม่เจอคอลัมน์ → fallback) · ที่เซฟไม่ได้คือ "แก้ตัวเลข 4 ช่องนี้" เท่านั้น
 -- ============================================================================
 
-alter table shop_settings add column if not exists surcharge_from_yuan_1 numeric default 329;
+alter table shop_settings add column if not exists surcharge_from_yuan_1 numeric default 349;
 alter table shop_settings add column if not exists surcharge_baht_1 numeric default 40;
 alter table shop_settings add column if not exists surcharge_from_yuan_2 numeric default 500;
 alter table shop_settings add column if not exists surcharge_baht_2 numeric default 80;
 
 update shop_settings set
-  surcharge_from_yuan_1 = coalesce(surcharge_from_yuan_1, 329),
+  surcharge_from_yuan_1 = coalesce(surcharge_from_yuan_1, 349),
   surcharge_baht_1 = coalesce(surcharge_baht_1, 40),
   surcharge_from_yuan_2 = coalesce(surcharge_from_yuan_2, 500),
   surcharge_baht_2 = coalesce(surcharge_baht_2, 80)

@@ -137,7 +137,7 @@ function PricingConfig() {
   };
 
   const cell = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
-  const samples = [288, 328, 400, 500];
+  const samples = [288, 348, 400, 500];
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 font-bold">สูตรราคา &amp; มัดจำ</div>

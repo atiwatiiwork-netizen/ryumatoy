@@ -1,6 +1,6 @@
 /* สูตรราคา + ค่าส่งเพิ่มตามช่วงต้นทุน (v87) + กฎ "มีคนพรีแล้วห้ามแตะ" (เจ้าของ 2026-10-13) — ฐานปลอม ไม่แตะ Supabase
  *   npx --yes tsx scripts/audit/pricing-audit.ts
- *   F) priceFromYuan: 288–328 เท่าเดิม · ตั้งแต่ 329 +40 · ตั้งแต่ 500 +80 (ไม่บวกซ้อน) · ปิดขั้นด้วย 0 ได้
+ *   F) priceFromYuan: 288–348 เท่าเดิม · ตั้งแต่ 349 +40 · ตั้งแต่ 500 +80 (ไม่บวกซ้อน) · ปิดขั้นด้วย 0 ได้
  *   P) repriceOpenPreorders/updateSettings: แตะเฉพาะพรีเปิดรับที่ยังไม่มีคนพรี — ตั๋วกระดานหลัก/ตั๋วรอบพิเศษ/ออเดอร์รอตรวจ/hold ค้าง = กันไว้
  *      ปิดรอบแล้ว (status ≠ open) · พร้อมส่ง · ไม่มีหยวน = ไม่แตะ · ออเดอร์ที่ถูกปฏิเสธ/hold หมดอายุ ไม่นับเป็นคนพรี
  *   U) หน้าแอดมินกับ mutation ใช้ตัวจำแนกเดียวกัน (repriceTargets.changed == สินค้าที่ mutation เปลี่ยนจริง)
@@ -13,13 +13,14 @@ import { repriceOpenPreorders, updateSettings } from '../../src/data/mutations';
 let p = 0, f = 0;
 const ok = (n: string, c: boolean, detail?: unknown) => { if (c) p++; else { f++; console.log('FAIL', n, detail === undefined ? '' : JSON.stringify(detail)); } };
 
-const S = { ...SEED_DATABASE.settings }; // 288→1550 · 5฿/¥ · ขั้น 329→+40 · 500→+80
+const S = { ...SEED_DATABASE.settings }; // 288→1550 · 5฿/¥ · ขั้น 349→+40 · 500→+80
 const linear = (y: number) => 1550 + (y - 288) * 5;
 
 // ── F) สูตร ─────────────────────────────────────────────────────────────────────
 ok('F1 288¥ เท่าเดิม 1550', priceFromYuan(S, 288) === 1550);
-ok('F2 328¥ เท่าเดิม 1750', priceFromYuan(S, 328) === 1750);
-ok('F3 329¥ +40', priceFromYuan(S, 329) === linear(329) + 40);
+ok('F2a 328¥ เท่าเดิม 1750', priceFromYuan(S, 328) === 1750);
+ok('F2b 348¥ เท่าเดิม 1850', priceFromYuan(S, 348) === 1850);
+ok('F3 349¥ +40 = 1895', priceFromYuan(S, 349) === linear(349) + 40 && priceFromYuan(S, 349) === 1895);
 ok('F4 400¥ +40 = 2150', priceFromYuan(S, 400) === 2150);
 ok('F5 499¥ +40', priceFromYuan(S, 499) === linear(499) + 40);
 ok('F6 500¥ +80 = 2690', priceFromYuan(S, 500) === 2690);

@@ -583,8 +583,8 @@ export interface ShopSettings {
   baht_per_yuan: number; // 5
   // ค่าส่งเพิ่มตามช่วงต้นทุน (v87 · เปลี่ยนมาส่งรถ 2026-10-13): บวกทับสูตรเส้นตรงเป็นก้อนคงที่ ไม่ใช่ต่อหยวน
   //   ต้นทุน ≥ surcharge_from_yuan_1 → +surcharge_baht_1 · ต้นทุน ≥ surcharge_from_yuan_2 → +surcharge_baht_2 (แทนขั้น 1 ไม่บวกซ้อน)
-  //   ตั้งต้น: 288–328 เท่าเดิม · ตั้งแต่ 329 +40 · ตั้งแต่ 500 +80 — ใช้เฉพาะสินค้าที่ "ยังไม่มีคนพรี" (ดู repriceTargets)
-  surcharge_from_yuan_1: number; // 329
+  //   ตั้งต้น: 288–348 เท่าเดิม · ตั้งแต่ 349 +40 · ตั้งแต่ 500 +80 (เจ้าของขยับ 328→348 2026-10-13) — ใช้เฉพาะสินค้าที่ "ยังไม่มีคนพรี" (ดู repriceTargets)
+  surcharge_from_yuan_1: number; // 349
   surcharge_baht_1: number; // 40
   surcharge_from_yuan_2: number; // 500
   surcharge_baht_2: number; // 80

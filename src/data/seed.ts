@@ -199,7 +199,7 @@ export const SEED_DATABASE: Database = {
     yuan_base: 288,
     baht_base: 1550,
     baht_per_yuan: 5,
-    surcharge_from_yuan_1: 329,
+    surcharge_from_yuan_1: 349,
     surcharge_baht_1: 40,
     surcharge_from_yuan_2: 500,
     surcharge_baht_2: 80,
