@@ -1,14 +1,15 @@
-/* สูตรราคา + ค่าส่งเพิ่มตามช่วงต้นทุน (v87) + กฎ "มีคนพรีแล้วห้ามแตะ" (เจ้าของ 2026-10-13) — ฐานปลอม ไม่แตะ Supabase
+/* สูตรราคา + ค่าส่งเพิ่มตามช่วงต้นทุน (v87/v88) + กฎ "มีคนพรีแล้วห้ามแตะ" (เจ้าของ 2026-10-13) — ฐานปลอม ไม่แตะ Supabase
  *   npx --yes tsx scripts/audit/pricing-audit.ts
  *   F) priceFromYuan: 288–348 เท่าเดิม · ตั้งแต่ 349 +40 · ตั้งแต่ 500 +80 (ไม่บวกซ้อน) · ปิดขั้นด้วย 0 ได้
- *   P) repriceOpenPreorders/updateSettings: แตะเฉพาะพรีเปิดรับที่ยังไม่มีคนพรี — ตั๋วกระดานหลัก/ตั๋วรอบพิเศษ/ออเดอร์รอตรวจ/hold ค้าง = กันไว้
- *      ปิดรอบแล้ว (status ≠ open) · พร้อมส่ง · ไม่มีหยวน = ไม่แตะ · ออเดอร์ที่ถูกปฏิเสธ/hold หมดอายุ ไม่นับเป็นคนพรี
- *   U) หน้าแอดมินกับ mutation ใช้ตัวจำแนกเดียวกัน (repriceTargets.changed == สินค้าที่ mutation เปลี่ยนจริง)
+ *   P) updateSettings (บันทึกสูตร): ขยับเฉพาะพรีเปิดรับที่ยังไม่มีคนพรี และราคา/มัดจำ "ตามสูตรเก่า" อยู่
+ *      กันไว้: ตั๋วกระดานหลัก/ตั๋วรอบพิเศษ/ออเดอร์รอตรวจ/hold ค้าง · ปิดรอบ · พร้อมส่ง · หลายแบบ · ราคา/มัดจำตั้งเอง
+ *      ออเดอร์ที่ถูกปฏิเสธ/hold หมดอายุ ไม่นับเป็นคนพรี
+ *   U) หน้าแอดมิน (พรีวิวจากค่าในฟอร์ม) กับ mutation ใช้ตัวจำแนกเดียวกัน (repriceTargets.changed == สินค้าที่บันทึกแล้วเปลี่ยนจริง)
  */
 import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, Product, PreorderTicket } from '../../src/domain/entities';
 import { priceFromYuan, shippingSurcharge, hasPreorderBookings, repriceTargets } from '../../src/domain/services/pricing';
-import { repriceOpenPreorders, updateSettings } from '../../src/data/mutations';
+import { updateSettings } from '../../src/data/mutations';
 
 let p = 0, f = 0;
 const ok = (n: string, c: boolean, detail?: unknown) => { if (c) p++; else { f++; console.log('FAIL', n, detail === undefined ? '' : JSON.stringify(detail)); } };
@@ -29,11 +30,13 @@ ok('F8 ต่ำกว่าฐานมากๆ ไม่ติดลบ', pri
 ok('F9 ปิดขั้นด้วย 0 → สูตรเดิมล้วน', priceFromYuan({ ...S, surcharge_from_yuan_1: 0, surcharge_from_yuan_2: 0 }, 600) === linear(600));
 ok('F10 ปิดเฉพาะขั้น 2 → ขั้น 1 คุมต่อ', priceFromYuan({ ...S, surcharge_from_yuan_2: 0 }, 600) === linear(600) + 40);
 ok('F11 ค่าติดลบถูกตัดเป็น 0', shippingSurcharge({ ...S, surcharge_baht_1: -5 }, 400) === 0);
+ok('F12 production (ฐาน 1,640): 348→1940 · 349→1985 · 500→2780', (() => { const P = { ...S, baht_base: 1640 }; return priceFromYuan(P, 348) === 1940 && priceFromYuan(P, 349) === 1985 && priceFromYuan(P, 500) === 2780; })());
 
 // ── P) กฎห้ามแตะ ─────────────────────────────────────────────────────────────────
+const FORMULA = priceFromYuan(S, 400); // 2150 = ราคาตามสูตรปัจจุบันของ 400¥
 const prod = (id: string, extra: Partial<Product> = {}): Product => ({
   id, series_name: id, franchise_id: 'f', manufacturer_id: 'm', wcf_type: 'wcf', cost_yuan: 400, type: 'figure' as Product['type'], description: '', images: [], eta_note: '',
-  price_total: 2110, deposit_amount: 300, is_stock: false, has_variants: false, status: 'open', created_at: '2026-10-01', ...extra,
+  price_total: FORMULA, deposit_amount: 300, is_stock: false, has_variants: false, status: 'open', created_at: '2026-10-01', ...extra,
 });
 const tk = (id: string, product: string, extra: Partial<PreorderTicket> = {}): PreorderTicket => ({
   id, ticket_no: id.toUpperCase(), product_id: product, owner_id: 'u1', original_buyer_id: 'u1', qty: 1, deposit_paid: 300,
@@ -43,21 +46,22 @@ const base = (): Database => {
   const db = structuredClone(SEED_DATABASE) as Database;
   db.settings = { ...S };
   db.products = [
-    prod('free'),                                            // เปิดรับ ไม่มีใคร → เปลี่ยน
+    prod('free'),                                            // เปิดรับ ไม่มีใคร ตามสูตร → ขยับ
     prod('mainTicket'),                                      // ตั๋วกระดานหลัก → กัน
     prod('batchTicket'),                                     // ตั๋วรอบพิเศษ → กัน
     prod('pendingOrder'),                                    // ออเดอร์รอตรวจ → กัน
     prod('hold'),                                            // hold ค้าง → กัน
-    prod('rejectedOrder'),                                   // ออเดอร์ถูกปฏิเสธ = ไม่ใช่คนพรี → เปลี่ยน
-    prod('expiredHold'),                                     // hold หมดอายุ → เปลี่ยน
+    prod('rejectedOrder'),                                   // ออเดอร์ถูกปฏิเสธ = ไม่ใช่คนพรี → ขยับ
+    prod('expiredHold'),                                     // hold หมดอายุ → ขยับ
     prod('closedRound', { status: 'production' }),          // ปิดรอบแล้ว → ไม่แตะ
     prod('instock', { is_stock: true, stock_qty: 3 }),      // พร้อมส่ง → ไม่แตะ
-    prod('noYuan', { cost_yuan: undefined, price_total: 999 }), // ไม่มีหยวน → ราคาเดิม (มัดจำตามชนิด)
-    prod('cheap', { cost_yuan: 300, price_total: 1610 }),    // ต่ำกว่าขั้น 1 → ราคาเท่าเดิมอยู่แล้ว ไม่อยู่ในรายการ
-    prod('customDep', { deposit_amount: 1000 }),             // มัดจำตั้งเอง 1,000 → ราคาเปลี่ยน แต่มัดจำต้องคง 1,000
-    prod('variant', { has_variants: true }),                 // หลายแบบ (ราคาอยู่ที่แต่ละแบบ) → ไม่แตะ
+    prod('noYuan', { cost_yuan: undefined, price_total: 999 }), // ไม่มีหยวน → ราคาเดิม
+    prod('cheap', { cost_yuan: 300, price_total: priceFromYuan(S, 300) }), // ต่ำกว่าขั้น 1 → ขยับเฉพาะถ้าฐานเปลี่ยน
+    prod('customPrice', { price_total: 2500 }),              // ราคาตั้งเอง → ไม่แตะ
+    prod('customDep', { deposit_amount: 1000 }),             // มัดจำตั้งเอง → ราคาขยับ มัดจำคง
+    prod('variant', { has_variants: true }),                 // หลายแบบ → ไม่แตะ
   ];
-  db.batches = [{ id: 'b1', product_id: 'batchTicket', label: 'รอบ 2', price_total: 2110, deposit_amount: 300, stock_qty: 2, status: 'open', created_at: '2026-10-01' }];
+  db.batches = [{ id: 'b1', product_id: 'batchTicket', label: 'รอบ 2', price_total: FORMULA, deposit_amount: 300, stock_qty: 2, status: 'open', created_at: '2026-10-01' }];
   db.tickets = [tk('t1', 'mainTicket'), tk('t2', 'batchTicket', { batch_id: 'b1' })];
   db.orders = [
     { id: 'o1', user_id: 'u1', status: 'pending_approval', total_deposit: 300, slip_url: '', created_at: '2026-10-01', items: [{ id: 'i1', order_id: 'o1', product_id: 'pendingOrder', qty: 1, deposit_amount: 300 }] },
@@ -74,6 +78,7 @@ const base = (): Database => {
 };
 const priceOf = (db: Database, id: string) => db.products.find((x) => x.id === id)!.price_total;
 const depOf = (db: Database, id: string) => db.products.find((x) => x.id === id)!.deposit_amount;
+const changedIds = (before: Database, after: Database) => after.products.filter((x) => x.price_total !== priceOf(before, x.id) || x.deposit_amount !== depOf(before, x.id)).map((x) => x.id).sort();
 
 {
   const db = base();
@@ -81,47 +86,53 @@ const depOf = (db: Database, id: string) => db.products.find((x) => x.id === id)
     hasPreorderBookings(db, 'mainTicket') && hasPreorderBookings(db, 'batchTicket') && hasPreorderBookings(db, 'pendingOrder') && hasPreorderBookings(db, 'hold')
     && !hasPreorderBookings(db, 'rejectedOrder') && !hasPreorderBookings(db, 'expiredHold') && !hasPreorderBookings(db, 'free'));
 
-  const after = repriceOpenPreorders()(db);
-  ok('P1 ว่าง → ราคาใหม่ 2150', priceOf(after, 'free') === 2150);
-  ok('P2 ตั๋วกระดานหลัก → ไม่แตะ', priceOf(after, 'mainTicket') === 2110);
-  ok('P3 ตั๋วรอบพิเศษ → ไม่แตะ', priceOf(after, 'batchTicket') === 2110);
-  ok('P4 ออเดอร์รอตรวจ → ไม่แตะ', priceOf(after, 'pendingOrder') === 2110);
-  ok('P5 hold ค้าง → ไม่แตะ', priceOf(after, 'hold') === 2110);
-  ok('P6 ออเดอร์ถูกปฏิเสธ → เปลี่ยนได้', priceOf(after, 'rejectedOrder') === 2150);
-  ok('P7 hold หมดอายุ → เปลี่ยนได้', priceOf(after, 'expiredHold') === 2150);
-  ok('P8 ปิดรอบแล้ว → ไม่แตะ', priceOf(after, 'closedRound') === 2110);
-  ok('P9 พร้อมส่ง → ไม่แตะ', priceOf(after, 'instock') === 2110);
+  // บันทึกสูตร: ขั้น 1 จาก +40 เป็น +60
+  const after = updateSettings({ surcharge_baht_1: 60 })(db);
+  ok('P1 ว่าง ตามสูตร → 2170', priceOf(after, 'free') === 2170);
+  ok('P2 ตั๋วกระดานหลัก → ไม่แตะ', priceOf(after, 'mainTicket') === FORMULA);
+  ok('P3 ตั๋วรอบพิเศษ → ไม่แตะ', priceOf(after, 'batchTicket') === FORMULA);
+  ok('P4 ออเดอร์รอตรวจ → ไม่แตะ', priceOf(after, 'pendingOrder') === FORMULA);
+  ok('P5 hold ค้าง → ไม่แตะ', priceOf(after, 'hold') === FORMULA);
+  ok('P6 ออเดอร์ถูกปฏิเสธ → ขยับ', priceOf(after, 'rejectedOrder') === 2170);
+  ok('P7 hold หมดอายุ → ขยับ', priceOf(after, 'expiredHold') === 2170);
+  ok('P8 ปิดรอบแล้ว → ไม่แตะ', priceOf(after, 'closedRound') === FORMULA);
+  ok('P9 พร้อมส่ง → ไม่แตะ', priceOf(after, 'instock') === FORMULA);
   ok('P10 ไม่มีหยวน → ราคาเดิม', priceOf(after, 'noYuan') === 999);
-  ok('P11 ต่ำกว่าขั้น 1 → เท่าเดิม', priceOf(after, 'cheap') === 1610);
-  ok('P12 ปุ่มอัปเดตราคา: มัดจำไม่ถูกแตะทุกตัว', after.products.every((x) => depOf(after, x.id) === depOf(db, x.id)));
-  ok('P12b มัดจำตั้งเอง 1,000: ราคาเปลี่ยน มัดจำคง', priceOf(after, 'customDep') === 2150 && depOf(after, 'customDep') === 1000);
-  ok('P12c สินค้าหลายแบบ → ไม่แตะ', priceOf(after, 'variant') === 2110);
-  ok('P13 ตั๋ว/ออเดอร์ไม่ถูกแตะ', JSON.stringify(after.tickets) === JSON.stringify(db.tickets) && JSON.stringify(after.orders) === JSON.stringify(db.orders));
+  ok('P11 ต่ำกว่าขั้น 1 → เท่าเดิม', priceOf(after, 'cheap') === priceFromYuan(S, 300));
+  ok('P12 ราคาตั้งเอง → ไม่แตะ', priceOf(after, 'customPrice') === 2500);
+  ok('P13 มัดจำตั้งเอง: ราคาขยับ มัดจำคง 1,000', priceOf(after, 'customDep') === 2170 && depOf(after, 'customDep') === 1000);
+  ok('P14 หลายแบบ → ไม่แตะ', priceOf(after, 'variant') === FORMULA);
+  ok('P15 แก้สูตรราคา: มัดจำไม่ถูกแตะทุกตัว', after.products.every((x) => depOf(after, x.id) === depOf(db, x.id)));
+  ok('P16 ตั๋ว/ออเดอร์ไม่ถูกแตะ', JSON.stringify(after.tickets) === JSON.stringify(db.tickets) && JSON.stringify(after.orders) === JSON.stringify(db.orders));
+  ok('P17 บันทึกค่าที่ไม่ใช่สูตร (บัญชี) → ไม่ขยับ', JSON.stringify(updateSettings({ bank_name: 'x' })(db).products) === JSON.stringify(db.products));
+  ok('P18 บันทึกค่าเดิมซ้ำ → ไม่ขยับ', JSON.stringify(updateSettings({ ...S })(db).products) === JSON.stringify(db.products));
 
-  // บันทึกสูตรใหม่ (เปลี่ยนก้อนขั้น 1 เป็น +60) → ปรับเฉพาะชุดเดียวกัน
-  const saved = updateSettings({ surcharge_baht_1: 60 })(db);
-  ok('P14 บันทึกสูตร: ว่าง → 2170 · มีคน → 2110', priceOf(saved, 'free') === 2170 && priceOf(saved, 'mainTicket') === 2110 && priceOf(saved, 'hold') === 2110);
-  ok('P14b บันทึกสูตรราคา: มัดจำตั้งเองคง 1,000', depOf(saved, 'customDep') === 1000);
-  ok('P15 บันทึกค่าที่ไม่ใช่สูตร (บัญชี) → ไม่ reprice', priceOf(updateSettings({ bank_name: 'x' })(db), 'free') === 2110);
-  // แก้เรทมัดจำ → มัดจำของพรีที่ยังไม่มีคนพรีตามเรทใหม่ (พฤติกรรมเดิม) · มีคนพรีแล้วไม่แตะ
+  // ฐานบาทเปลี่ยน → ของต่ำกว่าขั้นที่ตามสูตรก็ขยับ
+  const rebased = updateSettings({ baht_base: 1640 })(db);
+  ok('P19 ฐาน 1550→1640: ตามสูตรขยับ +90 · ตั้งเอง/มีคนพรีไม่แตะ',
+    priceOf(rebased, 'free') === FORMULA + 90 && priceOf(rebased, 'cheap') === priceFromYuan(S, 300) + 90
+    && priceOf(rebased, 'customPrice') === 2500 && priceOf(rebased, 'mainTicket') === FORMULA);
+
+  // แก้เรทมัดจำ 300→400: มัดจำที่ตามเรทขยับ · ตั้งเอง/มีคนพรีไม่แตะ · ราคาไม่ขยับ
   const depSaved = updateSettings({ deposit_wcf: 400 })(db);
-  ok('P15b แก้เรทมัดจำ: ว่าง → 400 · มีคน → 300', depOf(depSaved, 'free') === 400 && depOf(depSaved, 'customDep') === 400 && depOf(depSaved, 'mainTicket') === 300 && depOf(depSaved, 'hold') === 300);
-  const tiny = { ...db, products: [prod('tiny', { cost_yuan: 288, wcf_type: 'mega_wcf', price_total: 1, deposit_amount: 1 })], settings: { ...S, baht_base: 100 } };
-  ok('P16 มัดจำเกินราคา → ถูกตัดเท่าราคา (F12 เดิม)', depOf(updateSettings({ deposit_mega: 600 })(tiny), 'tiny') === 100);
-  ok('P16b ราคาใหม่ต่ำกว่ามัดจำเดิม → มัดจำถูกตัดเท่าราคา', depOf(repriceOpenPreorders()({ ...tiny, products: [prod('tiny2', { cost_yuan: 288, price_total: 900, deposit_amount: 500 })] }), 'tiny2') === 100);
+  ok('P20 แก้เรทมัดจำ: ว่าง → 400 · ตั้งเอง 1,000 คง · มีคน 300 คง',
+    depOf(depSaved, 'free') === 400 && depOf(depSaved, 'customDep') === 1000 && depOf(depSaved, 'mainTicket') === 300 && depOf(depSaved, 'hold') === 300);
+  ok('P21 แก้เรทมัดจำ: ราคาไม่ขยับ', depSaved.products.every((x) => priceOf(depSaved, x.id) === priceOf(db, x.id)));
 
-  // ── U) หน้าแอดมิน = mutation ──
-  const t = repriceTargets(db, db.settings);
-  const changedIds = t.changed.map((c) => c.product.id).sort();
-  const realChanged = after.products.filter((x) => x.price_total !== priceOf(db, x.id) || x.deposit_amount !== depOf(db, x.id)).map((x) => x.id).sort();
-  ok('U1 รายการ "จะเปลี่ยน" ตรงกับที่ mutation เปลี่ยนจริง', JSON.stringify(changedIds) === JSON.stringify(realChanged), { changedIds, realChanged });
-  ok('U2 จะเปลี่ยน = customDep/expiredHold/free/rejectedOrder', JSON.stringify(changedIds) === JSON.stringify(['customDep', 'expiredHold', 'free', 'rejectedOrder']), changedIds);
-  const td = repriceTargets(db, { ...db.settings, deposit_wcf: 400 }, { deposits: true });
-  const dReal = updateSettings({ deposit_wcf: 400 })(db);
-  const dIds = dReal.products.filter((x) => x.price_total !== priceOf(db, x.id) || x.deposit_amount !== depOf(db, x.id)).map((x) => x.id).sort();
-  ok('U5 พรีวิวแก้เรทมัดจำ = ที่บันทึกแล้วเปลี่ยนจริง', JSON.stringify(td.changed.map((c) => c.product.id).sort()) === JSON.stringify(dIds), dIds);
-  ok('U3 กันไว้ 4 รายการ (ตั๋วหลัก/ตั๋วรอบ/ออเดอร์รอตรวจ/hold)', t.protectedCount === 4, t.protectedCount);
-  ok('U4 ราคาใหม่ในรายการตรงสูตร', t.changed.every((c) => c.next.price_total === 2150));
+  // มัดจำไม่เกินราคา (F12)
+  const tiny = { ...db, settings: { ...S, baht_base: 100, deposit_mega: 500 }, products: [prod('tiny', { cost_yuan: 288, wcf_type: 'mega_wcf', price_total: 100, deposit_amount: 100 })] };
+  ok('P22 แก้เรทมัดจำ Mega → มัดจำถูกตัดเท่าราคา', depOf(updateSettings({ deposit_mega: 600 })(tiny), 'tiny') === 100);
+
+  // ── U) พรีวิวหน้าแอดมิน = ที่บันทึกแล้วเปลี่ยนจริง ──
+  const cases: Partial<Database['settings']>[] = [{ surcharge_baht_1: 60 }, { baht_base: 1640 }, { deposit_wcf: 400 }, { surcharge_from_yuan_1: 300, surcharge_baht_2: 100 }];
+  for (const patch of cases) {
+    const t = repriceTargets(db, db.settings, { ...db.settings, ...patch });
+    const real = changedIds(db, updateSettings(patch)(db));
+    ok(`U ${JSON.stringify(patch)}: พรีวิว = จริง`, JSON.stringify(t.changed.map((c) => c.product.id).sort()) === JSON.stringify(real), { preview: t.changed.map((c) => c.product.id), real });
+  }
+  const t = repriceTargets(db, db.settings, { ...db.settings, surcharge_baht_1: 60 });
+  ok('U กันไว้ 4 รายการ (ตั๋วหลัก/ตั๋วรอบ/ออเดอร์รอตรวจ/hold)', t.protectedCount === 4, t.protectedCount);
+  ok('U ไม่มีอะไรเปลี่ยนถ้าสูตรเท่าเดิม', repriceTargets(db, db.settings, db.settings).changed.length === 0);
 }
 
 console.log(`\npricing-audit: ${p} passed, ${f} failed`);

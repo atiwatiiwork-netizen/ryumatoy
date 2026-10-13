@@ -7,7 +7,7 @@ import { useToast } from '@/state/ToastProvider';
 import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
-import { genId, upsertPaymentAccount, removePaymentAccount, updateSettings, repriceOpenPreorders } from '@/data/mutations';
+import { genId, upsertPaymentAccount, removePaymentAccount, updateSettings } from '@/data/mutations';
 import { priceFromYuan, repriceTargets } from '@/domain/services/pricing';
 import { baht } from '@/lib/theme';
 
@@ -123,16 +123,15 @@ function PricingConfig() {
     surcharge_from_yuan_1: Number(sY1) || 0, surcharge_baht_1: Number(sB1) || 0, surcharge_from_yuan_2: Number(sY2) || 0, surcharge_baht_2: Number(sB2) || 0,
   };
 
-  // สินค้าพรีที่เปิดรับและ "ยังไม่มีคนพรี" ซึ่งราคาไม่ตรงสูตร → ปุ่ม "อัปเดตราคา"/"บันทึกสูตร" จะแก้เฉพาะชุดนี้
-  // ชุดที่มีคนพรีแล้ว (ตั๋ว/ออเดอร์รอตรวจ/hold) ถูกกันไว้ทั้งก้อน ตามกฎเจ้าของ 2026-10-13 — ตัวจำแนกเดียวกับ mutation (repriceTargets)
-  // คิดจาก "ค่าในฟอร์ม" ไม่ใช่ค่าที่บันทึกแล้ว: กดบันทึกสูตร = reprice ทันที → แอดมินต้องเห็นรายการก่อนกด
-  // มัดจำถูกปรับเฉพาะเมื่อแก้ช่องเรทมัดจำ (ตรงกับ updateSettings)
-  const dirtyDeposit = (Number(depWcf) || 0) !== s.deposit_wcf || (Number(depMega) || 0) !== s.deposit_mega;
-  const dirty = dirtyDeposit || preview.yuan_base !== s.yuan_base || preview.baht_base !== s.baht_base || preview.baht_per_yuan !== s.baht_per_yuan
+  // กด "บันทึกสูตร" = ปรับราคาพรีที่เปิดรับทันที (ไม่มีปุ่มแยกแล้ว · ของเดิมปรับครั้งเดียวด้วย v88)
+  // ขยับเฉพาะตัวที่ราคา/มัดจำ "ตามสูตรเก่า" และยังไม่มีคนพรี — ราคาตั้งเอง/มีคนพรีแล้ว ไม่แตะ (ตัวจำแนกเดียวกับ updateSettings)
+  // คิดจาก "ค่าในฟอร์ม" → แอดมินเห็นรายการที่จะเปลี่ยนก่อนกด
+  const dirty = preview.yuan_base !== s.yuan_base || preview.baht_base !== s.baht_base || preview.baht_per_yuan !== s.baht_per_yuan
+    || (Number(depWcf) || 0) !== s.deposit_wcf || (Number(depMega) || 0) !== s.deposit_mega
     || preview.surcharge_from_yuan_1 !== s.surcharge_from_yuan_1 || preview.surcharge_baht_1 !== s.surcharge_baht_1
     || preview.surcharge_from_yuan_2 !== s.surcharge_from_yuan_2 || preview.surcharge_baht_2 !== s.surcharge_baht_2;
   const { changed, protectedCount } = useMemo(
-    () => repriceTargets(db, { ...preview, deposit_wcf: Number(depWcf) || 0, deposit_mega: Number(depMega) || 0 }, { deposits: dirtyDeposit }),
+    () => repriceTargets(db, s, { ...preview, deposit_wcf: Number(depWcf) || 0, deposit_mega: Number(depMega) || 0 }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db, yuanBase, bahtBase, perYuan, depWcf, depMega, sY1, sB1, sY2, sB2],
   );
@@ -169,17 +168,18 @@ function PricingConfig() {
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <span className="text-[12.5px] text-ink-muted">ตัวอย่าง: {samples.map((y, i) => <span key={y}>{i ? ' · ' : ''}{y}¥ = {baht(priceFromYuan(preview, y))}</span>)}</span>
-        <button disabled={dirty} title={dirty ? 'มีค่าที่ยังไม่บันทึก — กด “บันทึกสูตร” แทน (บันทึกแล้วปรับราคาให้เลย)' : undefined} onClick={() => { dispatch(repriceOpenPreorders()); flash(`อัปเดตราคาพรีที่ยังไม่มีคนพรีตามสูตรแล้ว`); }} className="ml-auto rounded-btn border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-bold text-ink-muted2 disabled:opacity-40">อัปเดตราคาพรี (เฉพาะที่ยังไม่มีคนพรี){!dirty && changed.length ? ` (${changed.length})` : ''}</button>
-        <button onClick={save} className="rounded-btn bg-cta px-5 py-2.5 text-sm font-bold text-white">บันทึกสูตร</button>
+        <button onClick={save} disabled={!dirty} className="ml-auto rounded-btn bg-cta px-5 py-2.5 text-sm font-bold text-white disabled:opacity-40">บันทึกสูตร</button>
       </div>
       <div className="mt-2 text-[12px] text-ink-faint">
-        {dirty ? 'ถ้ากด “บันทึกสูตร” ตอนนี้' : 'พรีที่เปิดรับอยู่'}: จะเปลี่ยน {changed.length} รายการ · กันไว้เพราะมีคนพรีแล้ว {protectedCount} รายการ (ไม่แตะ) · ใบที่ปิดรอบ/ตั๋วที่ออกแล้ว/สินค้าหลายแบบไม่กระทบ
-        {dirtyDeposit ? ' · แก้เรทมัดจำ = มัดจำของรายการที่จะเปลี่ยนถูกตั้งตามเรทใหม่ด้วย' : ' · มัดจำคงเดิม'}
+        {dirty
+          ? <>ถ้ากด “บันทึกสูตร” ตอนนี้: พรีที่เปิดรับจะเปลี่ยน {changed.length} รายการ · กันไว้เพราะมีคนพรีแล้ว {protectedCount} รายการ (ไม่แตะ)</>
+          : <>กด “บันทึกสูตร” แล้ว พรีที่เปิดรับและยังไม่มีคนพรีจะปรับราคาตามให้ทันที</>}
+        {' '}· ราคา/มัดจำที่ตั้งเอง · ใบที่ปิดรอบ · ตั๋วที่ออกแล้ว · สินค้าหลายแบบ ไม่ถูกแตะ
       </div>
-      {changed.length > 0 && (
+      {dirty && changed.length > 0 && (
         <div className="mt-2 rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.1] px-3 py-2 text-[12px] text-[#fbbf24]">
           <div className="flex items-center justify-between gap-2">
-            <span>{dirty ? `ถ้ากด “บันทึกสูตร” จะปรับราคา ${changed.length} รายการพรีที่ยังไม่มีคนพรี` : `มี ${changed.length} รายการพรีที่ยังไม่มีคนพรี ราคายังไม่ตรงสูตรปัจจุบัน — กด “อัปเดตราคาพรี” เพื่อปรับ`} (ตรวจรายการก่อนกด: ราคาที่ตั้งเองทับไว้จะถูกแทนด้วยสูตร)</span>
+            <span>ถ้ากด “บันทึกสูตร” จะปรับ {changed.length} รายการพรีที่ยังไม่มีคนพรี — ดูรายการก่อนกดได้</span>
             <button type="button" onClick={() => setShowList((v) => !v)} className="shrink-0 rounded-md border border-[#d97706]/50 px-2 py-1 text-[11.5px] font-bold">{showList ? 'ซ่อน' : 'ดูรายการ'}</button>
           </div>
           {showList && (

@@ -47,31 +47,29 @@ export function hasPreorderBookings(db: Database, productId: string): boolean {
   return bookedProductIds(db).has(productId);
 }
 
-/** ตัวเลือกของการคิดใหม่: deposits = ปรับมัดจำให้ตรงเรท WCF/Mega ด้วย (เฉพาะตอนแอดมินแก้ "เรทมัดจำ" เท่านั้น)
- *  ปุ่มอัปเดตราคา/แก้สูตรราคา → แตะแค่ราคา: มัดจำที่ตั้งเองรายตัว (เช่น 1,000) ต้องไม่ถูกรีเซ็ตเป็น 300 เงียบๆ
- *  และมัดจำที่ขยับระหว่างลูกค้าเปิดหน้าค้างไว้ = ยอดออเดอร์ไม่ตรง → อนุมัติไม่ได้ (ด่าน v86) */
-export type RepriceOpts = { deposits?: boolean; booked?: Set<string> };
+export type RepriceOpts = { booked?: Set<string> };
 
 /**
- * ราคา/มัดจำ "ตามสูตรปัจจุบัน" ของสินค้า 1 ตัว — หรือ null ถ้าสินค้านั้นห้ามแตะ:
- *   ไม่ใช่พรี (is_stock) · รอบไม่ได้เปิดรับ (status ≠ open) · มีคนพรีแล้ว (hasPreorderBookings)
- *   · สินค้าหลายแบบ (ราคาจริงอยู่ที่แต่ละแบบ ไม่มีหยวนรายแบบ) · ไม่มีหยวน/ชนิดให้คิด
- * ใช้ร่วมกันทั้ง mutation (repriceOpenPreorders/updateSettings) และหน้าแอดมิน (รายการ "จะเปลี่ยน") — ห้ามมี 2 สูตร
+ * เมื่อแอดมินบันทึกสูตร (from → to): ราคา/มัดจำใหม่ของสินค้า 1 ตัว — หรือ null ถ้าสินค้านั้นห้ามแตะ:
+ *   ไม่ใช่พรี (is_stock) · รอบไม่ได้เปิดรับ (status ≠ open) · มีคนพรีแล้ว (bookedProductIds) · สินค้าหลายแบบ
+ * ขยับเฉพาะค่าที่ "ตามสูตร" อยู่ (กฎเจ้าของ 2026-10-13 · ปุ่มอัปเดตราคาถูกถอด เพราะ v88 ปรับของเดิมในฐานข้อมูลแล้ว):
+ *   · ราคา: ขยับเมื่อราคาตอนนี้ = สูตรเก่า → สูตรใหม่ · ราคาที่ตั้งเอง (≠ สูตรเก่า) ไม่ถูกแตะ
+ *   · มัดจำ: ขยับเมื่อมัดจำตอนนี้ = เรทเก่าของชนิดนั้น → เรทใหม่ · มัดจำที่ตั้งเอง (เช่น 1,000) ไม่ถูกแตะ
+ *   มัดจำต้องไม่เกินราคา (money audit F12)
+ * ใช้ร่วมกันทั้ง mutation (updateSettings) และหน้าแอดมิน (รายการ "จะเปลี่ยน") — ห้ามมี 2 สูตร
  */
-export function repriceOf(db: Database, settings: ShopSettings, p: Product, opts: RepriceOpts = {}): { price_total: number; deposit_amount: number } | null {
+export function repriceOf(db: Database, from: ShopSettings, to: ShopSettings, p: Product, opts: RepriceOpts = {}): { price_total: number; deposit_amount: number } | null {
   if (p.is_stock || p.status !== 'open' || p.has_variants) return null;
-  if (p.cost_yuan == null && !p.wcf_type) return null;
   if ((opts.booked ?? bookedProductIds(db)).has(p.id)) return null;
-  const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
-  // มัดจำต้องไม่เกินราคา (money audit F12): เรทมัดจำ Mega สูงกว่าของถูกบางตัว → deposit >= price
-  // ทำให้ระบบมองเป็น "จ่ายเต็ม" → สิทธิ์ลดมัดจำของ Gold หายเงียบ + เก็บเกินราคาสินค้า
-  const wanted = opts.deposits && p.wcf_type ? depositFor(settings, p.wcf_type) : p.deposit_amount;
-  const deposit_amount = Math.min(price_total, wanted);
+  const followsPrice = p.cost_yuan != null && p.price_total === priceFromYuan(from, p.cost_yuan);
+  const price_total = followsPrice ? priceFromYuan(to, p.cost_yuan!) : p.price_total;
+  const followsDeposit = !!p.wcf_type && p.deposit_amount === Math.min(p.price_total, depositFor(from, p.wcf_type));
+  const deposit_amount = Math.min(price_total, followsDeposit ? depositFor(to, p.wcf_type) : p.deposit_amount);
   return { price_total, deposit_amount };
 }
 
-/** สินค้าที่ "จะเปลี่ยน" ถ้ากดอัปเดตราคาตามสูตร (ราคาไม่ตรงสูตร และยังไม่มีคนพรี) + สินค้าพรีที่เปิดอยู่แต่ถูกกันไว้เพราะมีคนพรีแล้ว */
-export function repriceTargets(db: Database, settings: ShopSettings, opts: Omit<RepriceOpts, 'booked'> = {}): {
+/** สินค้าที่ "จะเปลี่ยน" ถ้าบันทึกสูตร from → to + จำนวนพรีที่เปิดอยู่แต่ถูกกันไว้เพราะมีคนพรีแล้ว */
+export function repriceTargets(db: Database, from: ShopSettings, to: ShopSettings): {
   changed: { product: Product; next: { price_total: number; deposit_amount: number } }[];
   protectedCount: number;
 } {
@@ -81,7 +79,7 @@ export function repriceTargets(db: Database, settings: ShopSettings, opts: Omit<
   for (const p of db.products) {
     if (p.is_stock || p.status !== 'open') continue;
     if (booked.has(p.id)) { protectedCount++; continue; }
-    const next = repriceOf(db, settings, p, { ...opts, booked });
+    const next = repriceOf(db, from, to, p, { booked });
     if (next && (next.price_total !== p.price_total || next.deposit_amount !== p.deposit_amount)) changed.push({ product: p, next });
   }
   return { changed, protectedCount };

@@ -1642,11 +1642,11 @@ export const grantAllCampaignRewards = (userId: string) => (db: Database): Datab
  *  new price but bill the old one. Already-issued tickets keep their snapshot (never touched here); closed/
  *  shipping rounds and in-stock keep their price too. Variant products (no per-variant yuan stored) are
  *  left as-is. (user request 2026-07-07)
- *  กฎเจ้าของ 2026-10-13 (เปลี่ยนมาส่งรถ): สินค้าที่ "มีคนพรีแล้ว" แม้ยังเปิดรับอยู่ ห้ามแตะ — ด่านอยู่ใน repriceOf
- *  (ตั๋วออกแล้ว / ออเดอร์รอตรวจ / hold ค้าง) ใช้ตัวเดียวกับหน้าแอดมินที่โชว์รายการ "จะเปลี่ยน" */
-/** Re-price ONE product from the formula IF it's still an open pre-order with no bookings (else leave it). */
-const repricedFromFormula = (db: Database, settings: Database['settings'], p: Product, opts: RepriceOpts): Product => {
-  const next = repriceOf(db, settings, p, opts);
+ *  กฎเจ้าของ 2026-10-13 (เปลี่ยนมาส่งรถ): สินค้าที่ "มีคนพรีแล้ว" แม้ยังเปิดรับอยู่ ห้ามแตะ · ขยับเฉพาะราคา/มัดจำที่
+ *  "ตามสูตรเก่า" อยู่ (ราคาที่ตั้งเองไม่ถูกแตะ) — ด่านอยู่ใน repriceOf ใช้ตัวเดียวกับหน้าแอดมินที่โชว์รายการ "จะเปลี่ยน"
+ *  (ปุ่ม "อัปเดตราคาพรี" ถูกถอด 2026-10-13: ของเดิมถูกปรับครั้งเดียวในฐานข้อมูลด้วย v88) */
+const repricedFromFormula = (db: Database, from: Database['settings'], to: Database['settings'], p: Product, opts: RepriceOpts): Product => {
+  const next = repriceOf(db, from, to, p, opts);
   if (!next) return p;
   return next.price_total === p.price_total && next.deposit_amount === p.deposit_amount ? p : { ...p, ...next };
 };
@@ -1654,19 +1654,10 @@ const repricedFromFormula = (db: Database, settings: Database['settings'], p: Pr
 export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => {
   const settings = { ...db.settings, ...patch };
   const changed = (k: keyof Database['settings']) => patch[k] != null && patch[k] !== db.settings[k];
-  const priceKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'surcharge_from_yuan_1', 'surcharge_baht_1', 'surcharge_from_yuan_2', 'surcharge_baht_2'] as const;
-  const depositKeys = ['deposit_wcf', 'deposit_mega'] as const;
-  const deposits = depositKeys.some(changed); // มัดจำรายตัวถูกปรับตามเรทเฉพาะตอนแอดมินแก้เรทมัดจำจริง
-  if (!deposits && !priceKeys.some(changed)) return { ...db, settings };
+  const pricingKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'surcharge_from_yuan_1', 'surcharge_baht_1', 'surcharge_from_yuan_2', 'surcharge_baht_2', 'deposit_wcf', 'deposit_mega'] as const;
+  if (!pricingKeys.some(changed)) return { ...db, settings };
   const booked = bookedProductIds(db);
-  return { ...db, settings, products: db.products.map((p) => repricedFromFormula(db, settings, p, { deposits, booked })) };
-};
-
-/** Force re-apply the CURRENT formula to every open pre-order WITHOUT bookings (for products created under
- *  an older formula, where no value "changed" to trigger the auto re-price). แตะแค่ราคา — มัดจำคงเดิม */
-export const repriceOpenPreorders = () => (db: Database): Database => {
-  const booked = bookedProductIds(db);
-  return { ...db, products: db.products.map((p) => repricedFromFormula(db, db.settings, p, { booked })) };
+  return { ...db, settings, products: db.products.map((p) => repricedFromFormula(db, db.settings, settings, p, { booked })) };
 };
 
 export const upsertPaymentAccount = (a: PaymentAccount) => (db: Database): Database => ({ ...db, paymentAccounts: upsertById(db.paymentAccounts, a) });
