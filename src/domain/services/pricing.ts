@@ -1,14 +1,77 @@
-import type { Database, ShopSettings, WcfType } from '../entities';
+import type { Database, Product, ShopSettings, WcfType } from '../entities';
+import { isPendingHold } from './reservations';
+
+/**
+ * ค่าส่งเพิ่มตามช่วงต้นทุน (v87 · เจ้าของ 2026-10-13: เปลี่ยนมาส่งรถ เรทเดิมขาดทุน)
+ *   ต้นทุน < surcharge_from_yuan_1 → +0 (288–328 เท่าเดิม)
+ *   ต้นทุน ≥ surcharge_from_yuan_1 → +surcharge_baht_1 (ตั้งต้น 329 → +40)
+ *   ต้นทุน ≥ surcharge_from_yuan_2 → +surcharge_baht_2 (ตั้งต้น 500 → +80 · แทนขั้น 1 ไม่บวกซ้อน)
+ * เป็นก้อนคงที่ต่อชิ้น ไม่ใช่ต่อหยวน — ตั้งค่าได้ที่ /admin/payment
+ */
+export function shippingSurcharge(settings: ShopSettings, yuan: number): number {
+  const y1 = Number(settings.surcharge_from_yuan_1) || 0;
+  const y2 = Number(settings.surcharge_from_yuan_2) || 0;
+  const b1 = Math.max(0, Number(settings.surcharge_baht_1) || 0);
+  const b2 = Math.max(0, Number(settings.surcharge_baht_2) || 0);
+  if (y2 > 0 && yuan >= y2) return b2;
+  if (y1 > 0 && yuan >= y1) return b1;
+  return 0;
+}
 
 /**
  * Cost/price calculator (PRD intake). Selling price scales linearly with the
- * yuan cost: ฿ = baht_base + (yuan − yuan_base) × baht_per_yuan.
- * e.g. 288¥ → 1550฿ ; 328¥ → 1550 + 40×5 = 1750฿. Linear both directions.
+ * yuan cost: ฿ = baht_base + (yuan − yuan_base) × baht_per_yuan, แล้วบวกค่าส่งเพิ่มตามช่วง (shippingSurcharge).
+ * e.g. 288¥ → 1550฿ ; 328¥ → 1550 + 40×5 = 1750฿ ; 400¥ → 2110 + 40 = 2150฿ ; 500¥ → 2610 + 80 = 2690฿.
  * Constants live in ShopSettings so admin can adjust them as the rate moves.
  */
 export function priceFromYuan(settings: ShopSettings, yuan: number): number {
   // floor ที่ 0 — สูตรเชิงเส้นให้ค่าติดลบได้ถ้า yuan ต่ำกว่า yuan_base มากๆ (money audit F12)
-  return Math.max(0, Math.round(settings.baht_base + (yuan - settings.yuan_base) * settings.baht_per_yuan));
+  const linear = Math.max(0, Math.round(settings.baht_base + (yuan - settings.yuan_base) * settings.baht_per_yuan));
+  return linear + shippingSurcharge(settings, yuan);
+}
+
+/**
+ * "มีคนพรีแล้ว" ของ SKU นี้ (ทุกรอบ · ทุกทาง) — ด่านของกฎเจ้าของ 2026-10-13: สินค้าที่มีลูกค้าแล้วห้ามแตะราคา
+ *   · ตั๋วที่ออกแล้ว (กระดานหลักหรือรอบพิเศษ · รวมแอดมินมอบ)
+ *   · รายการในออเดอร์ที่ยัง "รอตรวจ" (จ่ายมัดจำแล้ว รอแอดมินอนุมัติ — ตั๋วยังไม่ออก แต่ลูกค้าตกลงราคานั้นแล้ว)
+ *   · hold ที่ค้างระหว่างซื้อ (กำลังอยู่หน้าจ่าย/ส่งสลิปแล้ว) — ราคาที่เขาเห็นต้องไม่ขยับใต้เท้า
+ */
+export function hasPreorderBookings(db: Database, productId: string): boolean {
+  if (db.tickets.some((t) => t.product_id === productId)) return true;
+  if (db.orders.some((o) => o.status === 'pending_approval' && (o.items ?? []).some((i) => i.product_id === productId))) return true;
+  return db.stockReservations.some((r) => r.product_id === productId && isPendingHold(r));
+}
+
+/**
+ * ราคา/มัดจำ "ตามสูตรปัจจุบัน" ของสินค้า 1 ตัว — หรือ null ถ้าสินค้านั้นห้ามแตะ:
+ *   ไม่ใช่พรี (is_stock) · รอบไม่ได้เปิดรับ (status ≠ open) · มีคนพรีแล้ว (hasPreorderBookings) · ไม่มีหยวน/ชนิดให้คิด
+ * ใช้ร่วมกันทั้ง mutation (repriceOpenPreorders/updateSettings) และหน้าแอดมิน (รายการ "จะเปลี่ยน") — ห้ามมี 2 สูตร
+ */
+export function repriceOf(db: Database, settings: ShopSettings, p: Product): { price_total: number; deposit_amount: number } | null {
+  if (p.is_stock || p.status !== 'open') return null;
+  if (p.cost_yuan == null && !p.wcf_type) return null;
+  if (hasPreorderBookings(db, p.id)) return null;
+  const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
+  // มัดจำต้องไม่เกินราคา (money audit F12): เรทมัดจำ Mega สูงกว่าของถูกบางตัว → deposit >= price
+  // ทำให้ระบบมองเป็น "จ่ายเต็ม" → สิทธิ์ลดมัดจำของ Gold หายเงียบ + เก็บเกินราคาสินค้า
+  const deposit_amount = p.wcf_type ? Math.min(price_total, depositFor(settings, p.wcf_type)) : p.deposit_amount;
+  return { price_total, deposit_amount };
+}
+
+/** สินค้าที่ "จะเปลี่ยน" ถ้ากดอัปเดตราคาตามสูตร (ราคาหรือมัดจำไม่ตรงสูตร และยังไม่มีคนพรี) + สินค้าพรีที่เปิดอยู่แต่ถูกกันไว้เพราะมีคนพรีแล้ว */
+export function repriceTargets(db: Database, settings: ShopSettings): {
+  changed: { product: Product; next: { price_total: number; deposit_amount: number } }[];
+  protectedCount: number;
+} {
+  const changed: { product: Product; next: { price_total: number; deposit_amount: number } }[] = [];
+  let protectedCount = 0;
+  for (const p of db.products) {
+    if (p.is_stock || p.status !== 'open') continue;
+    if (hasPreorderBookings(db, p.id)) { protectedCount++; continue; }
+    const next = repriceOf(db, settings, p);
+    if (next && (next.price_total !== p.price_total || next.deposit_amount !== p.deposit_amount)) changed.push({ product: p, next });
+  }
+  return { changed, protectedCount };
 }
 
 /** Default deposit for a product's tier — Mega WCF is higher than standard WCF. */

@@ -21,7 +21,8 @@
     "audit:roundC": "npx --yes tsx scripts/audit/roundC-audit.ts",
     "audit:roundD": "npx --yes tsx scripts/audit/roundD-audit.ts",
     "audit:roundE": "npx --yes tsx scripts/audit/roundE-audit.ts",
-    "audit:round1": "npx --yes tsx scripts/audit/round1-audit.ts"
+    "audit:round1": "npx --yes tsx scripts/audit/round1-audit.ts",
+    "audit:pricing": "npx --yes tsx scripts/audit/pricing-audit.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

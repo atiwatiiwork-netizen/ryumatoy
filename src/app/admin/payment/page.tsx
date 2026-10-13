@@ -8,7 +8,7 @@ import { uploadImage } from '@/lib/upload';
 import { Icon } from '@/components/Icon';
 import { Button, cx } from '@/components/ui';
 import { genId, upsertPaymentAccount, removePaymentAccount, updateSettings, repriceOpenPreorders } from '@/data/mutations';
-import { priceFromYuan, depositFor } from '@/domain/services/pricing';
+import { priceFromYuan, repriceTargets } from '@/domain/services/pricing';
 import { baht } from '@/lib/theme';
 
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
@@ -104,35 +104,44 @@ function PricingConfig() {
   const [perYuan, setPerYuan] = useState(String(s.baht_per_yuan));
   const [depWcf, setDepWcf] = useState(String(s.deposit_wcf));
   const [depMega, setDepMega] = useState(String(s.deposit_mega));
+  // ค่าส่งเพิ่มตามช่วงต้นทุน (v87 · เปลี่ยนมาส่งรถ): ตั้งแต่ X¥ ขึ้นไป +A · ตั้งแต่ Y¥ ขึ้นไป +B (แทนขั้นแรก)
+  const [sY1, setSY1] = useState(String(s.surcharge_from_yuan_1));
+  const [sB1, setSB1] = useState(String(s.surcharge_baht_1));
+  const [sY2, setSY2] = useState(String(s.surcharge_from_yuan_2));
+  const [sB2, setSB2] = useState(String(s.surcharge_baht_2));
+  const [showList, setShowList] = useState(false);
 
   // keep the form in sync with the real settings once they load from the DB (was showing stale seed)
   useEffect(() => {
     setYuanBase(String(s.yuan_base)); setBahtBase(String(s.baht_base)); setPerYuan(String(s.baht_per_yuan));
     setDepWcf(String(s.deposit_wcf)); setDepMega(String(s.deposit_mega));
-  }, [s.yuan_base, s.baht_base, s.baht_per_yuan, s.deposit_wcf, s.deposit_mega]);
+    setSY1(String(s.surcharge_from_yuan_1)); setSB1(String(s.surcharge_baht_1)); setSY2(String(s.surcharge_from_yuan_2)); setSB2(String(s.surcharge_baht_2));
+  }, [s.yuan_base, s.baht_base, s.baht_per_yuan, s.deposit_wcf, s.deposit_mega, s.surcharge_from_yuan_1, s.surcharge_baht_1, s.surcharge_from_yuan_2, s.surcharge_baht_2]);
 
-  const preview = { ...s, yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0 };
+  const preview = {
+    ...s, yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0,
+    surcharge_from_yuan_1: Number(sY1) || 0, surcharge_baht_1: Number(sB1) || 0, surcharge_from_yuan_2: Number(sY2) || 0, surcharge_baht_2: Number(sB2) || 0,
+  };
 
-  // open pre-orders whose stored price/deposit no longer match the CURRENT saved formula (created under an
-  // older formula) — the "อัปเดตราคาทั้งหมด" button re-applies the formula to them.
-  const stale = db.products.filter((p) => !p.is_stock && p.status === 'open' && (
-    (p.cost_yuan != null && priceFromYuan(s, p.cost_yuan) !== p.price_total) ||
-    (p.wcf_type != null && depositFor(s, p.wcf_type) !== p.deposit_amount)
-  ));
+  // สินค้าพรีที่เปิดรับและ "ยังไม่มีคนพรี" ซึ่งราคา/มัดจำไม่ตรงสูตรที่บันทึกไว้ → ปุ่ม "อัปเดตราคา" จะแก้เฉพาะชุดนี้
+  // ชุดที่มีคนพรีแล้ว (ตั๋ว/ออเดอร์รอตรวจ/hold) ถูกกันไว้ทั้งก้อน ตามกฎเจ้าของ 2026-10-13 — ตัวจำแนกเดียวกับ mutation (repriceTargets)
+  const { changed, protectedCount } = repriceTargets(db, s);
 
   const save = () => {
     dispatch(updateSettings({
       yuan_base: Number(yuanBase) || 0, baht_base: Number(bahtBase) || 0, baht_per_yuan: Number(perYuan) || 0,
+      surcharge_from_yuan_1: Number(sY1) || 0, surcharge_baht_1: Number(sB1) || 0, surcharge_from_yuan_2: Number(sY2) || 0, surcharge_baht_2: Number(sB2) || 0,
       deposit_wcf: Number(depWcf) || 0, deposit_mega: Number(depMega) || 0,
     }));
     flash('บันทึกสูตรราคาแล้ว');
   };
 
   const cell = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2.5 text-sm text-ink outline-none focus:border-accent';
+  const samples = [288, 328, 400, 500];
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-5">
       <div className="mb-1 font-bold">สูตรราคา &amp; มัดจำ</div>
-      <div className="mb-4 text-[12.5px] text-ink-faint">ราคา(฿) = ฐานบาท + (หยวน − ฐานหยวน) × บาทต่อหยวน · ปรับได้เมื่อเรทหยวนเปลี่ยน</div>
+      <div className="mb-4 text-[12.5px] text-ink-faint">ราคา(฿) = ฐานบาท + (หยวน − ฐานหยวน) × บาทต่อหยวน + ค่าส่งเพิ่มตามช่วงต้นทุน · ปรับได้เมื่อเรทหยวน/วิธีส่งเปลี่ยน</div>
       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">ฐานหยวน</span><input className={cell} inputMode="numeric" value={yuanBase} onChange={(e) => setYuanBase(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">= ฐานบาท</span><input className={cell} inputMode="numeric" value={bahtBase} onChange={(e) => setBahtBase(e.target.value)} /></label>
@@ -140,14 +149,39 @@ function PricingConfig() {
         <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">มัดจำ WCF</span><input className={cell} inputMode="numeric" value={depWcf} onChange={(e) => setDepWcf(e.target.value)} /></label>
         <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">มัดจำ Mega</span><input className={cell} inputMode="numeric" value={depMega} onChange={(e) => setDepMega(e.target.value)} /></label>
       </div>
+      <div className="mt-4 mb-1 text-[12.5px] font-semibold text-ink-muted">ค่าส่งเพิ่มตามช่วงต้นทุน (ส่งรถ)</div>
+      <div className="mb-2 text-[12px] text-ink-faint">ต่ำกว่าขั้น 1 = ราคาเดิม · ตั้งแต่ขั้น 1 ขึ้นไปบวกก้อนที่ 1 · ตั้งแต่ขั้น 2 ขึ้นไปบวกก้อนที่ 2 แทน (ไม่บวกซ้อน)</div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">ขั้น 1 ตั้งแต่ (¥)</span><input className={cell} inputMode="numeric" value={sY1} onChange={(e) => setSY1(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">บวก (฿)</span><input className={cell} inputMode="numeric" value={sB1} onChange={(e) => setSB1(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">ขั้น 2 ตั้งแต่ (¥)</span><input className={cell} inputMode="numeric" value={sY2} onChange={(e) => setSY2(e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-[12px] text-ink-muted">บวก (฿)</span><input className={cell} inputMode="numeric" value={sB2} onChange={(e) => setSB2(e.target.value)} /></label>
+      </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="text-[12.5px] text-ink-muted">ตัวอย่าง: 288¥ = {baht(priceFromYuan(preview, 288))} · 328¥ = {baht(priceFromYuan(preview, 328))}</span>
-        <button onClick={() => { dispatch(repriceOpenPreorders()); flash(`อัปเดตราคาพรีที่เปิดจองตามสูตรแล้ว`); }} className="ml-auto rounded-btn border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-bold text-ink-muted2">อัปเดตราคาพรีทั้งหมด{stale.length ? ` (${stale.length})` : ''}</button>
+        <span className="text-[12.5px] text-ink-muted">ตัวอย่าง: {samples.map((y, i) => <span key={y}>{i ? ' · ' : ''}{y}¥ = {baht(priceFromYuan(preview, y))}</span>)}</span>
+        <button onClick={() => { dispatch(repriceOpenPreorders()); flash(`อัปเดตราคาพรีที่ยังไม่มีคนพรีตามสูตรแล้ว`); }} className="ml-auto rounded-btn border border-subtle bg-surface-3 px-4 py-2.5 text-[13px] font-bold text-ink-muted2">อัปเดตราคาพรี (เฉพาะที่ยังไม่มีคนพรี){changed.length ? ` (${changed.length})` : ''}</button>
         <button onClick={save} className="rounded-btn bg-cta px-5 py-2.5 text-sm font-bold text-white">บันทึกสูตร</button>
       </div>
-      {stale.length > 0 && (
+      <div className="mt-2 text-[12px] text-ink-faint">
+        พรีที่เปิดรับอยู่: จะเปลี่ยน {changed.length} รายการ · กันไว้เพราะมีคนพรีแล้ว {protectedCount} รายการ (ไม่แตะ) · ใบที่ปิดรอบ/ตั๋วที่ออกแล้วไม่กระทบ
+      </div>
+      {changed.length > 0 && (
         <div className="mt-2 rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.1] px-3 py-2 text-[12px] text-[#fbbf24]">
-          มี {stale.length} รายการพรีที่เปิดจอง ราคายังไม่ตรงสูตรปัจจุบัน — กด “อัปเดตราคาพรีทั้งหมด” เพื่อปรับให้ตรง (ตั๋วที่ออกแล้วไม่กระทบ)
+          <div className="flex items-center justify-between gap-2">
+            <span>มี {changed.length} รายการพรีที่ยังไม่มีคนพรี ราคา/มัดจำยังไม่ตรงสูตรปัจจุบัน — กด “อัปเดตราคาพรี” เพื่อปรับ (ตรวจรายการก่อนกด: ราคาที่ตั้งเองทับไว้จะถูกแทนด้วยสูตร)</span>
+            <button type="button" onClick={() => setShowList((v) => !v)} className="shrink-0 rounded-md border border-[#d97706]/50 px-2 py-1 text-[11.5px] font-bold">{showList ? 'ซ่อน' : 'ดูรายการ'}</button>
+          </div>
+          {showList && (
+            <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto text-[12px] text-ink">
+              {changed.map(({ product: p, next }) => (
+                <li key={p.id} className="flex flex-wrap items-baseline gap-x-2 border-t border-[#d97706]/20 pt-1">
+                  <span className="min-w-0 flex-1 truncate">{p.series_name}{p.cost_yuan != null ? ` · ${p.cost_yuan}¥` : ''}</span>
+                  <span className="tabular-nums text-ink-muted">{baht(p.price_total)} → <b className="text-ink">{baht(next.price_total)}</b></span>
+                  {next.deposit_amount !== p.deposit_amount && <span className="tabular-nums text-ink-faint">มัดจำ {baht(p.deposit_amount)} → {baht(next.deposit_amount)}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>

@@ -22,7 +22,7 @@ function ticketNoAllocator(db: Database, startNos: TicketNoStart | undefined, wh
 }
 import { franchiseOf, canConvertToInStock, stockRemaining, inLiveAuction, isStockTwin, preorderOpenForOrder } from '../domain/services/catalog';
 import { pendingHeld, poolHeld, userTakenInBatch, BATCH_MAX_PER_USER, batchAvailable, availableFor, isPendingHold } from '../domain/services/reservations';
-import { depositFor, priceFromYuan, livePrice } from '../domain/services/pricing';
+import { depositFor, livePrice, repriceOf } from '../domain/services/pricing';
 import { couponMatchesProduct, couponDiscount, couponExpired, scopeAllows, orphanUsedGrants, isPointsCoupon, couponAlreadyGranted } from '../domain/services/coupons';
 import { unclaimedAwards } from '../domain/services/campaigns';
 import { isAdminUser } from '../domain/services/admins';
@@ -1641,30 +1641,29 @@ export const grantAllCampaignRewards = (userId: string) => (db: Database): Datab
  *  ticket issued at order time all read product.price_total/deposit_amount, so there's no way to show a
  *  new price but bill the old one. Already-issued tickets keep their snapshot (never touched here); closed/
  *  shipping rounds and in-stock keep their price too. Variant products (no per-variant yuan stored) are
- *  left as-is. (user request 2026-07-07) */
-/** Re-price ONE product from the formula IF it's still an open pre-order (else leave it). */
-const repricedFromFormula = (settings: Database['settings'], p: Product): Product => {
-  if (p.is_stock || p.status !== 'open') return p; // only products still taking bookings re-price
-  const price_total = p.cost_yuan != null ? priceFromYuan(settings, p.cost_yuan) : p.price_total;
-  // มัดจำต้องไม่เกินราคา (money audit F12): เรทมัดจำ Mega สูงกว่าของถูกบางตัว → deposit >= price
-  // ทำให้ระบบมองเป็น "จ่ายเต็ม" → สิทธิ์ลดมัดจำของ Gold หายเงียบ + เก็บเกินราคาสินค้า
-  const deposit_amount = p.wcf_type ? Math.min(price_total, depositFor(settings, p.wcf_type)) : p.deposit_amount;
-  return price_total === p.price_total && deposit_amount === p.deposit_amount ? p : { ...p, price_total, deposit_amount };
+ *  left as-is. (user request 2026-07-07)
+ *  กฎเจ้าของ 2026-10-13 (เปลี่ยนมาส่งรถ): สินค้าที่ "มีคนพรีแล้ว" แม้ยังเปิดรับอยู่ ห้ามแตะ — ด่านอยู่ใน repriceOf
+ *  (ตั๋วออกแล้ว / ออเดอร์รอตรวจ / hold ค้าง) ใช้ตัวเดียวกับหน้าแอดมินที่โชว์รายการ "จะเปลี่ยน" */
+/** Re-price ONE product from the formula IF it's still an open pre-order with no bookings (else leave it). */
+const repricedFromFormula = (db: Database, settings: Database['settings'], p: Product): Product => {
+  const next = repriceOf(db, settings, p);
+  if (!next) return p;
+  return next.price_total === p.price_total && next.deposit_amount === p.deposit_amount ? p : { ...p, ...next };
 };
 
 export const updateSettings = (patch: Partial<Database['settings']>) => (db: Database): Database => {
   const settings = { ...db.settings, ...patch };
-  const priceKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'deposit_wcf', 'deposit_mega'] as const;
+  const priceKeys = ['yuan_base', 'baht_base', 'baht_per_yuan', 'surcharge_from_yuan_1', 'surcharge_baht_1', 'surcharge_from_yuan_2', 'surcharge_baht_2', 'deposit_wcf', 'deposit_mega'] as const;
   const pricingChanged = priceKeys.some((k) => patch[k] != null && patch[k] !== db.settings[k]);
   if (!pricingChanged) return { ...db, settings };
-  return { ...db, settings, products: db.products.map((p) => repricedFromFormula(settings, p)) };
+  return { ...db, settings, products: db.products.map((p) => repricedFromFormula(db, settings, p)) };
 };
 
-/** Force re-apply the CURRENT formula to every open pre-order (for products created under an older
- *  formula, where no value "changed" to trigger the auto re-price). */
+/** Force re-apply the CURRENT formula to every open pre-order WITHOUT bookings (for products created under
+ *  an older formula, where no value "changed" to trigger the auto re-price). */
 export const repriceOpenPreorders = () => (db: Database): Database => ({
   ...db,
-  products: db.products.map((p) => repricedFromFormula(db.settings, p)),
+  products: db.products.map((p) => repricedFromFormula(db, db.settings, p)),
 });
 
 export const upsertPaymentAccount = (a: PaymentAccount) => (db: Database): Database => ({ ...db, paymentAccounts: upsertById(db.paymentAccounts, a) });

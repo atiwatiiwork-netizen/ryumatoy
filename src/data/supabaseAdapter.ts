@@ -300,6 +300,11 @@ export const supabaseAdapter: PersistenceAdapter = {
             yuan_base: Number(s.yuan_base ?? SEED_DATABASE.settings.yuan_base),
             baht_base: Number(s.baht_base ?? SEED_DATABASE.settings.baht_base),
             baht_per_yuan: Number(s.baht_per_yuan ?? SEED_DATABASE.settings.baht_per_yuan),
+            // ค่าส่งเพิ่มตามช่วงต้นทุน (v87) — คอลัมน์ยังไม่มีก่อนรัน migration → ใช้ค่าตั้งต้น (329→+40 · 500→+80)
+            surcharge_from_yuan_1: Number(s.surcharge_from_yuan_1 ?? SEED_DATABASE.settings.surcharge_from_yuan_1),
+            surcharge_baht_1: Number(s.surcharge_baht_1 ?? SEED_DATABASE.settings.surcharge_baht_1),
+            surcharge_from_yuan_2: Number(s.surcharge_from_yuan_2 ?? SEED_DATABASE.settings.surcharge_from_yuan_2),
+            surcharge_baht_2: Number(s.surcharge_baht_2 ?? SEED_DATABASE.settings.surcharge_baht_2),
             deposit_wcf: Number(s.deposit_wcf ?? SEED_DATABASE.settings.deposit_wcf),
             deposit_mega: Number(s.deposit_mega ?? SEED_DATABASE.settings.deposit_mega),
             eta_min_days: Number(s.eta_min_days ?? SEED_DATABASE.settings.eta_min_days),
@@ -419,7 +424,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         // → ส่ง points_* เฉพาะตอนที่มันเปลี่ยนจริง (แก้จากหน้า /admin/points ซึ่งต้องรัน v66 ก่อนอยู่แล้ว)
         const row: Row = { id: 'default', ...next.settings };
         const b = base.settings as unknown as Row;
-        for (const k of Object.keys(row)) if (k.startsWith('points_') && JSON.stringify(row[k]) === JSON.stringify(b[k])) delete row[k];
+        // v87: surcharge_* แบบเดียวกัน — ก่อนรัน v87 แก้บัญชี/แบนเนอร์ต้องยังเซฟได้ (ส่งเฉพาะตอนแก้สูตรจาก /admin/payment)
+        for (const k of Object.keys(row)) if ((k.startsWith('points_') || k.startsWith('surcharge_')) && JSON.stringify(row[k]) === JSON.stringify(b[k])) delete row[k];
         const { error } = await sb.from('shop_settings').upsert(row);
         if (error) throw error;
       });

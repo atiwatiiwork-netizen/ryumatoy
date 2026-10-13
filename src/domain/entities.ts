@@ -581,6 +581,13 @@ export interface ShopSettings {
   yuan_base: number; // 288
   baht_base: number; // 1550
   baht_per_yuan: number; // 5
+  // ค่าส่งเพิ่มตามช่วงต้นทุน (v87 · เปลี่ยนมาส่งรถ 2026-10-13): บวกทับสูตรเส้นตรงเป็นก้อนคงที่ ไม่ใช่ต่อหยวน
+  //   ต้นทุน ≥ surcharge_from_yuan_1 → +surcharge_baht_1 · ต้นทุน ≥ surcharge_from_yuan_2 → +surcharge_baht_2 (แทนขั้น 1 ไม่บวกซ้อน)
+  //   ตั้งต้น: 288–328 เท่าเดิม · ตั้งแต่ 329 +40 · ตั้งแต่ 500 +80 — ใช้เฉพาะสินค้าที่ "ยังไม่มีคนพรี" (ดู repriceTargets)
+  surcharge_from_yuan_1: number; // 329
+  surcharge_baht_1: number; // 40
+  surcharge_from_yuan_2: number; // 500
+  surcharge_baht_2: number; // 80
   deposit_wcf: number; // 300
   deposit_mega: number; // 500
   eta_min_days: number; // 7  — ETA window after leaving China
