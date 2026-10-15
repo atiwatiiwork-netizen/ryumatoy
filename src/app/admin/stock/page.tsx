@@ -1693,7 +1693,7 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
               {payBadge(t)}
               {tag && <span className="rounded bg-white/[0.07] px-1.5 py-0.5 text-[10px] font-bold text-ink-muted2">{tag}</span>}
             </span>
-            <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unitOf(t))}</b> · มัดจำ {t.deposit_paid > 0 ? <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> : <b className="text-[#f87171]">฿0 ยังไม่จ่าย</b>} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
+            <span className="text-ink-muted">×{t.qty} · <b className="text-ink">{baht(unitOf(t))}</b> · มัดจำ {t.deposit_paid > 0 ? <b className="text-[#4ade80]">{baht(t.deposit_paid)}</b> : (t.status === 'shipped' || ticketPaidFull(t)) ? <b className="text-ink-muted2">฿0 (จ่ายครบแล้ว)</b> : <b className="text-[#f87171]">฿0 ยังไม่จ่าย</b>} · <span className="font-mono text-[11px] text-ink-faint">{t.ticket_no}</span> · {fmtDate(t.created_at)}</span>
           </button>
         );
         return (
