@@ -900,6 +900,23 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
   // เรียงตามลำดับรอบ เก่า→ใหม่ (รอบ 1 ขึ้นก่อน) — ตรงกับประวัติตั๋ว และของลอตแรกมักถึงก่อน
   // (เคส Kimimaro 2026-09-21: รอบเปิดขายเคยอยู่บนสุด เจ้าของกดถึงไทยรอบ 2 โดยไม่เห็นว่ารอบ 1 ต้องกดแยก)
   const lotsOrdered = [...batches].sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  // หลายลอต → ไม่กองซ้อนกัน (เจ้าของ 2026-10-15 "สะเปะสะปะ"): dropdown เลือกลอต แล้วโชว์ทีละลอต · ค่าเริ่ม = รอบที่เปิดขายอยู่ ไม่งั้นรอบล่าสุด
+  const lotStage = (b: ProductBatch) => {
+    const ts = db.tickets.filter((t) => t.batch_id === b.id);
+    if (b.status === 'open' && batchRemaining(db, b.id, b.stock_qty) > 0) return 'เปิดขาย';
+    if (ts.length > 0 && ts.every((t) => t.status === 'shipped')) return 'ส่งครบแล้ว';
+    const live = ts.find((t) => t.status !== 'shipped');
+    const st = live?.product_status ?? (b.status === 'closed' ? 'closed' : p?.status ?? 'open');
+    return ({ open: 'รอผลิต', production: 'ผลิต', shipping: 'เดินทาง', arrived: 'ถึงไทย', delivered: 'ส่งมอบ', closed: 'ปิดรอบ' } as Record<string, string>)[st] ?? st;
+  };
+  const lotOptions = [
+    ...(showNormal ? [{ id: 'normal', label: '🧵 พรีปกติ · กระดานหลัก' }] : []),
+    ...lotsOrdered.map((b, i) => ({ id: b.id, label: `⚡ รอบ ${i + 1}${b.label ? ` · ${b.label}` : ''} · ${lotStage(b)} · ขาย ${batchSoldQty(db, b.id)}/${b.stock_qty}` })),
+  ];
+  const [lotPick, setLotPick] = useState<string | null>(null);
+  const defaultLot = lotsOrdered.find((b) => b.status === 'open')?.id ?? lotsOrdered[lotsOrdered.length - 1]?.id ?? 'normal';
+  const curLot = lotPick && lotOptions.some((o) => o.id === lotPick) ? lotPick : defaultLot;
+  const pickLots = lotOptions.length > 1;
   return (
     <div className="rounded-2xl border border-subtle bg-surface-2 p-3.5">
       {/* หัวการ์ด = ตัวสินค้า (SKU) — สรุปรวมทุกลอต */}
@@ -925,8 +942,17 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
           </div>
         </div>
       </div>
+      {pickLots && (
+        <label className="mb-2 flex items-center gap-2 text-[11.5px] font-bold text-ink-muted">
+          <span className="shrink-0">ลอต</span>
+          <select value={curLot} onChange={(e) => setLotPick(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-[#d4af37]/45 bg-[#d4af37]/[0.08] px-2.5 py-1.5 text-[12.5px] font-bold text-[#f1d27a] outline-none">
+            {lotOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <span className="shrink-0 font-normal text-ink-faint">{lotOptions.findIndex((o) => o.id === curLot) + 1}/{lotOptions.length}</span>
+        </label>
+      )}
       <div className="flex flex-col gap-2">
-        {showNormal && p && (
+        {showNormal && p && (!pickLots || curLot === 'normal') && (
           <div className="rounded-xl border border-subtle bg-surface-3/40 px-3.5 pb-1 pt-2.5">
             <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-bold">
               <span className="rounded-md bg-[#d4af37]/15 px-1.5 py-0.5 text-[#f1d27a]">🧵 พรีปกติ · กระดานหลัก</span>
@@ -936,7 +962,7 @@ function SkuGroup({ productId, batches, stage }: { productId: string; batches: P
             <StatusRow product={p} />
           </div>
         )}
-        {lotsOrdered.map((b) => <RoundRow key={b.id} batch={b} readOnly={b.status !== 'open'} inGroup />)}
+        {lotsOrdered.filter((b) => !pickLots || b.id === curLot).map((b) => <RoundRow key={b.id} batch={b} readOnly={b.status !== 'open'} inGroup />)}
       </div>
     </div>
   );
