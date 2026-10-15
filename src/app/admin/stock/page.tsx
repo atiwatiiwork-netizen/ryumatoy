@@ -1686,6 +1686,14 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
           for (const t of rows) (((t.remaining_amount ?? 0) - (t.remaining_paid ?? 0)) <= 0 ? done++ : owe++);
           return { done, owe };
         };
+        // แยก "ชำระแล้ว" ออกเป็นอีกกรอบ สีเขียวกระพริบ (เจ้าของ 2026-10-15) — ใบที่ค้างอยู่ด้านบน จะได้เห็นว่าเหลือใครต้องทวง
+        const isPaid = (t: PreorderTicket) => t.status === 'shipped' || ((t.remaining_amount ?? 0) - (t.remaining_paid ?? 0)) <= 0;
+        const PaidBox = ({ rows, tagOf }: { rows: PreorderTicket[]; tagOf?: (t: PreorderTicket) => string | undefined }) => rows.length === 0 ? null : (
+          <div className="mt-1.5 rounded-lg border border-[#16a34a]/60 bg-[#16a34a]/[0.08] p-1.5 animate-pulseGreen">
+            <div className="mb-0.5 px-1 text-[11px] font-extrabold text-[#4ade80]">✓ ชำระแล้ว ({rows.length} ใบ{rows.some((t) => t.status === 'shipped') ? ' · รวมที่ส่ง/จบงานแล้ว' : ''})</div>
+            <div className="flex flex-col gap-1">{rows.map((t) => <Row key={t.id} t={t} tag={tagOf?.(t)} />)}</div>
+          </div>
+        );
         const Row = ({ t, tag }: { t: PreorderTicket; tag?: string }) => (
           <button key={t.id} onClick={() => setPeek(t)} className="flex flex-wrap items-center justify-between gap-1 rounded-lg px-1 py-1 text-left text-[13px] hover:bg-white/[0.04]">
             <span className="flex items-center gap-2">
@@ -1712,7 +1720,8 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
                 {grantedRows.length > 0 && (
                   <div>
                     <div className="mb-1 text-[11px] font-bold text-[#c4b5fd]">🎁 มอบตั๋ว ({grantedRows.length} ใบ · เรียงตามวันที่)</div>
-                    <div className="flex flex-col gap-1">{grantedRows.map((t) => <Row key={t.id} t={t} tag={roundsAll.length > 1 ? `รอบ ${noOf(t.batch_id!)}` : undefined} />)}</div>
+                    <div className="flex flex-col gap-1">{grantedRows.filter((t) => !isPaid(t)).map((t) => <Row key={t.id} t={t} tag={roundsAll.length > 1 ? `รอบ ${noOf(t.batch_id!)}` : undefined} />)}</div>
+                    <PaidBox rows={grantedRows.filter(isPaid)} tagOf={(t) => (roundsAll.length > 1 ? `รอบ ${noOf(t.batch_id!)}` : undefined)} />
                   </div>
                 )}
                 {buyGroups.map((g) => {
@@ -1724,7 +1733,8 @@ function RoundRow({ batch: b, readOnly, inGroup }: { batch: ProductBatch; readOn
                         {c.done > 0 && <span className="rounded bg-[#16a34a]/20 px-1.5 py-0.5 text-[10px] text-[#4ade80]">จ่ายครบ {c.done}</span>}
                         {c.owe > 0 && <span className="rounded bg-[#b91c1c]/20 px-1.5 py-0.5 text-[10px] text-[#f87171]">เหลือ {c.owe}</span>}
                       </div>
-                      <div className="flex flex-col gap-1">{g.rows.map((t) => <Row key={t.id} t={t} />)}</div>
+                      <div className="flex flex-col gap-1">{g.rows.filter((t) => !isPaid(t)).map((t) => <Row key={t.id} t={t} />)}</div>
+                      <PaidBox rows={g.rows.filter(isPaid)} />
                     </div>
                   );
                 })}

@@ -55,6 +55,10 @@ const config: Config = {
         stripe: 'repeating-linear-gradient(135deg, #1b1413 0 10px, #150f0e 10px 20px)',
       },
       keyframes: {
+        pulseGreen: {
+          '0%,100%': { boxShadow: '0 0 0 0 rgba(22,163,74,.55)', borderColor: 'rgba(74,222,128,.9)' },
+          '50%': { boxShadow: '0 0 0 7px rgba(22,163,74,0)', borderColor: 'rgba(22,163,74,.35)' },
+        },
         pulseRed: {
           '0%,100%': { boxShadow: '0 0 0 0 rgba(220,38,38,.45)' },
           '50%': { boxShadow: '0 0 0 8px rgba(220,38,38,0)' },
@@ -151,6 +155,7 @@ const config: Config = {
         runePulse: "runePulse 2.2s ease-in-out infinite",
         pulseGlow: 'pulseGlow 1.8s ease-in-out infinite',
         pulseRed: 'pulseRed 2.2s infinite',
+        pulseGreen: 'pulseGreen 2s infinite',
         couponShine: 'couponShine 2.6s ease-in-out infinite',
         twinkle: 'twinkle 1.9s ease-in-out infinite',
         couponPop: 'couponPop .55s cubic-bezier(.2,.9,.3,1.25)',
