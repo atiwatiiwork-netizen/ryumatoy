@@ -13,7 +13,7 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, pinLabelWidth, memberProducts, lineToneCounts, lineStates, productsInVisibleLines, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
+  cleanLineRow, cleanMember, layoutPins, lineSetPlan, pinLabelWidth, memberProducts, lineToneCounts, lineStates, productsInVisibleLines, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
 import {
@@ -481,6 +481,25 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     ok('I16 ไม่มี variants → ตาราง variants ไม่ถูกแตะ (อ้างอิงเดิม)', r1.variants === db.variants);
     ok('I14 ไลน์ที่ยังไม่มีตัวที่มองเห็น → หลังลงสินค้า "เปิดให้ลูกค้า" ทันที (push ต้องตัดสินจากสภาพหลังเซฟ ไม่ใช่ตอนวาดหน้า)',
       !lineOpenToCustomers(dark, dark.productLines[0]) && lineOpenToCustomers(lit, lit.productLines[0]));
+  }
+
+  // ── 16. พรีทั้งเซต / x/y ตัว (เจ้าของ 2026-10-16 รอบ 1) ───────────────────────────────────────────
+  {
+    const db = setLinesPublic(true)(base({
+      products: [P('a'), P('b'), P('c', { has_variants: true }), P('d', { status: 'production' })],
+      tickets: [T('t1', 'a', 'uA')],
+    }));
+    const line = L([M('ma', ['a']), M('mb', ['b']), M('mc', ['c']), M('md', ['d']), M('me', [], { manual_state: 'sourcing' })]);
+    const shown = lineStates(db, line, { uid: 'uA' }).filter((s) => s.state.visible);
+    const plan = lineSetPlan(shown, (pid) => pid === 'b');
+    ok('U1 นับ: พรีแล้ว 1/5 · ยังขาด 4 · ใส่ได้ทีเดียวเฉพาะพรีเปิดไม่มีแบบ ที่ยังไม่อยู่ในตะกร้า (= 0 เพราะ b อยู่ในตะกร้า) · b นับ inCart · c (มีแบบ) d (ผลิต) e (หาของ) = skipped',
+      plan.mine === 1 && plan.total === 5 && plan.missing.length === 4 && plan.addable.length === 0 && plan.inCart === 1 && plan.skipped.join() === 'mc,md,me', plan);
+    const plan2 = lineSetPlan(shown, () => false);
+    ok('U2 ตะกร้าว่าง: ใส่ได้ 1 (b) · มัดจำรวม = ของ b', plan2.addable.map((a) => a.product.id).join() === 'b' && plan2.deposit === 1000, plan2);
+    const none = lineSetPlan(lineStates(db, line, { uid: 'uB' }).filter((s) => s.state.visible), () => false);
+    ok('U3 คนที่ยังไม่พรีเลย: mine 0 · ใส่ได้ a+b · มัดจำ 2000', none.mine === 0 && none.addable.map((a) => a.product.id).join() === 'a,b' && none.deposit === 2000, none);
+    const full = lineSetPlan(lineStates(setLinesPublic(true)(base({ products: [P('a'), P('b')], tickets: [T('t1', 'a', 'uA'), T('t2', 'b', 'uA')] })), L([M('ma', ['a']), M('mb', ['b'])]), { uid: 'uA' }), () => false);
+    ok('U4 ครบเซต: mine = total · ไม่มีอะไรให้ใส่', full.mine === 2 && full.total === 2 && full.missing.length === 0 && full.addable.length === 0);
   }
 
   console.log(`\nlines-audit: ${pass} passed, ${fail} failed`);

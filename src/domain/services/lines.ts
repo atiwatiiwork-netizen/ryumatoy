@@ -230,6 +230,34 @@ export function lineToneCounts(states: { state: LineMemberState }[]): Record<Exc
   return c;
 }
 
+/** แผน "พรีทั้งเซต" (เจ้าของ 2026-10-16 รอบ 1): นับตัวที่พรีแล้ว / ยังขาด / ใส่ตะกร้าได้ทีเดียว
+ *  ใส่ได้ทีเดียว = พรีกระดานหลักที่เปิดอยู่ ไม่มีแบบ A/B ยังไม่พรี ยังไม่อยู่ในตะกร้า (กติกาเดียวกับปุ่ม "พรีเลย" ในแถว)
+ *  ตัวที่ใส่ไม่ได้ (มีแบบ/รอบพิเศษ/ปิดพรี) อยู่ใน skipped — ปุ่มบอกจำนวนที่ใส่ได้จริงเท่านั้น */
+export interface LineSetPlan {
+  mine: number; total: number;
+  missing: { name: string; member: LineMember; state: LineMemberState }[];
+  addable: { name: string; product: Product }[];
+  inCart: number;
+  skipped: string[];
+  deposit: number; // มัดจำรวมของตัวที่ใส่ได้ (ตัวเลขบนปุ่ม)
+  missingDeposit: number; // มัดจำรวมของทุกตัวที่ยังขาดที่มีสินค้า (ตัวเลขในการ์ด x/y)
+}
+export function lineSetPlan(shown: { member: LineMember; state: LineMemberState }[], inCart: (productId: string) => boolean): LineSetPlan {
+  const vis = shown.filter((s) => s.state.visible);
+  const missing = vis.filter((s) => !s.state.mine).map((s) => ({ name: s.member.name.trim() || '?', member: s.member, state: s.state }));
+  const addable: LineSetPlan['addable'] = [];
+  const skipped: string[] = [];
+  let inCartN = 0;
+  for (const m of missing) {
+    const p = m.state.product;
+    const quick = !!p && !p.has_variants && m.state.kind === 'preorder';
+    if (!quick) { skipped.push(m.name); continue; }
+    if (inCart(p!.id)) { inCartN++; continue; }
+    addable.push({ name: m.name, product: p! });
+  }
+  return { mine: vis.length - missing.length, total: vis.length, missing, addable, inCart: inCartN, skipped, deposit: addable.reduce((a, x) => a + x.product.deposit_amount, 0), missingDeposit: missing.reduce((a, m) => a + (m.state.product?.deposit_amount ?? 0), 0) };
+}
+
 /** รายการที่ต้องถามของเหลือจริงจาก server (ของในมือ + รอบพิเศษที่เปิด) — ไม่ซ้ำ ·
  *  ข้ามของที่ติดประมูล (ไม่มีวันขึ้นป้ายซื้อได้ ถามไปเปลืองโควตา) */
 export function liveTargetsForLine(db: Database, line: ProductLine): { productId: string; batchId?: string }[] {

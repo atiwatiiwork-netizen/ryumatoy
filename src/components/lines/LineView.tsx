@@ -11,8 +11,9 @@ import { myPendingHold } from '@/domain/services/reservations';
 import { useLiveStockMap, liveKey } from '@/lib/liveStockMap';
 import { isAdminUser } from '@/domain/services/admins';
 import {
-  lineStates, liveTargetsForLine, linesPublicEnabled, lineToneCounts, memberThumb, hasPin, LINE_LIVE_MAX, type LineMemberState,
+  lineStates, liveTargetsForLine, linesPublicEnabled, lineToneCounts, memberThumb, hasPin, lineSetPlan, LINE_LIVE_MAX, type LineMemberState,
 } from '@/domain/services/lines';
+import { baht } from '@/lib/theme';
 import type { LineMember, ProductLine } from '@/domain/entities';
 import { cx } from '@/components/ui';
 import { LinePoster, type PosterPin } from './LinePoster';
@@ -95,12 +96,55 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
         </>
       )}
 
+      <SetPanel line={line} shown={shown} preview={mode === 'preview'} />
+
       <div className="mt-3 flex flex-col gap-2">
         {shown.map((s) => (
           <MemberRow key={s.member.id} member={s.member} no={s.no} state={s.state} thumb={memberThumb(db, s.member)} hi={hi === s.member.id} preview={mode === 'preview'} />
         ))}
         {shown.length === 0 && <div className="rounded-card border border-subtle bg-surface-2 p-6 text-center text-[13px] text-ink-faint">ยังไม่มีรายการในไลน์นี้</div>}
       </div>
+    </div>
+  );
+}
+
+/** ความคืบหน้า "ชื่อไลน์ x/y ตัว" + ปุ่ม "พรีทั้งเซต / พรีที่เหลือ" (เจ้าของ 2026-10-16 รอบ 1)
+ *  · โชว์เมื่อไลน์มี ≥2 ตัว และมีอะไรให้ทำ (ใส่ตะกร้าได้ / อยู่ในตะกร้า / พรีไปแล้วบางส่วน)
+ *  · ใส่ตะกร้าเฉพาะตัวที่ใส่ได้ทีเดียว (lineSetPlan) ตัวที่ต้องเลือกแบบ/รอบพิเศษ บอกใน toast ให้ไปกดที่แถว
+ *  · พรีวิวในแอดมิน: หน้าตาเหมือนจริง กดไม่ได้ */
+function SetPanel({ line, shown, preview }: { line: ProductLine; shown: { member: LineMember; state: LineMemberState }[]; preview: boolean }) {
+  const cart = useCart();
+  const { flash } = useToast();
+  const plan = lineSetPlan(shown, (pid) => cart.lines.some((l) => l.productId === pid && !l.batchId && !l.variantId));
+  if (plan.total < 2) return null;
+  if (plan.addable.length === 0 && plan.inCart === 0 && plan.mine === 0) return null;
+  const name = line.name.trim() || 'ไลน์นี้';
+  const addAll = () => {
+    if (preview) return;
+    for (const a of plan.addable) cart.add({ productId: a.product.id, depositEach: a.product.deposit_amount, priceEach: a.product.price_total });
+    flash(`ใส่ตะกร้า ${plan.addable.length} ตัวแล้ว ✓ ไปชำระที่ตะกร้า${plan.skipped.length ? ` · ${plan.skipped.join(' · ')} กดพรีที่แถวด้านล่าง (ต้องเลือกแบบ/รอบ)` : ''}`);
+  };
+  const complete = plan.mine > 0 && plan.missing.length === 0;
+  return (
+    <div className="mt-3">
+      {plan.mine > 0 && (
+        <div className="mb-2 rounded-xl border border-[#16a34a]/40 bg-gradient-to-br from-[#0f2416] to-[#121a14] p-3">
+          <div className="flex items-center gap-2 text-[14px] font-extrabold">🧩 {name} {plan.mine}/{plan.total} ตัว{complete && <span className="ml-auto text-[12px] text-[#4ade80]">ครบเซตแล้ว 🎉</span>}</div>
+          <div className="mt-2 flex gap-1.5">
+            {shown.filter((s) => s.state.visible).map((s) => <i key={s.member.id} className={cx('h-[7px] flex-1 rounded-full', s.state.mine ? 'bg-[#4ade80]' : 'bg-white/[0.12]')} />)}
+          </div>
+          {!complete && (
+            <div className="mt-1.5 text-[12px] text-ink-muted2">ยังขาด <b className="text-ink">{plan.missing.map((m) => m.name).join(' · ')}</b>{plan.missingDeposit > 0 && <> · มัดจำรวม <b className="text-ink">{baht(plan.missingDeposit)}</b></>}</div>
+          )}
+        </div>
+      )}
+      {plan.addable.length > 0 ? (
+        <button onClick={addAll} className="w-full animate-pulseRed rounded-xl bg-cta px-4 py-3 text-[14.5px] font-extrabold text-white shadow-cta">
+          {plan.mine > 0 ? `พรีที่เหลือทั้ง ${plan.addable.length} ตัว` : `พรีทั้งเซต ${plan.addable.length} ตัว`} · มัดจำ {baht(plan.deposit)}
+        </button>
+      ) : plan.inCart > 0 && !preview ? (
+        <Link href="/cart" className="block w-full rounded-xl border border-[#16a34a]/50 bg-[#16a34a]/15 px-4 py-3 text-center text-[14px] font-extrabold text-[#4ade80]">อยู่ในตะกร้าแล้ว {plan.inCart} ตัว ✓ ไปชำระ</Link>
+      ) : null}
     </div>
   );
 }
@@ -140,10 +184,10 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
             ? <>{state.detail.slice(0, -'Pre-Order'.length)}<span className={cx('font-extrabold text-[#60a5fa]', !state.mine && 'animate-pulse')}>Pre-Order</span></>
             : state.detail}
         </div>
-        {/* พรีไปแล้ว = ป้ายเขียวชัดๆ (เจ้าของ 2026-10-08: ต้องเตือนกันสั่งซ้ำ) · รวมออเดอร์ที่สลิปยังรอตรวจ */}
+        {/* พรีไปแล้ว = ป้ายเขียวสั้นๆ "พรีแล้ว ✓" (เจ้าของ 2026-10-08 ต้องเตือนกันสั่งซ้ำ · 2026-10-16 ตัด "คุณมีตัวนี้แล้ว" ออก) · รวมออเดอร์ที่สลิปยังรอตรวจ */}
         {state.mine && (
           <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#16a34a]/20 px-2 py-0.5 text-[11px] font-extrabold text-[#4ade80]">
-            {state.pinLabel.startsWith('ซื้อ') ? 'ซื้อแล้ว ✓' : 'พรีแล้ว ✓'} <span className="font-semibold text-[#4ade80]/80">· คุณมีตัวนี้แล้ว</span>
+            {state.pinLabel.startsWith('ซื้อ') ? 'ซื้อแล้ว ✓' : 'พรีแล้ว ✓'}
           </span>
         )}
       </div>
