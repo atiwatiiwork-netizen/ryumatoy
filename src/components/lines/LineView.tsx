@@ -137,7 +137,7 @@ function SetPanel({ line, shown, preview }: { line: ProductLine; shown: { member
         <div className="mb-2 rounded-xl border border-[#16a34a]/40 bg-gradient-to-br from-[#0f2416] to-[#121a14] p-3">
           <div className="flex items-center gap-2 text-[14px] font-extrabold">🧩 {name} {plan.mine}/{plan.total} ตัว{complete && <span className="ml-auto text-[12px] text-[#4ade80]">ครบเซตแล้ว 🎉</span>}</div>
           <div className="mt-2 flex gap-1.5">
-            {shown.filter((s) => s.state.visible).map((s) => <i key={s.member.id} className={cx('h-[7px] flex-1 rounded-full', s.state.mine ? 'bg-[#4ade80]' : 'bg-white/[0.12]')} />)}
+            {plan.tracked.map((t) => <i key={t.id} className={cx('h-[7px] flex-1 rounded-full', t.mine ? 'bg-[#4ade80]' : 'bg-white/[0.12]')} />)}
           </div>
           {!complete && (
             <div className="mt-1.5 text-[12px] text-ink-muted2">ยังขาด <b className="text-ink">{plan.missing.map((m) => m.name).join(' · ')}</b>{plan.missingDeposit > 0 && <> · มัดจำรวม <b className="text-ink">{baht(plan.missingDeposit)}</b></>}</div>
@@ -161,7 +161,8 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
   const { flash } = useToast();
   const meId = useCurrentUserId();
   const { checking, ensure } = useLiveStock();
-  const strong = state.kind === 'stock' || state.kind === 'special' || state.kind === 'preorder';
+  // ปุ่มแดงกระพริบเฉพาะปุ่มที่สั่งได้จริง — รอบพิเศษที่ยังไม่ผ่านด่าน ("ดูเงื่อนไข") เป็นปุ่มเงียบ
+  const strong = (state.kind === 'stock' || state.kind === 'special' || state.kind === 'preorder') && (state.cta?.label === 'พรีเลย' || state.cta?.label === 'ซื้อเลย');
   const btnCls = cx('shrink-0 rounded-[10px] px-3.5 py-2 text-[12.5px] font-extrabold', strong ? 'animate-pulseRed bg-cta text-white shadow-cta' : 'border border-subtle bg-surface-3 text-ink');
   const cta = state.cta;
   // กดพรี/ซื้อ = ใส่ตะกร้าเลย ไม่เด้งไปหน้าอื่น แล้วปุ่มกลายเป็น "อยู่ในตะกร้าแล้ว" กันกดซ้ำ (เจ้าของ 2026-10-08)
@@ -190,6 +191,7 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
             ? <>{state.detail.slice(0, -'Pre-Order'.length)}<span className={cx('font-extrabold text-[#60a5fa]', !state.mine && 'animate-pulse')}>Pre-Order</span></>
             : state.detail}
         </div>
+        {state.note && <div className="mt-0.5 text-[11px] font-semibold leading-snug text-[#fbbf24]">{state.note}</div>}
         {state.alt && !preview && <Link href={state.alt.href} className="mt-0.5 block truncate text-[11px] font-bold text-primary-soft">{state.alt.label}</Link>}
         {state.alt && preview && <span className="mt-0.5 block truncate text-[11px] font-bold text-primary-soft">{state.alt.label}</span>}
         {/* พรีไปแล้ว = ป้ายเขียวสั้นๆ "พรีแล้ว ✓" (เจ้าของ 2026-10-08 ต้องเตือนกันสั่งซ้ำ · 2026-10-16 ตัด "คุณมีตัวนี้แล้ว" ออก) · รวมออเดอร์ที่สลิปยังรอตรวจ */}

@@ -247,7 +247,9 @@ function ShopInner() {
               โหลดเพิ่ม · เหลืออีก {results.length - limit} รายการ
             </button>
           )}
-          {results.length + openBatches.length === 0 && <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>}
+          {results.length + openBatches.length === 0 && (inLines.size > 0 && filtered.length > 0
+            ? <div className="py-8 text-center text-ink-faint">ตัวที่ตรงกับตัวกรองอยู่ในไลน์ด้านบน — แตะการ์ดไลน์เพื่อดูทั้งชุด</div>
+            : <div className="py-12 text-center text-ink-faint">ไม่พบสินค้าตามตัวกรอง</div>)}
         </div>
       </div>
     </div>

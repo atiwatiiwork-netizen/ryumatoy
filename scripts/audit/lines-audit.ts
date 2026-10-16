@@ -17,7 +17,7 @@ import {
 } from '../../src/domain/services/lines';
 import { isStockTwin, preorderOpenForOrder, openBoards, findDuplicateProducts } from '../../src/domain/services/catalog';
 import {
-  setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder, createProductsIntoLine,
+  setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder, createProductsIntoLine, approveOrder, rejectOrder, deleteTicket, createBoard, setBoardProducts, updateBoard, removeProduct,
 } from '../../src/data/mutations';
 
 let pass = 0, fail = 0;
@@ -157,9 +157,9 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     seq.push(st(db, members, 'a').kind);
     db = setProductStatus('x', 'production')(db); seq.push(st(db, members, 'a').detail);
     db = setProductStatus('x', 'shipping')(db); seq.push(st(db, members, 'a').detail);
-    db = setProductStatus('x', 'arrived')(db); seq.push(st(db, members, 'a').kind);
-    ok('F1 เปิดพรี → ผลิต → เดินทาง → ถึงไทย: ป้ายเปลี่ยนเองทุกขั้น (ไม่มีอะไรต้องอัปเดตในไลน์)',
-      seq[0] === 'preorder' && seq[1].includes('กำลังผลิต') && seq[2].includes('เดินทาง') && seq[3] === 'out', seq);
+    db = setProductStatus('x', 'arrived')(db); seq.push(st(db, members, 'a', { uid: 'uB' }).kind); seq.push(st(db, members, 'a').kind);
+    ok('F1 เปิดพรี → ผลิต → เดินทาง → ถึงไทย: ป้ายเปลี่ยนเองทุกขั้น · ถึงไทยแล้ว คนอื่น = หาของ · เจ้าของตั๋ว = ปิดพรีแล้ว (ดูตั๋ว)',
+      seq[0] === 'preorder' && seq[1].includes('กำลังผลิต') && seq[2].includes('เดินทาง') && seq[3] === 'out' && seq[4] === 'closed', seq);
     // ถึงไทยแล้วมีของเหลือ → แปลงเป็นสต๊อก (ไม่มีของคู่ = SKU เดิมพลิกเป็นพร้อมส่ง)
     let db2 = base({ products: [P('y', { status: 'arrived', surplus_qty: 2 })] });
     ok('F2 ก่อนแปลง: ของออกแล้ว ยังไม่เปิดขายของเหลือ → หาของ', st(db2, [M('a', ['y'])], 'a').kind === 'out');
@@ -573,6 +573,133 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     ok('W6 ส่งคำขอหาของตัวนี้ไว้แล้ว → "ส่งคำขอหาของแล้ว" + ปุ่มดูคำขอ (กันส่งซ้ำ)', s1.kind === 'out' && s1.cta?.href === '/sourcing' && s1.detail.includes('ส่งคำขอหาของแล้ว'), s1);
     ok('W7 คำขอหมดอายุ / ของคนอื่น → กลับเป็น "หาของให้" ตามปกติ',
       st(ask('expired'), [M('a', ['old'])], 'a').cta?.label === 'หาของให้' && st(ask('requested', 'uB'), [M('a', ['old'])], 'a').cta?.label === 'หาของให้');
+  }
+
+  // ── 19. เส้นทางลูกค้าจริง (เจ้าของ 2026-10-16 "ตรวจฝั่งลูกค้าอีกที ทั้งพื้นฐานและกรณีต่างๆ") ─────────────────
+  //   สินค้าตัวเดียวเดินครบวงจรด้วย mutation จริงของร้าน แล้วดูหน้าไลน์จาก 3 มุม: เจ้าของตั๋ว (uA) · คนอื่น (uB) · คนยังไม่ล็อกอิน ('')
+  {
+    const line = L([M('a', ['pre']), M('b', ['pre2'])]);
+    let db = setLinesPublic(true)(base({ products: [P('pre'), P('pre2')], productLines: [line] }));
+    const view = (d: Database, uid: string) => lineMemberState(d, d.productLines[0], d.productLines[0].members[0], { uid });
+    const plan = (d: Database, uid: string) => lineSetPlan(lineStates(d, d.productLines[0], { uid }).filter((x) => x.state.visible), () => false);
+    const cartLine = [{ productId: 'pre', qty: 1, depositEach: 1000, priceEach: 2000 }];
+
+    // เปิดพรี: ทุกคนเห็น Pre-Order + ปุ่มพรีเลย · ปุ่มพรีทั้งเซต 2 ตัว
+    ok('J1 เปิดพรี: ทุกคนเห็น Pre-Order + พรีเลย · ยังไม่พรีใคร = พรีทั้งเซต 2 ตัว',
+      view(db, 'uA').kind === 'preorder' && view(db, 'uA').cta?.label === 'พรีเลย' && view(db, '').kind === 'preorder' && plan(db, 'uA').addable.length === 2);
+
+    // ส่งสลิปแล้ว (รอแอดมินตรวจ) → uA เห็น "พรีแล้ว ✓" ทันที (กันสั่งซ้ำ) · uB ยังเห็นปกติ
+    const sent = submitOrder('uA', cartLine, 'slip.jpg')(db);
+    const orderId = sent.orders.find((o) => o.user_id === 'uA')?.id;
+    ok('J2 ส่งสลิปรอตรวจ: เจ้าของเห็นพรีแล้ว ✓ · ชุด 1/2 · ปุ่มเหลือ 1 ตัว · คนอื่นไม่เห็นป้ายของเรา',
+      !!orderId && view(sent, 'uA').mine && view(sent, 'uA').pinLabel === 'พรีแล้ว ✓' && plan(sent, 'uA').mine === 1 && plan(sent, 'uA').addable.length === 1 && !view(sent, 'uB').mine && view(sent, 'uB').pinLabel === 'Pre-Order', view(sent, 'uA'));
+
+    // แอดมินปฏิเสธสลิป → กลับเป็นยังไม่พรี (ไม่ค้าง "พรีแล้ว" หลอกลูกค้า)
+    const rejected = rejectOrder(orderId!)(sent);
+    ok('J3 สลิปถูกปฏิเสธ → ป้ายกลับเป็น Pre-Order · ชุด 0/2 · ปุ่มพรีทั้งเซต 2 ตัวกลับมา', !view(rejected, 'uA').mine && plan(rejected, 'uA').mine === 0 && plan(rejected, 'uA').addable.length === 2);
+
+    // แอดมินอนุมัติ → มีตั๋ว → ยังเป็น "พรีแล้ว ✓"
+    const approved = approveOrder(orderId!)(sent);
+    const tk = approved.tickets.find((x) => x.owner_id === 'uA' && x.product_id === 'pre');
+    ok('J4 อนุมัติแล้ว → มีตั๋ว · ยังพรีแล้ว ✓ (ไม่หายตอนเปลี่ยนจากออเดอร์เป็นตั๋ว)', !!tk && view(approved, 'uA').mine && view(approved, 'uA').pinLabel === 'พรีแล้ว ✓');
+
+    // ตั๋วเปลี่ยนมือให้ uB → uA ไม่ใช่เจ้าของแล้ว · uB เป็นเจ้าของ
+    const moved = { ...approved, tickets: approved.tickets.map((x) => (x.id === tk!.id ? { ...x, owner_id: 'uB' } : x)) };
+    ok('J5 ตั๋วเปลี่ยนมือ → คนให้ไม่เห็นพรีแล้ว · คนรับเห็นพรีแล้ว ✓', !view(moved, 'uA').mine && view(moved, 'uB').mine);
+    const xfer = { ...approved, tickets: approved.tickets.map((x) => (x.id === tk!.id ? { ...x, status: 'transferred' as const } : x)) };
+    ok('J6 ตั๋วสถานะโอนออกแล้ว (transferred) → ไม่นับเป็นของเรา', !view(xfer, 'uA').mine);
+    const gone = deleteTicket(tk!.id)(approved);
+    ok('J7 แอดมินลบตั๋ว → ไม่นับเป็นของเรา', !view(gone, 'uA').mine || gone.tickets.some((x) => x.id === tk!.id), gone.tickets.length);
+
+    // ปิดกระดาน (ปิดรับพรี) → ทุกคนเห็นปิดพรีแล้ว · ไม่มีปุ่มพรีเลย · ชุดไม่เสนอให้ใส่ · สั่งไม่ได้จริง
+    let board = createBoard(MK, 'ปิดรอบ')(approved);
+    const bid = board.boards[0].id;
+    board = setBoardProducts(bid, ['pre'])(board);
+    board = updateBoard(bid, { status: 'closed', poster_url: 'p.jpg' })(board);
+    const closedA = view(board, 'uA'), closedB = view(board, 'uB');
+    ok('J8 ปิดรับพรี: เจ้าของ = พรีแล้ว ✓ + ปุ่มดูตั๋ว · คนอื่น = ปิดพรีแล้ว + ดูรายละเอียด (ไม่ใช่พรีเลย)',
+      closedA.kind === 'closed' && closedA.pinLabel === 'พรีแล้ว ✓' && closedA.cta?.href === '/wallet' && closedB.kind === 'closed' && closedB.cta?.label === 'ดูรายละเอียด', { closedA, closedB });
+    ok('J9 ปิดรับพรี: ชุดของคนอื่นไม่เสนอตัวนั้น · สั่งตรงก็ไม่ผ่าน (submitOrder ปัดตก)',
+      plan(board, 'uB').addable.every((a) => a.product.id !== 'pre') && submitOrder('uB', cartLine, 'slip.jpg')(board) === board);
+
+    // ผลิต → เดินทาง → ถึงไทย
+    const prod = setProductStatus('pre', 'production')(approved);
+    const ship = setProductStatus('pre', 'shipping')(prod);
+    ok('J10 ผลิต/เดินทาง: ปิดพรีแล้ว · บอกขั้นตอนตรง · เจ้าของยังพรีแล้ว ✓', view(prod, 'uB').detail.includes('ผลิต') && view(ship, 'uB').detail.includes('เดินทาง') && view(ship, 'uA').pinLabel === 'พรีแล้ว ✓');
+    const arrived = setProductStatus('pre', 'arrived')(ship);
+    const arrA = view(arrived, 'uA'), arrB = view(arrived, 'uB');
+    ok('J11 ของถึงไทย: คนอื่น = หาของ (ร้านไม่มีของ) · เจ้าของตั๋ว ต้องไม่ถูกชวน "หาของให้" ของของตัวเอง → พรีแล้ว ✓ + ดูตั๋ว',
+      arrB.kind === 'out' && arrB.cta?.label === 'หาของให้' && arrA.pinLabel === 'พรีแล้ว ✓' && arrA.cta?.href === '/wallet' && arrA.cta?.label !== 'หาของให้', { arrA, arrB });
+
+    // ของเหลือแปลงเป็นพร้อมส่ง → ทุกคนเห็นพร้อมส่ง ซื้อได้
+    const conv = convertToInStock('pre', 2500)({ ...arrived, products: arrived.products.map((p) => (p.id === 'pre' ? { ...p, surplus_qty: 3 } : p)) });
+    const convB = view(conv, 'uB');
+    ok('J12 แปลงเป็นพร้อมส่ง → คนอื่นเห็นพร้อมส่ง + ซื้อเลย', convB.kind === 'stock' && convB.cta?.label === 'ซื้อเลย', convB);
+
+    // สินค้าถูกลบออกจากระบบ → ตัวนั้นไม่พังหน้า (ไม่มีสินค้า + ไม่ได้ตั้งสถานะ = ลูกค้าไม่เห็นตัวนั้น) · ตัวอื่นยังปกติ
+    const removed = removeProduct('pre')(db);
+    ok('J13 สินค้าที่ผูกถูกลบ → ตัวนั้นซ่อน (ไม่พัง) · ไลน์ยังเปิดได้เพราะตัวอื่นยังเห็น', !view(removed, 'uB').visible && lineOpenToCustomers(removed, removed.productLines[0]));
+    const allGone = removeProduct('pre2')(removed);
+    // รอบพิเศษมีด่าน (ต้องเคยพรี) → คนใหม่ไม่เห็น "พรีเลย" กระพริบที่พาไปหน้าล็อก
+    let sp = base({ products: [P('sp', { status: 'production' }), P('other')], tickets: [T('tB', 'other', 'uB')] });
+    sp = reopenBatch('sp', { price: 2500, deposit: 1000, qty: 3, label: 'รอบ 2' })(sp);
+    const spNew = st(sp, [M('a', ['sp'])], 'a', { uid: 'uA' }), spOld = st(sp, [M('a', ['sp'])], 'a', { uid: 'uB' });
+    ok('J15 รอบพิเศษ: คนที่ยังไม่เคยพรี = "ดูเงื่อนไข" + บอกเงื่อนไขในแถว · คนที่เคยพรี = พรีเลย',
+      spNew.kind === 'special' && spNew.cta?.label === 'ดูเงื่อนไข' && !!spNew.note?.includes('เคยพรี') && !spNew.detail.includes('เคยพรี') && spOld.cta?.label === 'พรีเลย' && !spOld.note, { spNew, spOld });
+    const gateOff = { ...sp, appConfig: [{ key: 'special_gate', value: { enabled: false } }] } as Database;
+    ok('J16 ปิดด่านรอบพิเศษ (ช่วงโปร) → ทุกคนเห็นพรีเลย · การ์ด/พรีวิว (uid ว่าง) ไม่ล็อก',
+      st(gateOff, [M('a', ['sp'])], 'a', { uid: 'uA' }).cta?.label === 'พรีเลย' && st(sp, [M('a', ['sp'])], 'a', { uid: '' }).cta?.label === 'พรีเลย');
+    ok('J14 ทุกตัวไม่มีสินค้าแล้ว → ไลน์ปิดตัวเองจากลูกค้า (ไม่ใช่หน้าว่างๆ) · ลิงก์ตรงจะเจอ "ไม่พบหน้านี้"', !lineOpenToCustomers(allGone, allGone.productLines[0]) && !lineVisibleTo(allGone, 'uB', allGone.productLines[0]));
+  }
+
+  // ── 20. รีวิวลูกค้ารอบ 2 (2026-10-16): พรี/ซื้อ ตามตั๋วจริง · hold ของตัวเอง · โควตารอบพิเศษ · ตัว Add เองที่ขอหาของแล้ว ─────
+  {
+    // พรีไว้แล้ว + มีของพร้อมส่งเข้ามา → ยังเป็น "พรีแล้ว ✓" (ไม่ใช่ "ซื้อแล้ว ✓")
+    const preThenStock = st(base({ products: [P('pre'), P('stk', { is_stock: true, stock_qty: 3, character_name: 'pre', series_name: 'pre' })], tickets: [T('t1', 'pre', 'uA')] }), [M('a', ['pre'])], 'a', { uid: 'uA' });
+    ok('X1 พรีไว้ + มีพร้อมส่งเข้ามา → ป้าย "พรีแล้ว ✓" ตามตั๋วจริง (ปุ่มหลักยังเป็นพร้อมส่งให้คนที่อยากได้เพิ่ม)', preThenStock.kind === 'stock' && preThenStock.pinLabel === 'พรีแล้ว ✓', preThenStock);
+    // ซื้อพร้อมส่งแล้ว ของหมด → "ซื้อแล้ว ✓" สีเทา ไม่ใช่ "ปิดพรีแล้ว" ม่วง
+    const soldOutMine = st(base({ products: [P('stk', { is_stock: true, stock_qty: 1 })], tickets: [T('t1', 'stk', 'uA', { remaining_amount: 0, deposit_paid: 2000 })] }), [M('a', ['stk'])], 'a', { uid: 'uA' });
+    ok('X2 ซื้อพร้อมส่งชิ้นสุดท้ายไปแล้ว (ของหมด) → ซื้อแล้ว ✓ · สีเทา · ดูตั๋ว (ไม่ใช่ปิดพรี/หาของ)', soldOutMine.pinLabel === 'ซื้อแล้ว ✓' && soldOutMine.tone === 'gray' && soldOutMine.label === 'ซื้อแล้ว' && soldOutMine.cta?.href === '/wallet', soldOutMine);
+    // ใบพรีที่ SKU ถูกแปลงเป็นพร้อมส่งทีหลัง (ยังมียอดค้าง) = ยังเป็น "พรี"
+    const converted = st(base({ products: [P('c', { is_stock: true, stock_qty: 0 })], tickets: [T('t1', 'c', 'uA', { remaining_amount: 1000 })] }), [M('a', ['c'])], 'a', { uid: 'uA' });
+    ok('X3 ใบพรีของ SKU ที่แปลงเป็นพร้อมส่งทีหลัง (มียอดค้าง) → ยัง "พรีแล้ว ✓"', converted.pinLabel === 'พรีแล้ว ✓', converted);
+
+    // คนดูเองจ่ายชิ้นสุดท้าย (hold + ออเดอร์รอตรวจ) → ไม่ใช่ "มีคนกำลังจ่ายเงิน" · บอกว่าส่งสลิปแล้วรอตรวจ
+    const hold = (uid: string): StockReservation => ({ id: 'h-' + uid, product_id: 'stk', user_id: uid, qty: 1, status: 'paid', reserved_until: iso(600_000), created_at: iso(-1000) } as StockReservation);
+    const order = { id: 'o1', user_id: 'uA', total_deposit: 2000, slip_url: 's', status: 'pending_approval', created_at: iso(-1000), items: [{ id: 'oi1', order_id: 'o1', product_id: 'stk', qty: 1, deposit_amount: 2000 }] } as never;
+    const myHold = base({ products: [P('stk', { is_stock: true, stock_qty: 1 })], stockReservations: [hold('uA')], orders: [order] });
+    const me = st(myHold, [M('a', ['stk'])], 'a', { uid: 'uA' }), other = st(myHold, [M('a', ['stk'])], 'a', { uid: 'uB' });
+    ok('X4 ตัวเองเป็นคนจ่ายชิ้นสุดท้าย → ซื้อแล้ว ✓ · "ส่งสลิปแล้ว · รอร้านตรวจ" (ไม่ใช่ "มีคนกำลังจ่าย") · คนอื่นเห็นหมดชั่วคราว',
+      me.kind !== 'soldout_temp' && me.pinLabel === 'ซื้อแล้ว ✓' && me.detail.includes('รอร้านตรวจ') && other.kind === 'soldout_temp', { me, other });
+    // คนอื่นซื้อหมด (server บอก 0) แต่ยังมีคน hold → หมดชั่วคราว ไม่ตกไป "หาของ"
+    const othersHold = base({ products: [P('stk', { is_stock: true, stock_qty: 3 })], stockReservations: [hold('uB')] });
+    const live0 = st(othersHold, [M('a', ['stk'])], 'a', { uid: 'uA', live: () => 0 });
+    ok('X5 server บอกหมด + มีคนอื่น hold อยู่ → หมดชั่วคราว (ตรงกับหน้าสินค้า) ไม่ใช่ "หาของให้"', live0.kind === 'soldout_temp', live0);
+
+    // รอบพิเศษครบโควตาต่อคน → ไม่ชวนพรีเลย · บอกในบรรทัดเงื่อนไข
+    let sp = base({ products: [P('sp', { status: 'production' })] });
+    sp = reopenBatch('sp', { price: 2500, deposit: 1000, qty: 9, label: 'รอบ 2' })(sp);
+    const bid = sp.batches[0].id;
+    const full = { ...sp, tickets: [T('q1', 'sp', 'uA', { batch_id: bid }), T('q2', 'sp', 'uA', { batch_id: bid })] } as Database;
+    const q = st(full, [M('a', ['sp'])], 'a', { uid: 'uA' });
+    ok('X6 รอบพิเศษครบโควตาต่อคนแล้ว → ปุ่ม "ดูรายละเอียด" (ไม่กระพริบ) + บรรทัด "ครบโควตา" · คนอื่นยังพรีได้',
+      q.kind === 'special' && q.cta?.label === 'ดูรายละเอียด' && !!q.note?.includes('ครบโควตา') && st(full, [M('a', ['sp'])], 'a', { uid: 'uB' }).cta?.label !== 'ดูรายละเอียด', q);
+
+    // ตัว Add เอง (หาของ) ส่งคำขอชื่อนี้กับค่ายนี้ไปแล้ว → "ส่งคำขอหาของแล้ว"
+    const req = (status: string, name = 'Pakunoda', maker = MK) => ({ id: 'sr', user_id: 'uA', maker_id: maker, maker_name: 'KS', franchise_name: 'HxH', character_name: name, qty: 1, images: ['x'], status, created_at: iso(-1000) });
+    const man = (r: object[]) => st({ ...base(), sourcingRequests: r } as Database, [M('pak', [], { name: 'Pakunoda', manual_state: 'sourcing' })], 'pak', { uid: 'uA' });
+    ok('X7 ตัว Add เอง: ขอหาของชื่อนี้ไปแล้ว → ส่งคำขอแล้ว/ดูคำขอ · ชื่ออื่น/ค่ายอื่น/หมดอายุ → หาของให้ตามเดิม',
+      man([req('requested')]).cta?.href === '/sourcing' && man([req('requested', ' pakunoda ')]).cta?.href === '/sourcing'
+      && man([req('requested', 'Other')]).cta?.label === 'หาของให้' && man([req('requested', 'Pakunoda', MK2)]).cta?.label === 'หาของให้' && man([req('expired')]).cta?.label === 'หาของให้');
+
+    // ประมูล = เทา ไม่นับเป็น "ปิดพรีแล้ว"
+    const auc = { ...base({ products: [P('au', { is_stock: true, stock_qty: 1 })] }), auctions: [{ id: 'a1', product_id: 'au', status: 'live', ends_at: iso(3_600_000), current_price: 1000, bid_count: 0, extend_count: 0 }] } as unknown as Database;
+    const as = st(auc, [M('a', ['au'])], 'a');
+    ok('X8 ติดประมูล → สีเทา (ไม่ถูกนับในชิป "ปิดพรีแล้ว")', as.kind === 'auction' && as.tone === 'gray', as);
+
+    // จุดในการ์ด x/y มาจากชุดเดียวกับตัวเลข
+    const tracked = lineSetPlan(lineStates(setLinesPublic(true)(base({ products: [P('a'), P('b')], tickets: [T('t1', 'a', 'uA')] })), L([M('ma', ['a']), M('mb', ['b']), M('mx', [], { manual_state: 'sourcing' })]), { uid: 'uA' }), () => false);
+    ok('X9 จุดในการ์ด = ตัวที่นับ (ตัว Add เองไม่มีจุด) · 1/2', tracked.tracked.length === 2 && tracked.tracked.filter((x) => x.mine).length === 1 && tracked.total === 2, tracked.tracked);
   }
 
   console.log(`\nlines-audit: ${pass} passed, ${fail} failed`);

@@ -1,7 +1,8 @@
 import type { Database, LineMember, Product, ProductBatch, ProductLine } from '../entities';
-import { inClosedBoard, inLiveAuction, isStockTwin, preorderOpenForOrder, variantsOf } from './catalog';
-import { availableFor, batchAvailable, batchGoneState, myPendingHold, stockGoneState } from './reservations';
+import { inClosedBoard, inLiveAuction, isStockTwin, preorderOpenForOrder, productNameKey, variantsOf } from './catalog';
+import { availableFor, batchAvailable, myPendingHold, pendingHeld, userBatchQuota } from './reservations';
 import { isAdminUser } from './admins';
+import { hasPreorderTicket, specialGateEnabled } from './tickets';
 
 /**
  * ไลน์ (พรียกไลน์ · v81 · memory ryuma-line-spec) — ตัวจำแนกเดียวของป้ายสถานะบนรูปหมู่
@@ -101,6 +102,8 @@ export interface LineMemberState {
   batch?: ProductBatch;
   /** อีกทางที่สั่งได้ของตัวเดียวกัน (review ลูกค้า 2026-10-16) — แถวโชว์ลิงก์เล็กใต้บรรทัดรอง */
   alt?: { label: string; href: string };
+  /** เงื่อนไข/หมายเหตุบรรทัดแยกใต้แถว (detail ถูกตัด … บนจอ 375px — ข้อความสำคัญต้องไม่หาย) */
+  note?: string;
   mine: boolean;      // ผู้ใช้คนนี้มีตั๋วของตัวนี้แล้ว (owner_id ตรง — หน้าพรีวิวแอดมินเห็นตั๋วทั้งร้าน ต้องกรองเสมอ)
   visible: boolean;   // ลูกค้าเห็นตัวนี้ไหม
 }
@@ -129,14 +132,31 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   const { all } = memberProducts(db, m);
   const ids = new Set(all.map((p) => p.id));
   // "ของฉันแล้ว" = มีตั๋ว หรือมีออเดอร์ที่ส่งสลิปแล้วรอแอดมินตรวจ (ยังไม่มีตั๋ว) — เจ้าของ 2026-10-08: ต้องเตือนว่าพรีไปแล้ว กันสั่งซ้ำ
-  const mine = !!ctx.uid && (
-    db.tickets.some((t) => t.owner_id === ctx.uid && t.status !== 'transferred' && ids.has(t.product_id))
-    || db.orders.some((o) => o.user_id === ctx.uid && o.status === 'pending_approval' && o.items.some((i) => ids.has(i.product_id)))
-  );
+  //   "พรี" หรือ "ซื้อ" ตัดสินจากตั๋ว/ออเดอร์ของคนดูเอง ไม่ใช่จากสถานะตอนนี้ของตัวนั้น (review ลูกค้ารอบ 2 2026-10-16:
+  //   เดิมพรีไว้แล้วมีของพร้อมส่งเข้ามา → ขึ้น "ซื้อแล้ว ✓" · ซื้อพร้อมส่งแล้วของหมด → ขึ้น "พรีแล้ว ✓")
+  //   ซื้อ = จ่ายเต็ม (SKU พร้อมส่งที่ไม่มียอดค้าง / รอบจ่ายเต็ม) · ใบพรีที่แปลงเป็นสต๊อกทีหลังยังมียอดค้าง = ยังเป็น "พรี"
+  const fullPayBatch = (bid?: string) => { const b = bid ? db.batches.find((x) => x.id === bid) : undefined; return !!b && b.deposit_amount >= b.price_total; };
+  let ownPre = false, ownBuy = false, pendingMine = false;
+  if (ctx.uid) {
+    for (const t of db.tickets) {
+      if (t.owner_id !== ctx.uid || t.status === 'transferred' || !ids.has(t.product_id)) continue;
+      const stockP = !!db.products.find((p) => p.id === t.product_id)?.is_stock;
+      if (fullPayBatch(t.batch_id) || (stockP && (t.remaining_amount ?? 0) === 0)) ownBuy = true; else ownPre = true;
+    }
+    for (const o of db.orders) {
+      if (o.user_id !== ctx.uid || o.status !== 'pending_approval') continue;
+      for (const i of o.items) {
+        if (!ids.has(i.product_id)) continue;
+        pendingMine = true;
+        if (fullPayBatch(i.batch_id) || !!db.products.find((p) => p.id === i.product_id)?.is_stock) ownBuy = true; else ownPre = true;
+      }
+    }
+  }
+  const mine = ownPre || ownBuy;
+  const mineLabel = ownPre ? 'พรีแล้ว ✓' : 'ซื้อแล้ว ✓';
   const make = (s: Omit<LineMemberState, 'mine' | 'pinLabel' | 'pinShort' | 'visible'> & { visible?: boolean }): LineMemberState => {
-    // พรีไปแล้ว → ป้ายบนรูปบอก "พรีแล้ว ✓" ทุกสถานะที่เกี่ยวกับการสั่ง (ไม่ใช่แค่ตอนปิดพรี) · ของในมือที่ซื้อแล้ว = "ซื้อแล้ว ✓"
-    const bought = s.kind === 'stock' || (s.kind === 'special' && s.tone === 'green');
-    const pinLabel = mine && (s.kind === 'closed' || s.kind === 'preorder' || s.kind === 'special') ? (bought ? 'ซื้อแล้ว ✓' : 'พรีแล้ว ✓') : mine && bought ? 'ซื้อแล้ว ✓' : s.label;
+    // ของฉันแล้ว → ป้ายบนรูปบอก "พรีแล้ว ✓" / "ซื้อแล้ว ✓" ทุกสถานะ (กันสั่งซ้ำ · เจ้าของ 2026-10-08)
+    const pinLabel = mine ? mineLabel : s.label;
     return { ...s, mine, visible: s.visible ?? true, pinLabel, pinShort: PIN_SHORT[pinLabel] ?? pinLabel };
   };
 
@@ -145,7 +165,14 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
     switch (m.manual_state) {
       case 'preorder': return make({ kind: 'manual_preorder', tone: 'blue', label: 'Pre-Order', detail: 'ค่ายเปิดพรีแล้ว · สั่งผ่านร้าน', cta: lineOaCta(ctx.lineOa) });
       case 'stock': return make({ kind: 'manual_stock', tone: 'green', label: 'มีของ', detail: 'ร้านมีของ · สั่งผ่านร้าน', cta: lineOaCta(ctx.lineOa) });
-      case 'sourcing': return make({ kind: 'manual_sourcing', tone: 'amber', label: 'หาของ', detail: 'ของออกแล้ว · ส่งเรื่องให้ร้านหาให้', cta: { label: 'หาของให้', href: sourcingHref(line, m) } });
+      case 'sourcing': {
+        // ไม่มี SKU ให้เทียบ → เทียบชื่อตัวละคร + ค่าย ของคำขอที่ยังไม่จบ (review ลูกค้ารอบ 2)
+        const k = productNameKey(m.name);
+        const askedManual = !!ctx.uid && !!k && db.sourcingRequests.some((r) => r.user_id === ctx.uid && r.maker_id === line.maker_id && productNameKey(r.character_name ?? '') === k && ['requested', 'quoted', 'paid', 'working'].includes(r.status));
+        return askedManual
+          ? make({ kind: 'manual_sourcing', tone: 'amber', label: 'หาของ', detail: 'ส่งคำขอหาของแล้ว · รอร้านตอบ', cta: { label: 'ดูคำขอ', href: '/sourcing' } })
+          : make({ kind: 'manual_sourcing', tone: 'amber', label: 'หาของ', detail: 'ของออกแล้ว · ส่งเรื่องให้ร้านหาให้', cta: { label: 'หาของให้', href: sourcingHref(line, m) } });
+      }
       default: return make({ kind: 'hidden', tone: 'gray', label: 'ยังไม่ตั้งสถานะ', detail: 'ยังไม่ผูกสินค้า + ไม่ได้ตั้งสถานะ — ลูกค้าไม่เห็นตัวนี้', visible: false });
     }
   }
@@ -180,15 +207,24 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
     opts.push({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · Pre-Order`, cta: { label: 'พรีเลย', href: `/shop/${preP.id}` }, product: preP, altLabel: `หรือ Pre-Order ${from ? 'เริ่ม ' : ''}${baht(price)}` });
   }
   // รอบพิเศษเปิดขาย (published) ยังมีของ
+  //   ด่านรอบพิเศษ (ต้องเคยพรี หรือมีพรีกระดานหลักพ่วงในตะกร้า) — คนที่ยังไม่ผ่านด่าน ห้ามเห็นปุ่ม "พรีเลย" กระพริบแล้วไปเจอหน้าล็อก
+  //   บอกเงื่อนไขในแถวแทน · uid ว่าง (การ์ด/พรีวิวแอดมิน/ยังไม่ล็อกอิน) = ไม่ตัดสิน (เส้นทางลูกค้า 2026-10-16)
+  const specLocked = !!ctx.uid && specialGateEnabled(db) && !hasPreorderTicket(db, ctx.uid);
   let specOpt: Opt | undefined;
   for (const p of sellable) {
     for (const b of openBatchesOf(db, p.id)) {
       if (specOpt || batchLeft(b) <= 0) continue;
       const fullPay = b.deposit_amount >= b.price_total;
       const href = `/shop/${p.id}?batch=${b.id}`;
+      // ครบโควตาต่อคนของรอบนี้แล้ว (หน้าสินค้าปิดปุ่ม "ครบโควตา") → ไม่ชวน "พรีเลย" ที่กดแล้วไปเจอปุ่มปิด (review ลูกค้ารอบ 2)
+      if (ctx.uid && userBatchQuota(db, ctx.uid, b.id) <= 0) {
+        specOpt = { kind: 'special', tone: fullPay ? 'green' : 'blue', label: fullPay ? 'พร้อมส่ง' : 'Pre-Order', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'}`, note: 'ครบโควตาต่อคนของรอบนี้แล้ว', cta: { label: 'ดูรายละเอียด', href }, product: p, batch: b, altLabel: `หรือ${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` };
+        continue;
+      }
+      const lockNote = specLocked ? 'เฉพาะคนที่เคยพรี (หรือพรีตัวอื่นพ่วงในตะกร้า)' : undefined;
       specOpt = fullPay
-        ? { kind: 'special', tone: 'green', label: 'พร้อมส่ง', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'} · จ่ายเต็ม`, cta: { label: 'ซื้อเลย', href }, product: p, batch: b, altLabel: `หรือ${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` }
-        : { kind: 'special', tone: 'blue', label: 'Pre-Order', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, cta: { label: 'พรีเลย', href }, product: p, batch: b, altLabel: `หรือพรี${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` };
+        ? { kind: 'special', tone: 'green', label: 'พร้อมส่ง', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'} · จ่ายเต็ม`, note: lockNote, cta: { label: specLocked ? 'ดูเงื่อนไข' : 'ซื้อเลย', href }, product: p, batch: b, altLabel: `หรือ${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` }
+        : { kind: 'special', tone: 'blue', label: 'Pre-Order', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, note: lockNote, cta: { label: specLocked ? 'ดูเงื่อนไข' : 'พรีเลย', href }, product: p, batch: b, altLabel: `หรือพรี${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` };
     }
   }
   if (specOpt) opts.push(specOpt);
@@ -200,13 +236,15 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   }
   // 4 ติดห้องประมูล — หน้าร้านซ่อนอยู่ (ขายซ้อนไม่ได้) ห้ามตกไป "หาของ" ทั้งที่ร้านมีของ
   const inAuction = all.find((p) => inLiveAuction(db, p.id));
-  if (inAuction) return make({ kind: 'auction', tone: 'purple', label: 'ประมูล', detail: 'อยู่ในห้องประมูล', product: inAuction });
+  if (inAuction) return make({ kind: 'auction', tone: 'gray', label: 'ประมูล', detail: 'อยู่ในห้องประมูล', product: inAuction }); // เทา: ไม่นับเป็น "ปิดพรีแล้ว" ในชิปหัวไลน์ (review ลูกค้ารอบ 2)
   // 5 หมดชั่วคราว (มีคนถือ hold/สลิปรอตรวจ — ถ้าไม่ผ่าน ของหลุดกลับมา) → พาไปหน้าสินค้าที่เช็คของสด
+  //   (review ลูกค้ารอบ 2: เดิมคนที่จ่ายของชิ้นสุดท้ายเองเห็น "มีคนกำลังจ่ายเงิน" · ของที่คนอื่นซื้อหมดแต่ยังมีคน hold ตกไป "หาของ")
+  const othersHold = (p: Product, bid?: string) => pendingHeld(db, p.id, bid) - myPendingHold(db, ctx.uid, p.id, bid);
   for (const p of sellable) {
-    if (p.is_stock && stockLeft(p) <= 0 && stockGoneState(db, p) === 'temp')
+    if (p.is_stock && stockLeft(p) <= 0 && othersHold(p) > 0)
       return make({ kind: 'soldout_temp', tone: 'gray', label: 'หมดชั่วคราว', detail: 'มีคนกำลังจ่ายเงิน · อาจมีของหลุด', cta: { label: 'ดูสินค้า', href: `/shop/${p.id}` }, product: p });
     for (const b of openBatchesOf(db, p.id))
-      if (batchLeft(b) <= 0 && batchGoneState(db, b) === 'temp')
+      if (batchLeft(b) <= 0 && othersHold(p, b.id) > 0)
         return make({ kind: 'soldout_temp', tone: 'gray', label: 'หมดชั่วคราว', detail: 'มีคนกำลังจ่ายเงิน · อาจมีของหลุด', cta: { label: 'ดูสินค้า', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b });
   }
   // 6 ปิดพรีแล้ว — ใกล้ถึงมือที่สุดก่อน: เดินทาง > ผลิต > ปิดกระดานแล้วรอสั่งผลิต
@@ -221,6 +259,15 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   }
   // 7 ของออกแล้ว (ถึงไทย/ส่งมอบ/จบ หรือของในมือขายหมดจริง) และร้านไม่มีของ → ส่งเรื่องหาของ
   const ref = all.find((p) => !p.is_stock) ?? all[0];
+  //   คนดูมีตั๋วของตัวนี้อยู่แล้ว (ของถึงไทย/ส่งมอบแล้ว) → ของของเขาเอง ห้ามชวน "หาของให้" (เส้นทางลูกค้า 2026-10-16 · เทสต์ J11)
+  if (mine) {
+    const own = all.find((p) => !p.is_stock && (p.status === 'arrived' || p.status === 'delivered' || p.status === 'closed')) ?? ref;
+    const detail = pendingMine ? 'ส่งสลิปแล้ว · รอร้านตรวจ' : ownPre && own?.status === 'arrived' ? 'ของถึงไทยแล้ว · ดูตั๋วของคุณ' : 'ดูตั๋ว/สถานะของคุณ';
+    // ซื้อพร้อมส่งอย่างเดียว = สีเทา "ซื้อแล้ว" (ไม่ใช่ "ปิดพรีแล้ว" สีม่วง · review ลูกค้ารอบ 2)
+    return ownPre
+      ? make({ kind: 'closed', tone: 'purple', label: 'ปิดพรีแล้ว', detail, cta: { label: 'ดูตั๋ว', href: '/wallet' }, product: own })
+      : make({ kind: 'closed', tone: 'gray', label: 'ซื้อแล้ว', detail, cta: { label: 'ดูตั๋ว', href: '/wallet' }, product: own });
+  }
   //   ส่งคำขอหาของตัวนี้ไว้แล้ว (ยังไม่จบ) → บอกว่าส่งแล้ว พาไปดูคำขอ แทนปุ่ม "หาของให้" (กันส่งซ้ำ · review ลูกค้า 2026-10-16)
   const asked = !!ctx.uid && db.sourcingRequests.some((r) => r.user_id === ctx.uid && !!r.source_product_id && ids.has(r.source_product_id) && ['requested', 'quoted', 'paid', 'working'].includes(r.status));
   if (asked) return make({ kind: 'out', tone: 'amber', label: 'หาของ', detail: 'ส่งคำขอหาของแล้ว · รอร้านตอบ', cta: { label: 'ดูคำขอ', href: '/sourcing' }, product: ref });
@@ -299,6 +346,7 @@ export interface LineSetPlan {
   addable: { name: string; product: Product }[];
   inCart: number;
   rowOnly: string[];   // ยังขาด + สั่งได้ แต่ต้องกดที่แถว (มีแบบให้เลือก / รอบพิเศษ / พร้อมส่ง)
+  tracked: { id: string; mine: boolean }[]; // ตัวที่นับใน x/y (จุดในการ์ดต้องวาดจากชุดนี้)
   deposit: number; // มัดจำรวมของตัวที่ใส่ได้ (ตัวเลขบนปุ่ม)
   missingDeposit: number; // มัดจำรวมของตัวที่ยังขาดและยังพรีกระดานหลักได้ (ตัวเลขในการ์ด x/y)
 }
@@ -319,7 +367,7 @@ export function lineSetPlan(shown: { member: LineMember; state: LineMemberState 
       if (inCart(p.id)) inCartN++; else addable.push({ name: m.name, product: p });
     } else if (k === 'preorder' || k === 'special' || k === 'stock') rowOnly.push(m.name);
   }
-  return { mine: vis.length - missing.length, total: vis.length, missing, addable, inCart: inCartN, rowOnly, deposit: addable.reduce((a, x) => a + depositOf(x.product), 0), missingDeposit };
+  return { mine: vis.length - missing.length, total: vis.length, tracked: vis.map((x) => ({ id: x.member.id, mine: x.state.mine })), missing, addable, inCart: inCartN, rowOnly, deposit: addable.reduce((a, x) => a + depositOf(x.product), 0), missingDeposit };
 }
 
 /** รายการที่ต้องถามของเหลือจริงจาก server (ของในมือ + รอบพิเศษที่เปิด) — ไม่ซ้ำ ·
