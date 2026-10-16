@@ -11,7 +11,7 @@ import { baht, STATUS, STATUS_FILL } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { Button, StatusBadge, TicketQr, cx } from '@/components/ui';
-import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard } from '@/domain/services/catalog';
+import { franchiseOf, manufacturerOf, categoryOf, seriesForFranchise, makersForFranchise, orderedQtyOf, variantsOf, groupByMakerSeries, inOpenBoard, findDuplicateProducts, productNameKey } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { productAwaitingWarehouse } from '@/domain/services/warehouse';
 import { store } from '@/data/store';
@@ -23,6 +23,7 @@ import {
 } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 import { BulkAdd } from './BulkAdd';
+import { DupHint, DupDialog } from './DupGuard';
 import { StatusRow } from './StatusRow';
 
 type Tab = 'products' | 'status' | 'categories' | 'manufacturers' | 'franchises' | 'series';
@@ -464,6 +465,7 @@ function Products() {
   const [listQ, setListQ] = useState(''); // search the product list
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed ค่าย groups
   const [mode, setMode] = useState<'single' | 'bulk'>('single');
+  const [dupAsk, setDupAsk] = useState<Product[] | null>(null); // กล่องถาม "มีตัวนี้ในระบบแล้ว"
   const addVariantImage = async (i: number, file?: File) => {
     if (!file) return;
     setVarImgIdx(i);
@@ -502,8 +504,24 @@ function Products() {
   // variant-driven mode kicks in as soon as a variant ROW exists (before names are typed) — the
   // product ราคาเต็ม/หยวน are hidden + unused; ONE shared มัดจำ applies to every variant. (DNA: no price dup)
   const hasVariants = draft.variants.length > 0;
+  // สินค้าเก่า (ก่อนมี character_name): series_name = "ตัวละคร - ซีรีย์" → ฟอร์มต้องได้แค่ "ตัวละคร"
+  //   ไม่งั้นกดบันทึกแล้วชื่อกลายเป็น "X - ซีรีย์ - ซีรีย์" และด่านกันซ้ำหาตัวนี้ไม่เจออีก (review 2026-10-16)
+  const legacyCharacter = (p: Product) => {
+    const sn = p.series_id ? db.series.find((x) => x.id === p.series_id)?.name : undefined;
+    return sn && p.series_name.endsWith(` - ${sn}`) ? p.series_name.slice(0, -(sn.length + 3)) : p.series_name;
+  };
+  // ด่านกันลงซ้ำ (เจ้าของ 2026-10-16 · เคส Ringo): ค่าย + ชื่อตัวละคร + ชนิด (พรี/พร้อมส่ง) เดียวกัน
+  //   แก้ตัวเดิมโดยไม่เปลี่ยนชื่อ/ค่าย/ชนิด = ไม่ถาม (ของเก่าที่ซ้ำอยู่แล้วต้องแก้ราคา/รูปได้ตามปกติ)
+  const dupIsStock = hasVariants ? false : draft.is_stock;
+  const dups = findDuplicateProducts(db, { manufacturer_id: draft.manufacturer_id, name: draft.series_name, is_stock: dupIsStock }, draft.id);
+  const editingProduct = draft.id ? db.products.find((p) => p.id === draft.id) : undefined;
+  const identityChanged = !editingProduct
+    || productNameKey(editingProduct.character_name ?? legacyCharacter(editingProduct)) !== productNameKey(draft.series_name)
+    || editingProduct.manufacturer_id !== draft.manufacturer_id || !!editingProduct.is_stock !== !!dupIsStock;
+  const dupWarn = identityChanged ? dups : [];
+  const makerName = db.manufacturers.find((m) => m.id === draft.manufacturer_id)?.name ?? '';
 
-  const save = () => {
+  const save = (force = false) => {
     if (!draft.franchise_id || !draft.manufacturer_id) return flash('เลือกเรื่อง + ค่าย');
     if (!draft.series_name.trim()) return flash('กรอกชื่อตัวละคร');
     const isStock = hasVariants ? false : draft.is_stock; // variants = pre-order multi-choice
@@ -516,6 +534,7 @@ function Products() {
       price = Number(draft.price_total) || 0;
       if (price <= 0) return flash('กรอกราคาเต็ม');
     }
+    if (!force && dupWarn.length > 0) { setDupAsk(dupWarn); return; }
     const sharedDeposit = Number(draft.deposit_amount) || 0; // used by every variant via setProductVariants
     const existing = draft.id ? db.products.find((p) => p.id === draft.id) : undefined;
     // final title = "ชื่อตัวละคร - ซีรีย์" (ซีรีย์เป็น platform grouping); ETA = "Q3 2026"
@@ -571,7 +590,7 @@ function Products() {
     const m = /^(Q[1-4])\s+(\d{4})$/.exec(p.eta_note ?? '');
     setDraft({
     id: p.id, franchise_id: p.franchise_id, manufacturer_id: p.manufacturer_id, series_id: p.series_id ?? '',
-    series_name: p.character_name ?? p.series_name, wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
+    series_name: p.character_name ?? legacyCharacter(p), wcf_type: p.wcf_type ?? 'wcf', cost_yuan: p.cost_yuan != null ? String(p.cost_yuan) : '',
     description: p.description, eta_note: p.eta_note, eta_q: m?.[1] ?? '', eta_year: m?.[2] ?? '',
     price_total: String(p.price_total), deposit_amount: String(p.deposit_amount),
     is_stock: p.is_stock, stock_qty: p.stock_qty != null ? String(p.stock_qty) : '', status: p.status,
@@ -632,6 +651,7 @@ function Products() {
                 const full = sn ? `${draft.series_name.trim()} - ${sn}` : draft.series_name.trim();
                 return <span className="mt-1 block text-[11px] text-primary-soft">ชื่อสินค้า: {full}</span>;
               })()}
+              <DupHint db={db} dups={dupWarn} makerName={makerName} />
             </Field>
             {!hasVariants && (
               <div className="grid grid-cols-2 gap-3">
@@ -739,7 +759,7 @@ function Products() {
             </div>
 
             <Field label="รายละเอียด"><textarea className={cx(inputCls, 'h-20 resize-none')} value={draft.description} onChange={(e) => set('description', e.target.value)} placeholder="รายละเอียดเพิ่มเติม (ไม่ต้องใส่ขนาดแล้ว มีช่องแยกด้านบน)" /></Field>
-            <Button onClick={save} icon={editing ? 'check' : 'plus'}>{editing ? 'บันทึก' : 'เพิ่มสินค้า'}</Button>
+            <Button onClick={() => save()} icon={editing ? 'check' : 'plus'}>{editing ? 'บันทึก' : 'เพิ่มสินค้า'}</Button>
           </div>
         )}
       </Panel>
@@ -758,6 +778,7 @@ function Products() {
         const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(makerGroups.map((mk) => mk.makerId)));
         const makerCount = (mk: (typeof makerGroups)[number]) => mk.groups.reduce((n, g) => n + g.products.length, 0);
         return (
+          <div id="admin-product-list">
           <Panel>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span className="font-bold">สินค้าทั้งหมด ({db.products.length})</span>
@@ -803,8 +824,19 @@ function Products() {
               );
             })}
           </Panel>
+          </div>
         );
       })()}
+
+      {dupAsk && (
+        <DupDialog
+          db={db} name={draft.series_name} makerName={makerName} dups={dupAsk} editing={editing}
+          onClose={() => setDupAsk(null)}
+          onProceed={() => { setDupAsk(null); save(true); }}
+          // ไปดูตัวเดิม = กรองรายการสินค้าด้านล่างให้ + เลื่อนไปหา · ร่างที่กรอกอยู่ไม่หาย
+          onView={() => { setListQ(draft.series_name.trim()); setDupAsk(null); if (typeof document !== 'undefined') document.getElementById('admin-product-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+        />
+      )}
     </div>
   );
 }

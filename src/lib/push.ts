@@ -87,6 +87,12 @@ export const pushEnabled = (db: Database, key: string): boolean =>
 /** ไลน์ (v81): ผู้รับ = ทุกเครื่องที่เปิดกระดิ่ง ตามตัวกรองค่าย/เรื่องเดียวกับสินค้าใหม่ (ไลน์ไม่ระบุเรื่อง = กรองแค่ค่าย) */
 export const subsForLine = (db: Database, line: { maker_id: string; franchise_id?: string | null }): PushRow[] =>
   subsForNewProduct(db, { manufacturer_id: line.maker_id, franchise_id: line.franchise_id ?? '' });
+/** push รวมหลายไลน์ (ไลน์อัปมาแล้ว · A · B): ส่งถึงคนที่ไม่ได้ปิดค่าย/เรื่องของอย่างน้อย 1 ไลน์ในชุด — ไม่ใช่ทุกเครื่อง (review 2026-10-16) */
+export const subsForLines = (db: Database, lines: { maker_id: string; franchise_id?: string | null }[]): PushRow[] => {
+  const keep = new Set<PushRow>();
+  for (const l of lines) for (const sub of subsForLine(db, l)) keep.add(sub);
+  return db.pushSubscriptions.filter((sub) => keep.has(sub));
+};
 
 export function subsForNewProduct(db: Database, product: { manufacturer_id: string; franchise_id: string }): PushRow[] {
   // OPT-OUT model: maker_ids / franchise_ids are the MUTED lists. Default (no pref row, or a category

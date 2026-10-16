@@ -1,6 +1,8 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import { store } from '@/data/store';
 import { useDatabase, useReady } from '@/state/DataProvider';
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { useSmartBack } from '@/lib/nav';
@@ -20,6 +22,9 @@ export default function LinePage() {
   const uid = useCurrentUserId();
   const goBack = useSmartBack('/shop');
   const line = db.productLines.find((l) => l.id === id);
+  // เปิดหน้าไลน์ = ดึงข้อมูลล่าสุดทันที (เหมือนหน้าช็อป/สินค้า) — กันเห็น "พรีเลย" ของที่แอดมินเพิ่งปิดรอบ
+  //   reloadIfIdle ปลอดภัย: มีงานค้างเซฟจะไม่ทับ (review ลูกค้า 2026-10-16)
+  useEffect(() => { void store.reloadIfIdle(); }, [id]);
 
   if (!ready) return <div className="py-16 text-center text-ink-faint">กำลังโหลด…</div>;
   if (!line || !lineVisibleTo(db, uid, line)) {

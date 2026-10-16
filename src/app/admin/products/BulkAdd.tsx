@@ -8,7 +8,8 @@ import { applyWatermark } from '@/lib/watermark';
 import { baht } from '@/lib/theme';
 import { Icon } from '@/components/Icon';
 import { cx } from '@/components/ui';
-import { seriesForFranchise, makersForFranchise } from '@/domain/services/catalog';
+import { seriesForFranchise, makersForFranchise, findDuplicateProducts, productNameKey } from '@/domain/services/catalog';
+import { dupLine } from './DupGuard';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { genId, bulkCreateProducts } from '@/data/mutations';
 import { sendPush, subsForNewProduct, pushEnabled } from '@/lib/push';
@@ -121,10 +122,29 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
     return r.name.trim().length > 0 && Number(r.cost_yuan) > 0;
   };
   const validRows = rows.filter(rowValid);
+  // ด่านกันลงซ้ำ (เจ้าของ 2026-10-16 · เคส Ringo) — กติกาเดียวกับหน้าสินค้า: ค่าย + ชื่อตัวละคร + พรี เดียวกัน
+  //   + ชื่อซ้ำกันเองในชุดนี้ (สองแถวชื่อเดียวกัน = ลงซ้ำในคลิกเดียว · อยากได้หลายแบบให้ "รวมเป็น variants")
+  const dupsOf = (name: string) => findDuplicateProducts(db, { manufacturer_id: sd.manufacturer_id, name, is_stock: false });
+  const nameCount = new Map<string, number>();
+  for (const r of rows) { const k = productNameKey(r.name); if (k) nameCount.set(k, (nameCount.get(k) ?? 0) + 1); }
+  const twiceInBatch = (name: string) => (nameCount.get(productNameKey(name)) ?? 0) > 1;
 
   const create = async () => {
     if (!sd.manufacturer_id || !sd.franchise_id) return flash('เลือกค่าย + เรื่องก่อน');
     if (validRows.length === 0) return flash('ยังไม่มีแถวที่กรอกครบ (ต้องมี ชื่อ + หยวน + สูง)');
+    {
+      const inDb = validRows.filter((r) => dupsOf(r.name).length > 0);
+      const seen = new Set<string>();
+      // ซ้ำกันเองในชุด = แถวที่จะสร้างจริง (validRows) ชื่อชนกัน · แถวที่ซ้ำในระบบอยู่แล้วไม่นับซ้ำอีกรอบ
+      const inBatch = validRows.filter((r) => { const k = productNameKey(r.name); if (seen.has(k)) return !inDb.includes(r); seen.add(k); return false; });
+      if (inDb.length || inBatch.length) {
+        const lines = [
+          ...inDb.slice(0, 5).map((r) => `• ${r.name.trim()} → มีแล้ว: ${dupLine(db, dupsOf(r.name)[0])}`),
+          ...inBatch.slice(0, 5).map((r) => `• ${r.name.trim()} → ซ้ำกับอีกแถวในชุดนี้`),
+        ];
+        if (!window.confirm(`มีชื่อซ้ำ ${inDb.length + inBatch.length} แถว\n\n${lines.join('\n')}\n\nตัวเดียวกัน → กด "ยกเลิก" แล้วลบแถวนั้น (อยากได้หลายแบบให้กด "รวมเป็น variants")\nรอบใหม่/ตัวใหม่จริง → กด "ตกลง" ลงทั้งหมด`)) return;
+      }
+    }
     const etaNote = sd.eta_q && sd.eta_year ? `${sd.eta_q} ${sd.eta_year}` : 'TBA';
     const deposit = depositFor(st, sd.wcf_type);
     const items = validRows.map((r) => {
@@ -238,6 +258,12 @@ export function BulkAdd({ onDone }: { onDone: () => void }) {
                       </select>
                     </div>
                     <div className="mt-0.5 text-[10.5px] text-ink-faint">{r.name.trim() ? `${r.name.trim()}${seriesName(r.series_id) ? ` - ${seriesName(r.series_id)}` : ''}` : '— กรอกชื่อ —'}</div>
+                    {(() => {
+                      const d = dupsOf(r.name);
+                      if (d.length) return <div className="mt-0.5 text-[10.5px] font-semibold text-[#fbbf24]">⚠ มีในระบบแล้ว: {dupLine(db, d[0])}</div>;
+                      if (twiceInBatch(r.name)) return <div className="mt-0.5 text-[10.5px] font-semibold text-[#fbbf24]">⚠ ชื่อซ้ำกับอีกแถวในชุดนี้</div>;
+                      return null;
+                    })()}
                     {/* simple: yuan + size ; variant: variant chips */}
                     {!r.variants ? (
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

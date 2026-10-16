@@ -11,12 +11,12 @@ import { persistFailText } from '@/data/persistErrors';
 import { uploadImage } from '@/lib/upload';
 import { applyWatermark } from '@/lib/watermark';
 import { composeCollage } from '@/lib/collage';
-import { sendPush, subsForLine, subsAll, subsForNewProduct, pushEnabled } from '@/lib/push';
+import { sendPush, subsForLine, subsForLines, subsForNewProduct, pushEnabled } from '@/lib/push';
 import { readStore, writeStore, removeStore } from '@/lib/safeStorage';
 import { genId, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, logActivity, createProductsIntoLine } from '@/data/mutations';
-import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, type LineMemberState } from '@/domain/services/lines';
+import { linesPublicEnabled, lineOpenToCustomers, lineStates, memberProducts, memberThumb, hasPin, lineChecklist, autoPinSpread, type LineMemberState, type LineChecklist, type LineCheckKey } from '@/domain/services/lines';
 import { availableFor } from '@/domain/services/reservations';
-import { preorderOpenForOrder, seriesForFranchise } from '@/domain/services/catalog';
+import { preorderOpenForOrder, seriesForFranchise, findDuplicateProducts } from '@/domain/services/catalog';
 import { priceFromYuan, depositFor } from '@/domain/services/pricing';
 import { baht } from '@/lib/theme';
 import type { Database, LineManualState, LineMember, Product, ProductLine, ProductStatus, WcfType } from '@/domain/entities';
@@ -28,7 +28,8 @@ import { TONE_HEX } from '@/components/lines/lineUi';
 
 /**
  * แอดมิน › ไลน์ (พรียกไลน์ · v81 · memory ryuma-line-spec) — เจ้าของ 2026-10-07: "อย่าเพิ่งให้ลูกค้าเห็น ให้แอดมินลองดูก่อน"
- *   สวิตช์ใหญ่ "ลูกค้าเห็นไลน์" ค่าเริ่ม = ปิด (ด่านจริงฝั่ง server: RLS product_lines_read) · แต่ละไลน์มี "ร่าง/แสดง" ของตัวเอง
+ *   ระบบไลน์ (app_config lines_public · ด่านจริงฝั่ง server: RLS product_lines_read) = ปุ่มปิดฉุกเฉินในหน้ารายการ
+ *   เปิดไลน์ทีละไลน์ด้วยปุ่ม 🚀 + เช็กลิสต์ในหน้าแก้ไลน์ (รอบ 1 2026-10-16 · เปิดระบบให้เองถ้ายังปิด) · แต่ละไลน์มี "ร่าง/เปิด" ของตัวเอง
  * สร้างไลน์: ค่าย + ชื่อ → รูปหมู่ → ติ๊กสินค้าจากระบบ / Add ตัวที่ยังไม่มีในระบบ (เลือกสถานะเอง) → แตะรูปวางป้าย → ดูแบบลูกค้า
  * ⚠ ทุกการแก้เขียนเข้า store ทันที (patch ตาม id ล่าสุด) — ไม่มีฟอร์มร่างที่หายได้ตอนหน้าแม่ re-render (DNA react-state)
  * ⚠ ก่อนรัน v81 ตารางยังไม่มี: ห้ามเขียน (เขียนแล้วเซฟค้าง → รีเฟรชอัตโนมัติของแท็บแอดมินหยุดทั้งแท็บ) → probe แล้วปิดปุ่ม
@@ -39,6 +40,7 @@ type Flash = (m: string) => void;
 type Probe = 'checking' | 'ok' | 'missing' | 'offline' | 'error';
 const inputCls = 'w-full rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-sm text-ink outline-none focus:border-accent';
 const EDIT_KEY = 'ryuma_lines_edit';
+const LINE_ITEM_PUSH = 'line_item_push'; // activity log ของ push "สินค้าใหม่ในไลน์" — target_id = <ไลน์>:<สินค้า> ใช้กันส่งซ้ำ
 const STATUS_TH: Record<ProductStatus, string> = { open: 'เปิดพรี', production: 'ผลิต', shipping: 'เดินทาง', arrived: 'ถึงไทย', delivered: 'ส่งมอบ', closed: 'จบ' };
 const MANUAL_OPTS: { v: '' | LineManualState; label: string }[] = [
   { v: '', label: 'ยังไม่ตั้ง (ลูกค้าไม่เห็นตัวนี้)' },
@@ -52,6 +54,21 @@ const productStatusText = (db: Database, p: Product) => {
   return p.is_stock ? `พร้อมส่ง · เหลือ ${availableFor(db, p)}${round}` : `${STATUS_TH[p.status] ?? p.status}${round}`;
 };
 const productName = (p: Product) => p.character_name?.trim() || p.series_name;
+/** ไลน์ที่ลูกค้าจะเห็นทันทีถ้าเปิดระบบไลน์ตอนนี้ — กติกาเดียวกับลูกค้า (lineOpenToCustomers บนสภาพ "ระบบเปิด")
+ *  เดิมนับแค่ active + รูป → confirm บอกว่าลูกค้าจะเห็นไลน์ที่ยังไม่มีตัวให้เห็น + push รวมเอ่ยชื่อไลน์ที่เปิดไม่ได้ (review 2026-10-16) */
+function linesShownIfSystemOn(db: Database, exceptId?: string): ProductLine[] {
+  const on = setLinesPublic(true)(db);
+  return on.productLines.filter((l) => l.id !== exceptId && lineOpenToCustomers(on, l));
+}
+/** push รวม 1 ข้อความเมื่อหลายไลน์เพิ่งโผล่ให้ลูกค้าพร้อมกัน (เปิดระบบไลน์ทั้งที่มีไลน์ตั้งเปิดรออยู่) — ไม่ยิงทีละไลน์ กันถล่ม
+ *  เรียกหลัง flush ผ่านแล้วเท่านั้น (DNA: ห้าม push ก่อนเซฟ) · คืนจำนวนเครื่อง */
+function pushLinesOpened(db: Database, dispatch: Dispatch, uid: string, lines: ProductLine[]): number {
+  const subs = subsForLines(db, lines);
+  const names = lines.slice(0, 3).map((l) => l.name.trim()).filter(Boolean).join(' · ');
+  sendPush(subs, { title: '🧩 ไลน์อัปมาแล้ว', body: `ไลน์ ${names}${lines.length > 3 ? ` และอีก ${lines.length - 3} ไลน์` : ''} ได้ถูกอัปเดตแล้ว — กดดูทั้งชุด`, url: '/lines' }, dispatch).catch(() => {});
+  dispatch(logActivity(uid, 'line_push', `แจ้งเปิดไลน์อัป ${lines.length} ไลน์ (${subs.length} เครื่อง)`));
+  return subs.length;
+}
 
 export default function AdminLinesPage() {
   const db = useDatabase();
@@ -98,11 +115,12 @@ export default function AdminLinesPage() {
   const canWrite = probe === 'ok' || probe === 'offline';
   const isPublic = linesPublicEnabled(db);
 
+  // สวิตช์ "ระบบไลน์" = ปุ่มฉุกเฉินปิดทั้งระบบ (เจ้าของ 2026-10-16 รอบ 1) — ใช้เปิดไลน์ทีละไลน์ที่ปุ่ม 🚀 ในหน้าแก้ไลน์ (เปิดระบบให้เองถ้ายังปิด)
   const toggle = async () => {
     if (!isPublic) {
-      const ok = window.confirm('เปิดให้ลูกค้าทุกคนเห็น "ไลน์" เลยไหม?\n\n• แถบไลน์ขึ้นบนหน้าช็อป + ปุ่ม "ดูทั้งไลน์" ในหน้าสินค้า\n• ลูกค้าเห็นเฉพาะไลน์ที่กด "แสดงให้ลูกค้า" แล้ว (ร่างยังซ่อน)\n\nลองดูผ่านบัญชีแอดมินครบแล้วค่อยเปิด');
+      const ok = window.confirm('เปิดระบบไลน์ให้ลูกค้าเห็นเลยไหม?\n\n• แถบไลน์ขึ้นบนหน้าช็อป + ปุ่ม "ดูทั้งไลน์" ในหน้าสินค้า\n• ลูกค้าเห็นเฉพาะไลน์ที่กด "🚀 เปิดไลน์ให้ลูกค้า" แล้ว (ร่างยังซ่อน)');
       if (!ok) return;
-    }
+    } else if (!window.confirm('ปิดระบบไลน์ทั้งหมด?\n\n• ลูกค้าจะไม่เห็นไลน์ไหนเลย (หน้าไลน์ · แถบในช็อป · หน้าแรก)\n• ไลน์ที่เปิดไว้ระบบจำไว้ — เปิดระบบอีกครั้งก็กลับมาเหมือนเดิม')) return;
     dispatch(setLinesPublic(!isPublic));
     dispatch(logActivity(uid, 'lines_public', isPublic ? 'ปิดไลน์จากฝั่งลูกค้า' : 'เปิดไลน์ให้ลูกค้าเห็น'));
     const pf = await store.flush();
@@ -111,14 +129,10 @@ export default function AdminLinesPage() {
     // เปิดสวิตช์ใหญ่ทั้งที่มีไลน์ "แสดง" รออยู่แล้ว = ไลน์พวกนั้นเพิ่งโผล่ให้ลูกค้าครั้งแรก → ถามว่าจะส่ง push รวม 1 ข้อความไหม
     //   (ไม่ยิงทีละไลน์ กันถล่ม · ลำดับกดจะเป็น "แสดงก่อนเปิดสวิตช์" หรือ "เปิดสวิตช์ก่อนแสดง" ก็ได้แจ้งเตือนทั้งคู่)
     if (!isPublic && pushEnabled(db, 'line_new')) {
-      const live = db.productLines.filter((l) => l.active && !!l.cover_url);
+      const live = linesShownIfSystemOn(db);
       if (live.length === 0) return;
-      const subs = subsAll(db);
-      if (!window.confirm(`มีไลน์ที่แสดงอยู่ ${live.length} ไลน์ เพิ่งเปิดให้ลูกค้าเห็นครั้งแรก\nส่งแจ้งเตือนรวม 1 ข้อความไป ${subs.length} เครื่องที่เปิดกระดิ่งไหม?`)) return;
-      const names = live.slice(0, 3).map((l) => l.name.trim()).filter(Boolean).join(' · ');
-      sendPush(subs, { title: '🧩 ไลน์อัปมาแล้ว', body: `ไลน์ ${names}${live.length > 3 ? ` และอีก ${live.length - 3} ไลน์` : ''} ได้ถูกอัปเดตแล้ว — กดดูทั้งชุด`, url: '/lines' }, dispatch).catch(() => {});
-      dispatch(logActivity(uid, 'line_push', `แจ้งเปิดไลน์อัป ${live.length} ไลน์ (${subs.length} เครื่อง)`));
-      flash(`ส่งแจ้งเตือนแล้ว ${subs.length} เครื่อง`);
+      if (!window.confirm(`มีไลน์ที่ตั้งเปิดไว้ ${live.length} ไลน์ เพิ่งโผล่ให้ลูกค้าเห็นครั้งแรก\nส่งแจ้งเตือนรวม 1 ข้อความไป ${subsForLines(db, live).length} เครื่องที่เปิดกระดิ่งไหม? (ยกเว้นคนที่ปิดค่าย/เรื่องของทุกไลน์ในชุด)`)) return;
+      flash(`ส่งแจ้งเตือนแล้ว ${pushLinesOpened(db, dispatch, uid, live)} เครื่อง`);
     }
   };
 
@@ -132,16 +146,21 @@ export default function AdminLinesPage() {
           <div className="text-[20px] font-extrabold sm:text-[22px]">ไลน์ (พรียกไลน์)</div>
           <div className="text-[12.5px] text-ink-muted2">รูปหมู่ของค่าย + ป้ายสถานะบนหัวตัวละคร · ป้ายคำนวณสดจากสินค้า/สต๊อก/รอบพิเศษ — เปลี่ยนสถานะสินค้าที่หน้าไหน ป้ายเปลี่ยนตามเอง</div>
         </div>
-        <button
-          onClick={() => void toggle()}
-          disabled={probe === 'missing' || probe === 'checking'}
-          className={cx('flex items-center gap-2.5 self-start rounded-xl border px-4 py-2.5 text-[13px] font-bold disabled:opacity-40', isPublic ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}
-        >
-          <span className={cx('relative h-5 w-9 rounded-full transition-colors', isPublic ? 'bg-[#16a34a]' : 'bg-white/15')}>
-            <span className={cx('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all', isPublic ? 'left-[18px]' : 'left-0.5')} />
-          </span>
-          {isPublic ? 'ลูกค้าเห็นไลน์แล้ว' : 'ลูกค้ายังไม่เห็น (แอดมินเห็นคนเดียว)'}
-        </button>
+        {!(editId && editing) && (
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <button
+              onClick={() => void toggle()}
+              disabled={probe === 'missing' || probe === 'checking'}
+              className={cx('flex items-center gap-2.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-bold disabled:opacity-40', isPublic ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-ink-muted2')}
+            >
+              <span className={cx('relative h-5 w-9 rounded-full transition-colors', isPublic ? 'bg-[#16a34a]' : 'bg-white/15')}>
+                <span className={cx('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all', isPublic ? 'left-[18px]' : 'left-0.5')} />
+              </span>
+              {isPublic ? 'ระบบไลน์: เปิดอยู่' : 'ระบบไลน์: ปิด (ลูกค้าไม่เห็นไลน์ไหนเลย)'}
+            </button>
+            <span className="text-[11px] text-ink-faint">ปุ่มปิดทั้งระบบ · เปิดไลน์ทีละไลน์ที่ปุ่ม 🚀 ในหน้าแก้ไลน์</span>
+          </div>
+        )}
       </div>
 
       {probe === 'missing' && (
@@ -219,15 +238,14 @@ function LinesList({ db, onOpen, isPublic }: { db: Database; onOpen: (id: string
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {lines.map((l) => {
         const states = lineStates(db, l, { uid: '' });
-        const visibleN = states.filter((s) => s.state.visible).length;
-        const pinned = l.members.filter(hasPin).length;
+        const chk = lineChecklist(db, l);
         const maker = db.manufacturers.find((m) => m.id === l.maker_id)?.name ?? '— (ไม่พบค่าย)';
         // ป้ายบอกตรงกับกติกาเดียวกับฝั่งลูกค้า (lineOpenToCustomers) — ไม่ใช่แค่ดู active
-        const open = lineOpenToCustomers(db, l);
-        const badge = open ? 'ลูกค้าเห็น'
-          : !l.active ? 'ร่าง'
-            : !isPublic ? 'แสดง (รอเปิดสวิตช์)'
-              : !l.cover_url ? 'แสดง (ขาดรูปหมู่)' : 'แสดง (ยังไม่มีตัวที่ลูกค้าเห็น)';
+        const open = chk.live;
+        const badge = open ? '✓ ลูกค้าเห็น'
+          : l.active && !chk.ready ? 'เปิดไว้ · ยังไม่ครบ (ลูกค้าไม่เห็น)'
+            : l.active && !isPublic ? 'เปิดไว้ · รอเปิดระบบไลน์'
+              : `ร่าง · พร้อม ${chk.okCount}/${chk.items.length}`;
         return (
           <div key={l.id} className="overflow-hidden rounded-2xl border border-subtle bg-surface-2">
             <button onClick={() => onOpen(l.id)} className="block w-full text-left">
@@ -239,7 +257,7 @@ function LinesList({ db, onOpen, isPublic }: { db: Database; onOpen: (id: string
               </div>
               <div className="p-3">
                 <div className="truncate text-[14px] font-extrabold">{l.name.trim() || '(ยังไม่ตั้งชื่อ)'}</div>
-                <div className="text-[11.5px] text-ink-muted2">{maker} · {visibleN}/{l.members.length} ตัวลูกค้าเห็น · ป้าย {pinned}/{l.members.length}</div>
+                <div className="text-[11.5px] text-ink-muted2">{maker} · {chk.visible.length}/{l.members.length} ตัวลูกค้าเห็น · ป้าย {chk.pinned}/{chk.visible.length}</div>
                 <div className="mt-1.5 flex gap-1">
                   {states.map((s) => <i key={s.member.id} title={`${s.no} ${s.member.name} · ${s.state.label}`} className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: TONE_HEX[s.state.tone], opacity: s.state.visible ? 1 : 0.35 }} />)}
                 </div>
@@ -280,7 +298,7 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
     } finally { setBusy(null); }
   };
   const removeCover = () => {
-    if (!line.cover_url || !window.confirm('ลบรูปหมู่?\n\n• ป้ายที่วางไว้จะถูกล้าง\n• ไลน์กลับเป็น "ร่าง" (ลูกค้าไม่เห็นไลน์ที่ไม่มีรูป) — ใส่รูปใหม่แล้วกดแสดงอีกครั้ง')) return;
+    if (!line.cover_url || !window.confirm('ลบรูปหมู่?\n\n• ป้ายที่วางไว้จะถูกล้าง\n• ไลน์กลับเป็น "ร่าง" (ลูกค้าไม่เห็นไลน์ที่ไม่มีรูป) — ใส่รูปใหม่แล้วกด 🚀 เปิดไลน์อีกครั้ง')) return;
     // ร่างด้วย (review 2026-10-07): เดิมลบรูปแล้ว active ค้าง → ลูกค้ายังเข้าทางชิปหน้าสินค้า/ลิงก์ตรงได้
     patch((l) => ({ ...l, cover_url: null, active: false, members: l.members.map((m) => ({ ...m, pin_x: undefined, pin_y: undefined })) }));
     flash('ลบรูปหมู่แล้ว — ไลน์กลับเป็นร่าง');
@@ -337,40 +355,85 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   };
   // ข้อความ push ของไลน์ — DNA push no-qty: ชื่อไลน์ + ค่าย/เรื่อง เท่านั้น ห้ามบอกจำนวน/สต๊อก
   const lineWho = () => [db.manufacturers.find((m) => m.id === line.maker_id)?.name, line.franchise_id ? db.franchises.find((f) => f.id === line.franchise_id)?.name : undefined].filter(Boolean).join(' · ');
-  const toggleActive = async () => {
+  // ── เปิดไลน์ให้ลูกค้า: ปุ่มเดียว (เจ้าของ 2026-10-16 รอบ 1 แทนสวิตช์ 2 ชั้น) ──
+  //   เช็กลิสต์บังคับครบก่อน (lineChecklist) · ป้ายไม่ครบ = ถามก่อน · ระบบไลน์ยังปิด = ถามแล้วเปิดให้พร้อมกัน
+  //   เซฟให้ขึ้นก่อนค่อย push (DNA) · ระบบเพิ่งเปิดพร้อมไลน์อื่นที่ตั้งเปิดรออยู่ = push รวม 1 ข้อความ ไม่ยิงทีละไลน์
+  const others = linesPublicEnabled(db) ? [] : linesShownIfSystemOn(db, line.id); // ระบบปิดอยู่: ไลน์อื่นที่จะโผล่พร้อมกันถ้าเปิดระบบ
+  const publishSubs = others.length > 0 ? subsForLines(db, [line, ...others]).length : subsForLine(db, line).length;
+  const publish = async () => {
     if (!guard()) return;
-    if (!line.active && !line.cover_url) return flash('ใส่รูปหมู่ก่อน — ลูกค้าไม่เห็นไลน์ที่ไม่มีรูป');
-    const turningOn = !line.active;
-    dispatch(patchProductLine(line.id, (l) => ({ ...l, active: !l.active })));
-    dispatch(logActivity(uid, 'line_active', `${line.active ? 'ซ่อน' : 'แสดง'}ไลน์ ${line.name.trim()}`, { targetId: line.id, targetLabel: line.name.trim() }));
-    // แสดงให้ลูกค้าครั้งแรกขณะสวิตช์ใหญ่เปิด = ไลน์ใหม่ → push ทุกคนที่เปิดกระดิ่ง (เจ้าของ 2026-10-08) · เซฟให้ขึ้นก่อนค่อยยิง (DNA: ห้าม push ก่อนเซฟ)
-    if (turningOn && linesPublicEnabled(db) && pushEnabled(db, 'line_new')) {
-      const pf = await store.flush();
-      if (pf) return flash(persistFailText(pf, 'บันทึกแล้วจะลองใหม่ให้ — ยังไม่ส่งแจ้งเตือน'));
-      const subs = subsForLine(db, line);
-      sendPush(subs, { title: '🧩 ไลน์อัปใหม่', body: `ไลน์ ${line.name.trim()} (${lineWho()}) เปิดแล้ว — กดดูทั้งไลน์`, url: `/line/${line.id}` }, dispatch).catch(() => {});
-      flash(`แสดงให้ลูกค้าแล้ว · ส่งแจ้งเตือนไลน์ใหม่ไป ${subs.length} เครื่อง`);
+    const c = lineChecklist(db, line);
+    if (c.live) return;
+    if (!c.ready) return flash(checkProblemText(c, line, db));
+    if (c.pinsMissing.length > 0 && !window.confirm(`ยังไม่วางป้าย ${c.pinsMissing.length} ตัว: ${c.pinsMissing.slice(0, 4).map((m) => m.name.trim() || '(ไม่มีชื่อ)').join(' · ')}${c.pinsMissing.length > 4 ? ' …' : ''}\n\nเปิดเลยไหม? ตัวที่ไม่มีป้ายยังอยู่ในรายการใต้รูป แค่ไม่มีป้ายบนหัว`)) return;
+    const sysOff = !linesPublicEnabled(db);
+    if (sysOff && !window.confirm(`ระบบไลน์ยังปิดอยู่ (ลูกค้ายังไม่เห็นไลน์ไหนเลย) — เปิดระบบพร้อมกันเลยไหม?${others.length ? `\n\nไลน์อื่นที่ตั้งเปิดไว้แล้ว ${others.length} ไลน์ (${others.slice(0, 3).map((l) => l.name.trim()).join(' · ')}) ลูกค้าจะเห็นด้วย` : ''}`)) return;
+    if (sysOff) {
+      dispatch(setLinesPublic(true));
+      dispatch(logActivity(uid, 'lines_public', 'เปิดไลน์ให้ลูกค้าเห็น (จากปุ่มเปิดไลน์)'));
     }
+    dispatch(patchProductLine(line.id, (l) => ({ ...l, active: true })));
+    dispatch(logActivity(uid, 'line_active', `แสดงไลน์ ${line.name.trim()}`, { targetId: line.id, targetLabel: line.name.trim() }));
+    const pf = await store.flush();
+    if (pf) return flash(persistFailText(pf, 'บันทึกแล้วจะลองใหม่ให้ — ยังไม่ส่งแจ้งเตือน'));
+    if (!pushEnabled(db, 'line_new')) return flash('เปิดไลน์ให้ลูกค้าแล้ว 🎉 (แจ้งเตือน "ไลน์อัปใหม่" ปิดไว้ที่ Push Control)');
+    if (sysOff && others.length > 0) return flash(`เปิดไลน์ให้ลูกค้าแล้ว 🎉 · ส่งแจ้งเตือนรวม ${others.length + 1} ไลน์ไป ${pushLinesOpened(db, dispatch, uid, [line, ...others])} เครื่อง`);
+    const subs = subsForLine(db, line);
+    sendPush(subs, { title: '🧩 ไลน์อัปใหม่', body: `ไลน์ ${line.name.trim()} (${lineWho()}) เปิดแล้ว — กดดูทั้งไลน์`, url: `/line/${line.id}` }, dispatch).catch(() => {});
+    flash(`เปิดไลน์ให้ลูกค้าแล้ว 🎉 · ส่งแจ้งเตือนไลน์ใหม่ไป ${subs.length} เครื่อง`);
+  };
+  const hide = async () => {
+    if (!guard() || !line.active) return;
+    if (!window.confirm(`ซ่อนไลน์ "${line.name.trim() || 'ไม่มีชื่อ'}" (กลับเป็นร่าง)?\n\n• ลูกค้าเปิดหน้าไลน์นี้ไม่ได้\n• ตัวในไลน์กลับไปโชว์เป็นตัวเดี่ยวในช็อป\n• รูปหมู่/ป้ายเก็บไว้ครบ กด 🚀 เปิดใหม่ได้ (เปิดอีกครั้ง = ส่งแจ้งเตือนไลน์ใหม่อีกรอบ)`)) return;
+    dispatch(patchProductLine(line.id, (l) => ({ ...l, active: false })));
+    dispatch(logActivity(uid, 'line_active', `ซ่อนไลน์ ${line.name.trim()}`, { targetId: line.id, targetLabel: line.name.trim() }));
+    const pf = await store.flush();
+    flash(pf ? persistFailText(pf, 'บันทึกแล้วจะลองใหม่ให้') : 'ไลน์กลับเป็นร่างแล้ว — ลูกค้าไม่เห็นไลน์นี้');
+  };
+  // วางป้ายอัตโนมัติ: กระจายเท่าๆ กันซ้ายไปขวาตามลำดับตัว (เฉพาะตัวที่ลูกค้าเห็น — ตัวที่ไม่มีสถานะลูกค้าไม่เห็นป้ายอยู่แล้ว)
+  const autoPins = () => {
+    if (!guard()) return;
+    if (!line.cover_url) return flash('ใส่รูปหมู่ก่อน แล้วค่อยวางป้าย');
+    const targets = lineChecklist(db, line).visible;
+    if (targets.length === 0) return flash(line.members.length === 0 ? 'เพิ่มตัวในไลน์ก่อน แล้วค่อยวางป้าย' : 'ยังไม่มีตัวที่ลูกค้าเห็นได้ — ผูกสินค้า หรือตั้งสถานะให้ตัวในไลน์ก่อน แล้วค่อยวางป้าย');
+    const placed = targets.filter(hasPin).length;
+    if (placed > 0 && !window.confirm(`วางป้ายใหม่ทั้งหมด ${targets.length} ตัว เรียงซ้ายไปขวา?\n\nป้ายที่วางไว้แล้ว ${placed} ตัวจะถูกย้ายไปตำแหน่งใหม่`)) return;
+    const pos = autoPinSpread(targets.length);
+    const at = new Map(targets.map((m, i) => [m.id, pos[i]]));
+    patch((l) => ({ ...l, members: l.members.map((m) => (at.has(m.id) ? { ...m, pin_x: at.get(m.id)!.x, pin_y: at.get(m.id)!.y } : m)) }));
+    setPending(null);
+    flash(`วางป้าย ${targets.length} ตัวเรียงซ้ายไปขวาแล้ว — กด ↑ ↓ เลื่อนทั้งชุดให้ตรงหัว แล้วแตะหัวจริงเพื่อขยับทีละตัว`);
   };
   // แอดมินกดเองเมื่อมีอัปเดตสำคัญ (ค่ายเปิดตัวใหม่ / ของเข้า) — ไม่ยิงอัตโนมัติทุกครั้งที่แก้ ไม่งั้นลูกค้าโดนถล่ม
   // เพิ่มสินค้าเข้าไลน์ที่ลูกค้าเห็นอยู่ → แจ้ง "ชื่อรายการ (ชื่อไลน์) เปิดพรีแล้ว" อัตโนมัติ (เจ้าของ 2026-10-08) — wording เดียวกับสินค้าเข้าใหม่
   //   เฉพาะของที่สั่งได้จริงตอนนี้ (พรีเปิด / พร้อมส่ง) · เซฟให้ขึ้นก่อนค่อยยิง · ไลน์ร่าง/สวิตช์ปิด = เงียบ (ลูกค้ายังไม่เห็นอยู่แล้ว)
+  //   (review ลูกค้า 2026-10-16) · พร้อมส่งต้องมีของจริง — แอดมินเห็นตั๋วทั้งร้าน สูตร local เชื่อได้ (เดิมติ๊ก SKU ที่หมดแล้วก็เด้ง "พร้อมส่งเข้าใหม่")
+  //   · ไม่ส่งซ้ำ: เอาติ๊กออกแล้วติ๊กใหม่เคยเด้งซ้ำ → จำใน activity log (ไลน์+สินค้า)
+  //   · สินค้าที่ลงไว้นานแล้ว (เกิน 3 วัน) ถามก่อน — คำว่า "ได้เปิดพรีแล้ว" ไม่จริงสำหรับของที่เปิดมาหลายสัปดาห์
   const announceItem = async (p: Product) => {
     if (!lineOpenToCustomers(db, line) || !pushEnabled(db, 'line_item')) return;
-    if (!(p.is_stock || preorderOpenForOrder(db, p))) return;
+    if (p.is_stock ? availableFor(db, p) <= 0 : !preorderOpenForOrder(db, p)) return;
+    const key = `${line.id}:${p.id}`;
+    if (db.activityLogs.some((a) => a.action === LINE_ITEM_PUSH && a.target_id === key)) return flash(`ผูก "${productName(p)}" แล้ว · เคยแจ้งเตือนตัวนี้ในไลน์นี้ไปแล้ว ไม่ส่งซ้ำ`);
+    const ageDays = (Date.now() - new Date(p.created_at).getTime()) / 86_400_000;
+    if (ageDays > 3) {
+      const since = new Date(p.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+      if (!window.confirm(`"${productName(p)}" ลงไว้ตั้งแต่ ${since} แล้ว\n\nส่งแจ้งเตือนลูกค้าว่า "${p.is_stock ? 'พร้อมส่งแล้ว' : 'ได้เปิดพรีแล้ว'} (ไลน์ ${line.name.trim()})" ไหม?\n\nตกลง = ส่ง · ยกเลิก = แค่ผูกเข้าไลน์ ไม่แจ้งเตือน`)) return;
+    }
     const pf = await store.flush();
-    if (pf) return;
+    if (pf) return flash(persistFailText(pf, 'บันทึกยังไม่ขึ้น — ยังไม่ส่งแจ้งเตือน'));
     const subs = subsForLine(db, line);
     sendPush(subs, {
       title: p.is_stock ? '🟢 พร้อมส่งเข้าใหม่' : '🆕 เปิดพรีใหม่',
       body: `${productName(p)} (${line.name.trim()}) ${p.is_stock ? 'พร้อมส่งแล้ว' : 'ได้เปิดพรีแล้ว'} · ${baht(p.price_total)}${p.is_stock ? '' : ` · มัดจำ ${baht(p.deposit_amount)}`}`,
       url: `/line/${line.id}`,
     }, dispatch).catch(() => {});
+    dispatch(logActivity(uid, LINE_ITEM_PUSH, `แจ้งเตือน ${productName(p)} เข้าไลน์ ${line.name.trim()} (${subs.length} เครื่อง)`, { targetId: key, targetLabel: productName(p) }));
     flash(`แจ้งเตือน "${productName(p)} (${line.name.trim()})" ไป ${subs.length} เครื่อง`);
   };
   const notifyUpdate = () => {
     if (!guard()) return;
-    if (!lineOpenToCustomers(db, line)) return flash('ลูกค้ายังมองไม่เห็นไลน์นี้ — เปิดสวิตช์ใหญ่ + กดแสดงให้ลูกค้าก่อน');
+    if (!lineOpenToCustomers(db, line)) return flash('ลูกค้ายังมองไม่เห็นไลน์นี้ — กด 🚀 เปิดไลน์ให้ลูกค้าก่อน');
     if (!pushEnabled(db, 'line_update')) return flash('แจ้งเตือน "ไลน์อัปมีอัปเดต" ถูกปิดไว้ที่หน้า Push Control');
     const subs = subsForLine(db, line);
     if (!window.confirm(`ส่งแจ้งเตือน "ไลน์ ${line.name.trim()} มีอัปเดต" ไป ${subs.length} เครื่อง?\n\nลูกค้าที่ปิดค่าย/เรื่องนี้ไว้จะไม่ได้รับ`)) return;
@@ -400,12 +463,10 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
         </div>
         <Link href={`/line/${line.id}`} target="_blank" className="text-[12.5px] font-semibold text-primary-soft">เปิดหน้าจริง (แท็บใหม่) →</Link>
         <div className="flex-1" />
-        <button onClick={() => void toggleActive()} className={cx('rounded-lg border px-3 py-2 text-[12.5px] font-bold', line.active ? 'border-[#16a34a]/50 bg-[#16a34a]/15 text-[#4ade80]' : 'border-subtle bg-surface-3 text-[#fbbf24]')}>
-          {line.active ? '✓ ลูกค้าเห็นไลน์นี้แล้ว' : '🔒 ร่าง — กดเปิดไลน์นี้ให้ลูกค้า'}
-        </button>
-        {line.active && <button onClick={notifyUpdate} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold" title="ส่ง push ว่าไลน์นี้มีอัปเดต ให้ทุกคนที่เปิดกระดิ่ง">📣 แจ้งลูกค้า</button>}
         <button onClick={deleteLine} className="rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold text-[#f87171]">ลบไลน์</button>
       </div>
+
+      <PublishPanel db={db} line={line} canWrite={canWrite} subsN={publishSubs} onPublish={() => void publish()} onHide={() => void hide()} onAutoPins={autoPins} onNotify={notifyUpdate} />
 
       {view === 'preview' ? (
         <div>
@@ -464,8 +525,9 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
                     {pending && <PinPicker line={line} states={states} pending={pending} onPlace={placePin} onCancel={() => setPending(null)} />}
                   </div>
                 </div>
-                <PinProgress line={line} pending={!!pending} />
+                <PinProgress db={db} line={line} pending={!!pending} />
                 <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[12px]">
+                  <button onClick={autoPins} disabled={!canWrite || lineChecklist(db, line).visible.length === 0} className="w-full rounded-md border border-[#f59e0b]/50 bg-[#f59e0b]/10 px-2.5 py-1.5 font-extrabold text-[#fbbf24] disabled:opacity-40 sm:w-auto">✨ วางป้ายอัตโนมัติ (เรียงซ้ายไปขวา)</button>
                   <span className="font-bold">เลื่อนป้ายทั้งชุด</span>
                   <div className="flex gap-1">
                     {([['←', -1, 0], ['→', 1, 0], ['↑', 0, -1], ['↓', 0, 1]] as const).map(([k, dx, dy]) => (
@@ -518,6 +580,76 @@ function LineEditor({ db, dispatch, flash, uid, line, canWrite, onClose }: { db:
   );
 }
 
+/** เช็กลิสต์ "พร้อมเปิด k/4" + ปุ่มเดียว 🚀 เปิดไลน์ให้ลูกค้า (เจ้าของ 2026-10-16 รอบ 1 · ม็อกอัป round1-mockup)
+ *  เปิดแล้ว = แถบเขียวบรรทัดเดียว + 📣 แจ้งลูกค้า + ซ่อน · ยังไม่เปิด = รายการ 4 ข้อ + ปุ่ม (เทาถ้าข้อบังคับไม่ครบ · ส้มถ้าป้ายไม่ครบ · เขียวกระพริบถ้าครบ) */
+function checkProblemText(c: LineChecklist, line: ProductLine, db: Database): string {
+  if (c.firstProblem === 'cover') return 'ใส่รูปหมู่ก่อน — ลูกค้าไม่เห็นไลน์ที่ไม่มีรูป';
+  if (c.firstProblem === 'members') return 'ต้องมีตัวที่ลูกค้าเห็นได้อย่างน้อย 1 ตัว';
+  if (!line.name.trim()) return 'ตั้งชื่อไลน์ก่อน';
+  return db.manufacturers.some((m) => m.id === line.maker_id) ? 'ตั้งชื่อไลน์ + เลือกค่ายก่อน' : 'เลือกค่ายของไลน์ใหม่ก่อน (ค่ายเดิมไม่พบในระบบ)';
+}
+const CHECK_LABEL: Record<LineCheckKey, (c: LineChecklist, line: ProductLine, n: number) => string> = {
+  info: (c, l) => (c.items[0].ok ? `ชื่อไลน์ · ค่าย${l.franchise_id ? ' · เรื่อง' : ' (ยังไม่ระบุเรื่อง)'}` : !l.name.trim() ? 'ตั้งชื่อไลน์ + เลือกค่าย' : 'เลือกค่ายของไลน์ใหม่ (ค่ายเดิมไม่พบในระบบ)'),
+  cover: (c) => (c.items[1].ok ? 'รูปหมู่' : 'ใส่รูปหมู่ (หรือ 🧩 สร้างรูปรวมจากรูปเดี่ยว)'),
+  members: (c, _l, n) => (n === 0 ? 'เพิ่มตัวในไลน์ (ลงสินค้าใหม่ / ติ๊กจากในระบบ / Add เอง)'
+    : c.visible.length === 0 ? `ตัวในไลน์ ${n} ตัว แต่ลูกค้ายังไม่เห็นสักตัว — ผูกสินค้า หรือตั้งสถานะ`
+      : `ตัวในไลน์ ${n} ตัว · ลูกค้าเห็นได้ ${c.visible.length}`),
+  pins: (c) => `วางป้าย ${c.pinned}/${c.visible.length}`,
+};
+function PublishPanel({ db, line, canWrite, subsN, onPublish, onHide, onAutoPins, onNotify }: {
+  db: Database; line: ProductLine; canWrite: boolean; subsN: number; onPublish: () => void; onHide: () => void; onAutoPins: () => void; onNotify: () => void;
+}) {
+  const c = lineChecklist(db, line);
+  const sysOn = linesPublicEnabled(db);
+  const pushOn = pushEnabled(db, 'line_new');
+  if (c.live) {
+    return (
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[#16a34a]/50 bg-[#16a34a]/10 px-3 py-2.5">
+        <span className="text-[13px] font-extrabold text-[#4ade80]">✓ ลูกค้าเห็นไลน์นี้แล้ว</span>
+        {c.pinsMissing.length > 0 && <span className="text-[11.5px] text-[#fbbf24]">ยังไม่วางป้าย {c.pinsMissing.length} ตัว</span>}
+        <div className="flex-1" />
+        <button onClick={onNotify} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold" title="ส่ง push ว่าไลน์นี้มีอัปเดต ให้ทุกคนที่เปิดกระดิ่ง">📣 แจ้งลูกค้า</button>
+        <button onClick={onHide} disabled={!canWrite} className="rounded-lg border border-subtle bg-surface-3 px-3 py-1.5 text-[12px] font-bold text-ink-muted2 disabled:opacity-40">ซ่อนไลน์</button>
+      </div>
+    );
+  }
+  const pinsShort = c.ready && c.pinsMissing.length > 0;
+  const tone = !c.ready ? 'gray' : pinsShort ? 'amber' : 'green';
+  const pct = Math.round((c.okCount / c.items.length) * 100);
+  return (
+    <div className="mb-3 rounded-xl border border-subtle bg-surface-2 p-3">
+      <div className="flex items-center gap-2 text-[13.5px] font-extrabold">พร้อมเปิด {c.okCount}/{c.items.length}{c.okCount === c.items.length && <span className="text-[#4ade80]">✓</span>}<span className="ml-auto text-[11px] font-semibold text-ink-faint">{line.active ? 'เปิดไว้ แต่ลูกค้ายังไม่เห็น' : 'ร่าง · ลูกค้ายังไม่เห็น'}</span></div>
+      <div className="my-2 h-2 overflow-hidden rounded-full bg-white/[0.08]"><i className={cx('block h-full rounded-full', tone === 'green' ? 'bg-[#16a34a]' : 'bg-[#f59e0b]')} style={{ width: `${pct}%` }} /></div>
+      <div className="flex flex-col">
+        {c.items.map((it) => (
+          <div key={it.key} className="flex items-center gap-2 border-t border-dashed border-hair py-1.5 text-[12.5px]">
+            <span className={cx('w-4 shrink-0 text-center font-extrabold', it.ok ? 'text-[#4ade80]' : it.required ? 'text-[#f87171]' : 'text-[#fbbf24]')}>{it.ok ? '✓' : '✗'}</span>
+            <span className={cx('min-w-0 flex-1', it.ok ? 'text-ink' : 'text-ink-muted2')}>{CHECK_LABEL[it.key](c, line, line.members.length)}{it.key === 'members' && it.ok && c.hiddenN > 0 && <span className="text-[#fbbf24]"> · อีก {c.hiddenN} ตัวยังไม่ตั้งสถานะ</span>}</span>
+            {it.key === 'pins' && !it.ok && !!line.cover_url && c.visible.length > 0 && canWrite && <button onClick={onAutoPins} className="shrink-0 text-[11.5px] font-bold text-primary-soft">✨ วางอัตโนมัติ →</button>}
+          </div>
+        ))}
+      </div>
+      {!sysOn && <div className="mt-1 rounded-lg bg-[#f59e0b]/10 px-2.5 py-1.5 text-[11.5px] text-[#fbbf24]">ระบบไลน์ยังปิดอยู่ (ลูกค้าไม่เห็นไลน์ไหนเลย) — กดปุ่มด้านล่างแล้วระบบจะถามเพื่อเปิดให้พร้อมกัน</div>}
+      <button onClick={onPublish} disabled={!canWrite || !c.ready}
+        className={cx('mt-2.5 w-full rounded-xl px-4 py-3 text-[14px] font-extrabold disabled:cursor-not-allowed', tone === 'green' ? 'animate-pulseGreen border border-[#16a34a] bg-[#16a34a] text-white' : tone === 'amber' ? 'border border-[#f59e0b]/60 bg-[#f59e0b]/15 text-[#fbbf24]' : 'border border-subtle bg-white/[0.06] text-ink-faint')}>
+        🚀 เปิดไลน์ให้ลูกค้า{tone === 'green' && pushOn && subsN > 0 ? ` + แจ้งเตือน ${subsN} เครื่อง` : ''}
+      </button>
+      {line.active && (
+        <div className="mt-2 flex items-center gap-2 rounded-lg border border-subtle bg-surface-3 px-2.5 py-1.5 text-[11.5px] text-ink-muted2">
+          <span className="min-w-0 flex-1">{c.ready ? 'ไลน์นี้ตั้งเปิดไว้แล้ว — รอเปิดระบบไลน์' : 'ไลน์นี้ตั้งเปิดไว้แล้ว — จะโผล่ให้ลูกค้าเองทันทีที่ครบ (ไม่มีแจ้งเตือน)'}</span>
+          <button onClick={onHide} disabled={!canWrite} className="shrink-0 rounded-md border border-subtle bg-surface-2 px-2.5 py-1 font-bold disabled:opacity-40">กลับเป็นร่าง</button>
+        </div>
+      )}
+      <div className="mt-1.5 text-center text-[11px] text-ink-faint">
+        {!canWrite ? 'ยังแก้ไม่ได้ — กำลังเช็คระบบ'
+          : !c.ready ? checkProblemText(c, line, db)
+            : pinsShort ? `ยังไม่วางป้าย ${c.pinsMissing.length} ตัว — เปิดได้ (ระบบจะถามก่อน) ตัวที่ไม่มีป้ายยังอยู่ในรายการใต้รูป`
+              : pushOn ? 'เปิดแล้วส่งแจ้งเตือน "ไลน์อัปใหม่" ให้ทุกคนที่เปิดกระดิ่ง (ยกเว้นคนที่ปิดค่าย/เรื่องนี้)' : 'แจ้งเตือน "ไลน์อัปใหม่" ปิดไว้ที่ Push Control — เปิดไลน์แล้วจะไม่ส่ง push'}
+      </div>
+    </div>
+  );
+}
+
 /** หลังแตะรูป: กล่อง "จุดนี้คือใคร?" ซ้อนบนรูป ใกล้จุดที่แตะ (เหนือจุดถ้ามีที่ ไม่งั้นใต้จุด) — เลือกชื่อ = ป้ายขึ้นทันที · วางซ้ำได้ (ย้ายป้าย) */
 function PinPicker({ line, states, pending, onPlace, onCancel }: { line: ProductLine; states: { member: LineMember; no: number; state: LineMemberState }[]; pending: { x: number; y: number }; onPlace: (mid: string) => void; onCancel: () => void }) {
   const below = pending.y < 45;
@@ -548,18 +680,22 @@ function PinPicker({ line, states, pending, onPlace, onCancel }: { line: Product
 }
 
 /** แถบบอกขั้นตอน + ความคืบหน้าใต้รูป — รู้ตลอดว่าวางแล้วกี่ตัว ขาดใคร */
-function PinProgress({ line, pending }: { line: ProductLine; pending: boolean }) {
-  const missing = line.members.filter((m) => !hasPin(m));
-  const done = line.members.length - missing.length;
+function PinProgress({ db, line, pending }: { db: Database; line: ProductLine; pending: boolean }) {
+  // นับเฉพาะตัวที่ลูกค้าเห็น (ตัวเลขเดียวกับเช็กลิสต์ด้านบน) — ตัวที่ยังไม่ตั้งสถานะ ลูกค้าไม่เห็นป้ายอยู่แล้ว
+  const c = lineChecklist(db, line);
+  const total = c.visible.length;
+  const missing = c.pinsMissing;
+  const done = c.pinned;
   return (
     <div className="mt-2 rounded-lg border border-subtle bg-surface-2 px-3 py-2 text-[12px]">
       {pending
         ? <span className="font-bold text-[#fbbf24]">ขั้นที่ 2: เลือกชื่อในกล่องบนรูป → ป้ายจะขึ้นที่จุดนั้นทันที</span>
-        : line.members.length === 0
-          ? <span className="text-ink-faint">เพิ่มตัวในไลน์ทางขวาก่อน แล้วค่อยมาแตะหัวบนรูป</span>
+        : total === 0
+          ? <span className="text-ink-faint">{line.members.length === 0 ? 'เพิ่มตัวในไลน์ทางขวาก่อน แล้วค่อยมาแตะหัวบนรูป' : 'ยังไม่มีตัวที่ลูกค้าเห็นได้ — ผูกสินค้า หรือตั้งสถานะให้ตัวในไลน์ก่อน'}</span>
           : missing.length === 0
-            ? <span className="font-bold text-[#4ade80]">✓ วางป้ายครบ {done}/{line.members.length} ตัว · แตะหัวซ้ำ = ย้ายป้าย</span>
-            : <span><b className="text-ink">ขั้นที่ 1:</b> แตะหัวตัวละครบนรูป <span className="text-ink-faint">· วางแล้ว {done}/{line.members.length} · ยังไม่วาง: {missing.map((m) => m.name.trim() || '(ไม่มีชื่อ)').join(', ')}</span></span>}
+            ? <span className="font-bold text-[#4ade80]">✓ วางป้ายครบ {done}/{total} ตัว · แตะหัวซ้ำ = ย้ายป้าย</span>
+            : <span><b className="text-ink">ขั้นที่ 1:</b> แตะหัวตัวละครบนรูป (หรือกด ✨ วางอัตโนมัติ) <span className="text-ink-faint">· วางแล้ว {done}/{total} · ยังไม่วาง: {missing.map((m) => m.name.trim() || '(ไม่มีชื่อ)').join(', ')}</span></span>}
+      {c.hiddenN > 0 && <span className="text-ink-faint"> · อีก {c.hiddenN} ตัวยังไม่ตั้งสถานะ (ลูกค้าไม่เห็น ไม่ต้องวาง)</span>}
     </div>
   );
 }
@@ -691,7 +827,7 @@ function LineProductAdd({ db, dispatch, flash, uid, line, canWrite }: { db: Data
   const varPrice = (v: PVar) => (v.price !== '' ? Number(v.price) || 0 : yuanPrice(v.cost_yuan));
   const rowPrice = (r: PRow) => (r.variants?.length ? Math.min(...r.variants.map(varPrice)) : r.price !== '' ? Number(r.price) || 0 : yuanPrice(r.cost_yuan));
   // ชื่อซ้ำกับสินค้าของค่ายนี้ที่มีอยู่แล้ว → เตือน (ตัวเดียวกันควร "ติ๊กจากในระบบ" ไม่ใช่ลงซ้ำ)
-  const dupOf = (name: string) => (charKey(name) ? db.products.find((p) => p.manufacturer_id === line.maker_id && charKey(p.character_name?.trim() || p.series_name) === charKey(name)) : undefined);
+  const dupOf = (name: string) => findDuplicateProducts(db, { manufacturer_id: line.maker_id, name, is_stock: false })[0];
   const unlinked = line.members.filter((m) => memberProducts(db, m).all.length === 0);
   const liveLine = linesPublicEnabled(db) && line.active && !!line.cover_url;
 

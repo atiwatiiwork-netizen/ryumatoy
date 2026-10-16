@@ -160,9 +160,15 @@ export default function CheckoutPage() {
       if (l.batchId) return pendingHeld(db, p.id, l.batchId) > 0;
       return p.is_stock && pendingHeld(db, p.id) > 0;
     });
+    // พรีกระดานหลักที่ปิดรับแล้ว (แอดมินเพิ่งปิดรอบระหว่างลูกค้าอยู่ในตะกร้า) — บอกเหตุผลจริง ไม่ใช่ "ถูกจองครบ" (review ลูกค้า 2026-10-16)
+    const anyClosed = deadLines.some((l) => {
+      const p = db.products.find((pp) => pp.id === l.productId);
+      return !!p && !l.batchId && !p.is_stock && !inLiveAuction(db, p.id) && !preorderOpenForOrder(db, p);
+    });
     flash(allGone ? 'สินค้าในตะกร้าถูกนำออกจากร้านแล้ว — ลบออกจากตะกร้าได้เลย'
       : anyTemp ? '⏳ สินค้าหมดชั่วคราว กรุณารอของหลุด — ถ้าคนที่จองไว้ไม่ชำระ ของจะกลับมาให้กด'
-      : 'สินค้าหมดแล้ว — ถูกจองครบทั้งรอบ 🙏');
+        : anyClosed ? 'ปิดรับพรีแล้ว — ค่ายปิดรอบไปแล้ว ลบรายการนั้นออกจากตะกร้าได้เลย 🙏'
+          : 'สินค้าหมดแล้ว — ถูกจองครบทั้งรอบ 🙏');
     router.replace('/cart');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, clientSoldOut, mustLogin, needsApproval]);

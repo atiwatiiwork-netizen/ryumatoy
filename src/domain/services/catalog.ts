@@ -109,6 +109,19 @@ export function isStockTwin(x: Product, p: Product): boolean {
   return x.is_stock && x.manufacturer_id === p.manufacturer_id && (x.character_name ?? x.series_name) === (p.character_name ?? p.series_name);
 }
 
+/** คีย์เทียบชื่อตัวละคร: ไม่สนตัวพิมพ์ · ช่องว่างหัวท้าย/ซ้อน */
+export const productNameKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+/** ชื่อตัวละครของสินค้า — สินค้าเก่าที่ไม่มี character_name ใช้ส่วนหน้าของ "ตัวละคร - ซีรีย์" */
+const characterOf = (p: Product) => p.character_name?.trim() || p.series_name.split(' - ')[0];
+/** สินค้าที่ "ซ้ำ" กับตัวที่กำลังจะลง (เคส Ringo ลงพรีซ้ำ 2 ตัว 2026-10-12 · เจ้าของสั่งกันทุกหน้าที่ลงสินค้า 2026-10-16)
+ *  ซ้ำ = ค่ายเดียวกัน + ชื่อตัวละครเดียวกัน + ชนิดเดียวกัน (พรี / พร้อมส่ง)
+ *  พรีกับพร้อมส่งชื่อเดียวกัน = "ของคู่" ปกติ (isStockTwin · ไลน์ตามไปเจอเอง) ไม่นับว่าซ้ำ · ชื่อว่าง = ไม่มีอะไรซ้ำ */
+export function findDuplicateProducts(db: Database, q: { manufacturer_id: string; name: string; is_stock: boolean }, excludeId?: string): Product[] {
+  const k = productNameKey(q.name);
+  if (!k || !q.manufacturer_id) return [];
+  return db.products.filter((p) => p.id !== excludeId && p.manufacturer_id === q.manufacturer_id && !!p.is_stock === !!q.is_stock && productNameKey(characterOf(p)) === k);
+}
+
 /** Series under a franchise (optionally further limited to those a maker carries). */
 export function seriesForFranchise(db: Database, franchiseId: string, makerId?: string): Series[] {
   return db.series.filter((s) => s.franchise_ids.includes(franchiseId) && (!makerId || s.maker_ids.includes(makerId)));

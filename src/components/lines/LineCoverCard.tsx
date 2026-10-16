@@ -8,8 +8,7 @@ import { cx } from '@/components/ui';
 /**
  * การ์ดปกไลน์ (รูปหมู่ของค่าย = ทางเข้า) — ตัวเดียวใช้ทั้งหน้าแรก / แถบในหน้าช็อป / หน้ารวม /lines
  * size: 'hero' = รูปเต็ม 3:2 (ไลน์ล่าสุดบนหน้าแรก) · 'wide' = 16:7 ประหยัดที่ · 'rail' = การ์ดในแถบเลื่อน
- * ชิป: "เปิดพรี N" ไม่ขึ้นกับสต๊อก (memberOpenForPreorder) · "พร้อมส่ง N" นับจากสถานะ local ซึ่งฝั่งลูกค้า
- *   นับขายแล้วไม่ครบ (RLS) → โชว์เฉพาะเมื่อ "มี" ไม่โชว์จำนวนเป็นตัวตัดสิน (ตัวเลขจริงอยู่ในหน้าไลน์ที่ถาม server)
+ * ชิป: "Pre-Order N" ไม่ขึ้นกับสต๊อก (memberOpenForPreorder) · ไม่มีชิปพร้อมส่ง (สต๊อก local ฝั่งลูกค้าเชื่อไม่ได้ · RLS)
  */
 export function LineCoverCard({ db, line, size = 'wide', admin, isNew, eager }: {
   db: Database; line: ProductLine; size?: 'hero' | 'wide' | 'rail'; admin?: boolean; isNew?: boolean; eager?: boolean;
@@ -33,8 +32,9 @@ export function LineCoverCard({ db, line, size = 'wide', admin, isNew, eager }: 
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-white/75">
             <span className="truncate">{maker}{fr ? ` · ${fr}` : ''}</span> · <span className="shrink-0">{states.length} ตัว</span>
             {openN > 0 && <span className="shrink-0 rounded-full bg-[#60a5fa]/25 px-1.5 py-px text-[10px] font-bold text-[#bfdbfe]">Pre-Order {openN}</span>}
-            {tones.green > 0 && <span className="shrink-0 rounded-full bg-[#34d399]/25 px-1.5 py-px text-[10px] font-bold text-[#a7f3d0]">มีพร้อมส่ง</span>}
-            {tones.amber > 0 && openN === 0 && tones.green === 0 && <span className="shrink-0 rounded-full bg-[#fbbf24]/25 px-1.5 py-px text-[10px] font-bold text-[#fde68a]">หาของได้</span>}
+            {/* ไม่มีชิป "มีพร้อมส่ง" แล้ว (review ลูกค้า 2026-10-16): การ์ดไม่ได้ถามของเหลือจาก server และลูกค้าเห็นตั๋วแค่ของตัวเอง
+                → สูตร local นับขายไม่ครบ ขึ้น "มีพร้อมส่ง" ทั้งที่หมดแล้ว · สถานะของจริงอยู่ในหน้าไลน์ที่ถาม server */}
+            {tones.amber > 0 && openN === 0 && <span className="shrink-0 rounded-full bg-[#fbbf24]/25 px-1.5 py-px text-[10px] font-bold text-[#fde68a]">หาของได้</span>}
           </div>
         </div>
       </div>

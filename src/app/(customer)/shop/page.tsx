@@ -78,7 +78,7 @@ function ShopInner() {
   //   เหลือการ์ดไลน์ในแถบด้านบน (แถบกรองตามค่าย/เรื่องเดียวกัน) · ยกเว้น "ค้นหา" ยังเจอตัวเดี่ยวเสมอ (สินค้าต้องหาเจอได้)
   //   · productsInVisibleLines ใช้กติกาเดียวกับแถบไลน์ (สวิตช์ปิด/ไลน์ร่าง = ไม่ยุบ)
   const collapseLines = !query;
-  const inLines = useMemo(() => (collapseLines ? productsInVisibleLines(db, uid) : new Set<string>()), [collapseLines, db, uid]);
+  const inLines = useMemo(() => (collapseLines ? productsInVisibleLines(db, uid, { makerId: manufacturerId, franchiseId }) : new Set<string>()), [collapseLines, db, uid, manufacturerId, franchiseId]);
   const results = category === 'special' ? [] : filtered.filter((p) => !inLines.has(p.id));
 
   // special-round batches (สต๊อกใบพรี) shown as their own cards — in the "พรีรอบพิเศษ" category and the "all" view

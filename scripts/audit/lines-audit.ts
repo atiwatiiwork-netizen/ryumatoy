@@ -13,9 +13,9 @@ import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, LineMember, PreorderTicket, Product, ProductLine, StockReservation } from '../../src/domain/entities';
 import {
   lineMemberState, lineVisibleTo, lineOpenToCustomers, memberOpenForPreorder, linesPublicEnabled, shopLines, linesOfProduct, liveTargetsForLine, sourcingPrefill,
-  cleanLineRow, cleanMember, layoutPins, lineSetPlan, pinLabelWidth, memberProducts, lineToneCounts, lineStates, productsInVisibleLines, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
+  cleanLineRow, cleanMember, layoutPins, lineSetPlan, lineChecklist, autoPinSpread, PIN_AUTO_Y, pinLabelWidth, memberProducts, lineToneCounts, lineStates, productsInVisibleLines, PIN_STEM_SHORT, PIN_STEM_TALL, PIN_STEMS, homeLines, isNewLine, type LineCtx, type PinPlacement,
 } from '../../src/domain/services/lines';
-import { isStockTwin, preorderOpenForOrder, openBoards } from '../../src/domain/services/catalog';
+import { isStockTwin, preorderOpenForOrder, openBoards, findDuplicateProducts } from '../../src/domain/services/catalog';
 import {
   setProductStatus, convertToInStock, reopenBatch, upsertProductLine, patchProductLine, patchLineMember, removeProductLine, setLinesPublic, restockInStock, submitOrder, createProductsIntoLine,
 } from '../../src/data/mutations';
@@ -254,10 +254,10 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     let db = base({ products: [pre, P('stranger', { images: ['s1'] })], productLines: [line] });
     db = setLinesPublic(true)(db);
     const fb = sourcingPrefill(db, 'uA', { line: 'L1', m: 'b', src: 'pre' });
-    ok('Q1 จากไลน์: ค่ายจากไลน์ · เรื่องตกไปที่สินค้า · ชื่อตัว · รูปสินค้า ≤3 · อ้าง SKU · โน้ตตัวที่ 2',
-      !!fb && fb.makerId === MK && fb.frId === 'f-op' && fb.cname === 'b' && fb.images.join() === 'p1,p2,p3' && fb.srcId === 'pre' && fb.note === 'จากไลน์ กองโจรเงามายา · ตัวที่ 2', fb);
+    ok('Q1 จากไลน์: ค่ายจากไลน์ · เรื่องตกไปที่สินค้า · ชื่อตัว · รูปสินค้า ≤3 · อ้าง SKU · โน้ต "ตัวที่ 1" = เลขที่ลูกค้าเห็น (a ไม่มีสถานะ ไม่นับ)',
+      !!fb && fb.makerId === MK && fb.frId === 'f-op' && fb.cname === 'b' && fb.images.join() === 'p1,p2,p3' && fb.srcId === 'pre' && fb.note === 'จากไลน์ กองโจรเงามายา · ตัวที่ 1', fb);
     const fc = sourcingPrefill(db, 'uA', { line: 'L1', m: 'c' });
-    ok('Q2 ตัว Add เองมีรูป → ใช้รูปของตัวนั้น ไม่มี SKU', !!fc && fc.images.join() === 'mine.jpg' && fc.srcId === undefined && !!fc.note?.includes('ตัวที่ 3'), fc);
+    ok('Q2 ตัว Add เองมีรูป → ใช้รูปของตัวนั้น ไม่มี SKU · ตัวที่ 2 ตามที่ลูกค้าเห็น', !!fc && fc.images.join() === 'mine.jpg' && fc.srcId === undefined && !!fc.note?.endsWith('ตัวที่ 2'), fc);
     const fa = sourcingPrefill(db, 'uA', { line: 'L1', m: 'a' });
     ok('Q3 ไม่มีรูปเลย → ใช้รูปปกไลน์ (ต้องมีรูปอย่างน้อย 1)', !!fa && fa.images.join() === 'cover.jpg', fa);
     const mismatch = sourcingPrefill(db, 'uA', { line: 'L1', m: 'b', src: 'stranger' });
@@ -492,14 +492,87 @@ const hold = (over: Partial<StockReservation>): StockReservation => ({
     const line = L([M('ma', ['a']), M('mb', ['b']), M('mc', ['c']), M('md', ['d']), M('me', [], { manual_state: 'sourcing' })]);
     const shown = lineStates(db, line, { uid: 'uA' }).filter((s) => s.state.visible);
     const plan = lineSetPlan(shown, (pid) => pid === 'b');
-    ok('U1 นับ: พรีแล้ว 1/5 · ยังขาด 4 · ใส่ได้ทีเดียวเฉพาะพรีเปิดไม่มีแบบ ที่ยังไม่อยู่ในตะกร้า (= 0 เพราะ b อยู่ในตะกร้า) · b นับ inCart · c (มีแบบ) d (ผลิต) e (หาของ) = skipped',
-      plan.mine === 1 && plan.total === 5 && plan.missing.length === 4 && plan.addable.length === 0 && plan.inCart === 1 && plan.skipped.join() === 'mc,md,me', plan);
+    ok('U1 นับ: ตัวที่ Add เอง (e) ไม่นับ → พรีแล้ว 1/4 · ยังขาด 3 · b อยู่ในตะกร้า (inCart) · c มีแบบ = ต้องกดที่แถว · d ปิดพรีแล้ว ไม่ต้องบอกให้กด',
+      plan.mine === 1 && plan.total === 4 && plan.missing.length === 3 && plan.addable.length === 0 && plan.inCart === 1 && plan.rowOnly.join() === 'mc' && plan.missingDeposit === 2000, plan);
     const plan2 = lineSetPlan(shown, () => false);
     ok('U2 ตะกร้าว่าง: ใส่ได้ 1 (b) · มัดจำรวม = ของ b', plan2.addable.map((a) => a.product.id).join() === 'b' && plan2.deposit === 1000, plan2);
     const none = lineSetPlan(lineStates(db, line, { uid: 'uB' }).filter((s) => s.state.visible), () => false);
     ok('U3 คนที่ยังไม่พรีเลย: mine 0 · ใส่ได้ a+b · มัดจำ 2000', none.mine === 0 && none.addable.map((a) => a.product.id).join() === 'a,b' && none.deposit === 2000, none);
     const full = lineSetPlan(lineStates(setLinesPublic(true)(base({ products: [P('a'), P('b')], tickets: [T('t1', 'a', 'uA'), T('t2', 'b', 'uA')] })), L([M('ma', ['a']), M('mb', ['b'])]), { uid: 'uA' }), () => false);
+    const half = lineSetPlan(lineStates(db, line, { uid: 'uB' }).filter((s) => s.state.visible), () => false, (p) => p.deposit_amount / 2);
+    ok('U5 มัดจำตามยศ: ปุ่ม (a+b) และการ์ด (a+b+c ที่ยังพรีกระดานหลักได้ · d ปิดแล้วไม่นับ) ใช้ depositOf ที่ส่งมา', half.deposit === 1000 && half.missingDeposit === 1500, half);
+    const manualOnly = lineSetPlan(lineStates(setLinesPublic(true)(base({ products: [P('a'), P('b')], tickets: [T('t1', 'a', 'uA'), T('t2', 'b', 'uA')] })), L([M('ma', ['a']), M('mb', ['b']), M('mx', [], { manual_state: 'sourcing' })]), { uid: 'uA' }), () => false);
+    ok('U6 มีตัว Add เอง (ไม่มีสินค้า) ในไลน์ → ยังครบเซตได้ (2/2) ไม่ติดตัวที่ติดตามไม่ได้', manualOnly.total === 2 && manualOnly.mine === 2 && manualOnly.missing.length === 0, manualOnly);
     ok('U4 ครบเซต: mine = total · ไม่มีอะไรให้ใส่', full.mine === 2 && full.total === 2 && full.missing.length === 0 && full.addable.length === 0);
+  }
+
+  // ── 17. แอดมินรอบ 1 (เจ้าของ 2026-10-16): กันลงซ้ำ · เช็กลิสต์เปิดไลน์ · วางป้ายอัตโนมัติ ─────────────────
+  {
+    const db = base({ products: [
+      P('r1', { character_name: 'Ringo', series_name: 'Ringo - 7 SwordMaster' }),
+      P('r-stock', { character_name: 'Ringo', series_name: 'Ringo - 7 SwordMaster', is_stock: true }),
+      P('r-other', { character_name: 'Ringo', manufacturer_id: MK2 }),
+      P('legacy', { character_name: undefined, series_name: 'Kuriare - 7 SwordMaster' }),
+    ] });
+    const ids = (q: { name: string; is_stock?: boolean; mk?: string }, ex?: string) => findDuplicateProducts(db, { manufacturer_id: q.mk ?? MK, name: q.name, is_stock: !!q.is_stock }, ex).map((p) => p.id).join();
+    ok('D1 ค่ายเดียวกัน + ชื่อเดียวกัน + พรีทั้งคู่ = ซ้ำ · ไม่สนตัวพิมพ์/ช่องว่าง', ids({ name: 'Ringo' }) === 'r1' && ids({ name: '  rINGO ' }) === 'r1' && ids({ name: 'Ringo  ' }) === 'r1');
+    ok('D2 พรีกับพร้อมส่งชื่อเดียวกัน = ของคู่ ไม่ซ้ำ · พร้อมส่งเทียบกับพร้อมส่ง', ids({ name: 'Ringo', is_stock: true }) === 'r-stock');
+    ok('D3 ค่ายอื่นชื่อเดียวกันไม่ซ้ำ · ตัดตัวเองออกตอนแก้ · ชื่อว่าง = ไม่มีอะไรซ้ำ', ids({ name: 'Ringo', mk: MK2 }) === 'r-other' && ids({ name: 'Ringo' }, 'r1') === '' && ids({ name: '   ' }) === '');
+    ok('D4 สินค้าเก่าไม่มี character_name → เทียบส่วนหน้าของ "ตัวละคร - ซีรีย์"', ids({ name: 'kuriare' }) === 'legacy');
+    ok('D5 ค่ายว่าง = ไม่เทียบ (กันจับมั่วตอนฟอร์มยังไม่เลือกค่าย)', findDuplicateProducts(db, { manufacturer_id: '', name: 'Ringo', is_stock: false }).length === 0);
+  }
+  {
+    const pdb = base({ products: [P('a'), P('b')] });
+    const chk = (members: LineMember[], over: Partial<ProductLine> = {}, d: Database = pdb) => lineChecklist(d, L(members, over));
+    const noCover = chk([M('a', ['a'])], { cover_url: null });
+    ok('C1 ไม่มีรูปหมู่ → ยังเปิดไม่ได้ · ข้อแรกที่ติด = รูปหมู่', !noCover.ready && noCover.firstProblem === 'cover', noCover);
+    const noName = chk([M('a', ['a'])], { name: '  ' });
+    ok('C2 ชื่อไลน์ว่าง → ติดข้อชื่อก่อน', !noName.ready && noName.firstProblem === 'info');
+    const hidden = chk([M('x', []), M('y', [])]);
+    ok('C3 มีตัวแต่ลูกค้าไม่เห็นสักตัว (ไม่ผูกสินค้า ไม่ตั้งสถานะ) → ติดข้อตัวในไลน์ · hiddenN = 2', !hidden.ready && hidden.firstProblem === 'members' && hidden.hiddenN === 2 && hidden.visible.length === 0, hidden);
+    const pins = chk([M('a', ['a'], { pin_x: 10, pin_y: 20 }), M('b', ['b']), M('z', [])]);
+    ok('C4 ครบข้อบังคับแต่ป้ายไม่ครบ → เปิดได้ (ready) · ป้ายนับเฉพาะตัวที่ลูกค้าเห็น 1/2 · ตัวไม่มีสถานะไม่นับ',
+      pins.ready && !pins.items.find((i) => i.key === 'pins')!.ok && pins.pinned === 1 && pins.visible.length === 2 && pins.pinsMissing.map((m) => m.id).join() === 'b' && pins.hiddenN === 1, pins);
+    const full = chk([M('a', ['a'], { pin_x: 10, pin_y: 20 }), M('b', ['b'], { pin_x: 60, pin_y: 20 })]);
+    ok('C5 ครบทุกข้อ → okCount = 4/4 · สวิตช์ระบบปิด = ยังไม่ live', full.ready && full.okCount === 4 && full.items.length === 4 && !full.live, full);
+    const on = chk([M('a', ['a'])], {}, setLinesPublic(true)(pdb));
+    const draft = chk([M('a', ['a'])], { active: false }, setLinesPublic(true)(pdb));
+    ok('C6 live = กติกาเดียวกับ lineOpenToCustomers (ระบบเปิด + เปิดไลน์ + รูป + มีตัวที่เห็น) · ไลน์ร่าง = ไม่ live แต่ ready', on.live && !draft.live && draft.ready);
+  }
+  {
+    const a3 = autoPinSpread(3);
+    ok('A1 วางป้ายอัตโนมัติ 3 ตัว: x กระจายเท่ากัน 16.67 / 50 / 83.33 · y = ค่าเริ่ม', a3.map((p) => p.x).join() === '16.67,50,83.33' && a3.every((p) => p.y === PIN_AUTO_Y), a3);
+    ok('A2 0 ตัว = [] · 1 ตัว = กลางรูป · y นอกกรอบถูกหนีบ 0–100', autoPinSpread(0).length === 0 && autoPinSpread(1)[0].x === 50 && autoPinSpread(2, 140)[0].y === 100 && autoPinSpread(2, -5)[0].y === 0);
+    const six = autoPinSpread(6);
+    ok('A3 6 ตัว: เรียงซ้ายไปขวา ไม่ชนขอบ (x อยู่ใน 0–100 และเพิ่มขึ้นเรื่อยๆ)', six.every((p, i) => p.x > 0 && p.x < 100 && (i === 0 || p.x > six[i - 1].x)), six);
+  }
+
+  // ── 18. รีวิวฝั่งลูกค้า 2026-10-16: ลำดับทางเลือก · อีกทาง · ยุบช็อปตามตัวกรอง · คำขอหาของที่ส่งแล้ว ─────────
+  {
+    let db = base({ products: [P('pre')] });
+    db = reopenBatch('pre', { price: 2500, deposit: 1000, qty: 2, label: 'รอบ 2' })(db);
+    const b = db.batches[0];
+    const both = st(db, [M('a', ['pre'])], 'a');
+    ok('W1 กระดานหลักเปิด + รอบพิเศษเปิด → ปุ่มหลัก = กระดานหลัก (ตรงกับหน้าสินค้า) · อีกทาง = รอบพิเศษ ?batch=',
+      both.kind === 'preorder' && both.cta?.href === '/shop/pre' && both.alt?.href === `/shop/pre?batch=${b.id}` && !!both.alt?.label.includes('รอบ 2'), both);
+    const twin = st(base({ products: [P('pre'), P('stk', { is_stock: true, stock_qty: 3, character_name: 'pre', series_name: 'pre' })] }), [M('a', ['pre'])], 'a');
+    ok('W2 มีพร้อมส่ง (ของคู่) + เปิดพรีใหม่ → ปุ่มหลักพร้อมส่ง · อีกทาง = Pre-Order ของตัวพรี (ไม่หายเพราะถูกยุบจากช็อป)',
+      twin.kind === 'stock' && twin.product?.id === 'stk' && twin.alt?.href === '/shop/pre' && !!twin.alt?.label.includes('Pre-Order'), twin);
+    ok('W3 มีทางเดียว → ไม่มีอีกทาง', !st(base({ products: [P('pre')] }), [M('a', ['pre'])], 'a').alt);
+
+    const lnull = L([M('m', ['pre'])], { id: 'Lnull', franchise_id: null });
+    const lfr = L([M('m2', ['pre2'])], { id: 'Lfr' });
+    const sdb = setLinesPublic(true)(base({ products: [P('pre'), P('pre2')], productLines: [lnull, lfr] }));
+    ok('W4 ยุบช็อปตามตัวกรองเรื่อง: ไลน์ที่ไม่ระบุเรื่องไม่มีการ์ดโผล่ → สมาชิกไม่ถูกยุบ (ยังเห็นในกริด) · ไลน์ของเรื่องนั้นยังยุบ',
+      [...productsInVisibleLines(sdb, 'uA', { franchiseId: FR })].join() === 'pre2' && [...productsInVisibleLines(sdb, 'uA')].sort().join() === 'pre,pre2');
+    ok('W5 กรองค่ายอื่น → ไม่ยุบอะไรของค่ายนี้', productsInVisibleLines(sdb, 'uA', { makerId: MK2 }).size === 0);
+
+    const out = base({ products: [P('old', { status: 'arrived' })] });
+    const ask = (status: string, uid = 'uA') => ({ ...out, sourcingRequests: [{ id: 'sr1', user_id: uid, maker_name: 'KS', franchise_name: 'HxH', character_name: 'old', qty: 1, images: ['x'], source_product_id: 'old', status, created_at: iso(-1000) }] } as Database);
+    const s1 = st(ask('requested'), [M('a', ['old'])], 'a');
+    ok('W6 ส่งคำขอหาของตัวนี้ไว้แล้ว → "ส่งคำขอหาของแล้ว" + ปุ่มดูคำขอ (กันส่งซ้ำ)', s1.kind === 'out' && s1.cta?.href === '/sourcing' && s1.detail.includes('ส่งคำขอหาของแล้ว'), s1);
+    ok('W7 คำขอหมดอายุ / ของคนอื่น → กลับเป็น "หาของให้" ตามปกติ',
+      st(ask('expired'), [M('a', ['old'])], 'a').cta?.label === 'หาของให้' && st(ask('requested', 'uB'), [M('a', ['old'])], 'a').cta?.label === 'หาของให้');
   }
 
   console.log(`\nlines-audit: ${pass} passed, ${fail} failed`);

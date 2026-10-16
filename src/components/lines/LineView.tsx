@@ -14,7 +14,8 @@ import {
   lineStates, liveTargetsForLine, linesPublicEnabled, lineToneCounts, memberThumb, hasPin, lineSetPlan, LINE_LIVE_MAX, type LineMemberState,
 } from '@/domain/services/lines';
 import { baht } from '@/lib/theme';
-import type { LineMember, ProductLine } from '@/domain/entities';
+import type { LineMember, Product, ProductLine } from '@/domain/entities';
+import { lineDepositForRank } from '@/domain/services/ranks';
 import { cx } from '@/components/ui';
 import { LinePoster, type PosterPin } from './LinePoster';
 import { TONE_HEX, TONE_LEGEND } from './lineUi';
@@ -46,9 +47,9 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
   const maker = db.manufacturers.find((m) => m.id === line.maker_id)?.name ?? '—';
   const franchise = line.franchise_id ? db.franchises.find((f) => f.id === line.franchise_id)?.name : undefined;
   const adminLive = mode === 'live' && isAdminUser(db, userId);
-  // เหตุผลที่ลูกค้ายังไม่เห็น — ลำดับเดียวกับ lineOpenToCustomers (สวิตช์ · ร่าง · รูปหมู่ · ตัวที่เห็นได้)
-  const blockedWhy = !linesPublicEnabled(db) ? 'สวิตช์ "ลูกค้าเห็นไลน์" ปิดอยู่'
-    : !line.active ? 'ไลน์นี้ยังเป็นร่าง — สวิตช์ใหญ่เปิดแล้ว แต่ต้องกดปุ่ม "ร่าง — กดเปิดไลน์นี้ให้ลูกค้า" ในหน้าแก้ไลน์นี้ด้วย'
+  // เหตุผลที่ลูกค้ายังไม่เห็น (แบนเนอร์แอดมิน) — ร่าง · ระบบไลน์ · รูปหมู่ · ตัวที่เห็นได้ (ครบชุดเดียวกับ lineOpenToCustomers · ร่างขึ้นก่อนเพราะปุ่ม 🚀 แก้ได้ทั้งสองข้อ)
+  const blockedWhy = !line.active ? 'ไลน์นี้ยังเป็นร่าง — กด "🚀 เปิดไลน์ให้ลูกค้า" ในหน้าแก้ไลน์'
+    : !linesPublicEnabled(db) ? 'ระบบไลน์ปิดอยู่ — กด "🚀 เปิดไลน์ให้ลูกค้า" ในหน้าแก้ไลน์ (เปิดระบบให้พร้อมกัน)'
       : !line.cover_url ? 'ยังไม่มีรูปหมู่'
         : shown.length === 0 ? 'ยังไม่มีตัวที่ลูกค้าเห็นได้' : null;
 
@@ -91,7 +92,7 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
             {TONE_LEGEND.map((t) => (
               <span key={t.tone} className="inline-flex items-center gap-1.5"><i className="inline-block h-2 w-2 rounded-full" style={{ background: TONE_HEX[t.tone] }} />{t.label}</span>
             ))}
-            <span>ไม่มีป้าย = ค่ายยังไม่เปิดตัวนั้น</span>
+            {shown.length > 0 && shown.every((x) => hasPin(x.member)) && <span>ไม่มีป้าย = ค่ายยังไม่เปิดตัวนั้น</span>}
           </div>
         </>
       )}
@@ -113,16 +114,21 @@ export function LineView({ line, userId, mode }: { line: ProductLine; userId: st
  *  · ใส่ตะกร้าเฉพาะตัวที่ใส่ได้ทีเดียว (lineSetPlan) ตัวที่ต้องเลือกแบบ/รอบพิเศษ บอกใน toast ให้ไปกดที่แถว
  *  · พรีวิวในแอดมิน: หน้าตาเหมือนจริง กดไม่ได้ */
 function SetPanel({ line, shown, preview }: { line: ProductLine; shown: { member: LineMember; state: LineMemberState }[]; preview: boolean }) {
+  const db = useDatabase();
   const cart = useCart();
   const { flash } = useToast();
-  const plan = lineSetPlan(shown, (pid) => cart.lines.some((l) => l.productId === pid && !l.batchId && !l.variantId));
+  const meId = useCurrentUserId();
+  // มัดจำตามยศของคนดู — สูตรเดียวกับตะกร้า/checkout/submitOrder (lineDepositForRank) ตัวเลขบนปุ่มต้องตรงกับที่จ่ายจริง
+  const myRank = db.users.find((u) => u.id === meId)?.rank ?? 'bronze';
+  const depOf = (p: Product) => lineDepositForRank(db.settings, { deposit: p.deposit_amount, price: p.price_total, isStock: p.is_stock }, myRank);
+  const plan = lineSetPlan(shown, (pid) => cart.lines.some((l) => l.productId === pid && !l.batchId && !l.variantId), depOf);
   if (plan.total < 2) return null;
   if (plan.addable.length === 0 && plan.inCart === 0 && plan.mine === 0) return null;
   const name = line.name.trim() || 'ไลน์นี้';
   const addAll = () => {
     if (preview) return;
-    for (const a of plan.addable) cart.add({ productId: a.product.id, depositEach: a.product.deposit_amount, priceEach: a.product.price_total });
-    flash(`ใส่ตะกร้า ${plan.addable.length} ตัวแล้ว ✓ ไปชำระที่ตะกร้า${plan.skipped.length ? ` · ${plan.skipped.join(' · ')} กดพรีที่แถวด้านล่าง (ต้องเลือกแบบ/รอบ)` : ''}`);
+    for (const a of plan.addable) cart.add({ productId: a.product.id, depositEach: depOf(a.product), priceEach: a.product.price_total });
+    flash(`ใส่ตะกร้า ${plan.addable.length} ตัวแล้ว ✓ ไปชำระที่ตะกร้า${plan.rowOnly.length ? ` · ${plan.rowOnly.join(' · ')} กดที่แถวด้านล่าง (ต้องเลือกแบบ/รอบ หรือจ่ายเต็ม)` : ''}`);
   };
   const complete = plan.mine > 0 && plan.missing.length === 0;
   return (
@@ -184,6 +190,8 @@ function MemberRow({ member, no, state, thumb, hi, preview }: { member: LineMemb
             ? <>{state.detail.slice(0, -'Pre-Order'.length)}<span className={cx('font-extrabold text-[#60a5fa]', !state.mine && 'animate-pulse')}>Pre-Order</span></>
             : state.detail}
         </div>
+        {state.alt && !preview && <Link href={state.alt.href} className="mt-0.5 block truncate text-[11px] font-bold text-primary-soft">{state.alt.label}</Link>}
+        {state.alt && preview && <span className="mt-0.5 block truncate text-[11px] font-bold text-primary-soft">{state.alt.label}</span>}
         {/* พรีไปแล้ว = ป้ายเขียวสั้นๆ "พรีแล้ว ✓" (เจ้าของ 2026-10-08 ต้องเตือนกันสั่งซ้ำ · 2026-10-16 ตัด "คุณมีตัวนี้แล้ว" ออก) · รวมออเดอร์ที่สลิปยังรอตรวจ */}
         {state.mine && (
           <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#16a34a]/20 px-2 py-0.5 text-[11px] font-extrabold text-[#4ade80]">

@@ -99,6 +99,8 @@ export interface LineMemberState {
   cta?: LineCta;
   product?: Product;  // สินค้าที่ใช้ตัดสิน
   batch?: ProductBatch;
+  /** อีกทางที่สั่งได้ของตัวเดียวกัน (review ลูกค้า 2026-10-16) — แถวโชว์ลิงก์เล็กใต้บรรทัดรอง */
+  alt?: { label: string; href: string };
   mine: boolean;      // ผู้ใช้คนนี้มีตั๋วของตัวนี้แล้ว (owner_id ตรง — หน้าพรีวิวแอดมินเห็นตั๋วทั้งร้าน ต้องกรองเสมอ)
   visible: boolean;   // ลูกค้าเห็นตัวนี้ไหม
 }
@@ -160,28 +162,41 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   };
   const sellable = all.filter((p) => !inLiveAuction(db, p.id));
 
-  // 1 ของในมือ (SKU พร้อมส่ง) ยังมีของ
-  for (const p of sellable) {
-    if (!p.is_stock || stockLeft(p) <= 0) continue;
-    const { price, from } = priceOf(db, p);
-    const hand2 = p.stock_cond?.hand === 2 ? ' · มือ 2' : '';
-    return make({ kind: 'stock', tone: 'green', label: 'พร้อมส่ง', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · พร้อมส่ง${hand2}`, cta: { label: 'ซื้อเลย', href: `/shop/${p.id}` }, product: p });
+  // ทางที่สั่งได้ตอนนี้ เรียงตามลำดับ: 1 ของในมือ > 2 กระดานหลักเปิดพรี > 3 รอบพิเศษ
+  //   (เดิมรอบพิเศษมาก่อนกระดานหลัก — สวนกับหน้าสินค้าที่ขึ้นกระดานหลักก่อน · review ลูกค้า 2026-10-16)
+  //   ทางแรก = ป้าย/ปุ่มหลัก · ทางที่ 2 (ถ้ามี) = ลิงก์ "อีกทาง" ใต้แถว ไม่ให้หายเพราะสินค้าถูกยุบออกจากช็อป
+  type Opt = Omit<LineMemberState, 'mine' | 'pinLabel' | 'pinShort' | 'visible'> & { altLabel: string };
+  const opts: Opt[] = [];
+  const stockP = sellable.find((p) => p.is_stock && stockLeft(p) > 0);
+  if (stockP) {
+    const { price, from } = priceOf(db, stockP);
+    const hand2 = stockP.stock_cond?.hand === 2 ? ' · มือ 2' : '';
+    opts.push({ kind: 'stock', tone: 'green', label: 'พร้อมส่ง', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · พร้อมส่ง${hand2}`, cta: { label: 'ซื้อเลย', href: `/shop/${stockP.id}` }, product: stockP, altLabel: `หรือซื้อพร้อมส่ง ${baht(price)}` });
   }
-  // 2 รอบพิเศษเปิดขาย (published) ยังมีของ
+  // กระดานหลัก (ไม่อยู่ในกระดานที่ปิดแล้ว · ไม่ติดประมูล) — ด่านเดียวกับหน้าสินค้า/ตะกร้า/submitOrder
+  const preP = sellable.find((p) => preorderOpenForOrder(db, p));
+  if (preP) {
+    const { price, from } = priceOf(db, preP);
+    opts.push({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · Pre-Order`, cta: { label: 'พรีเลย', href: `/shop/${preP.id}` }, product: preP, altLabel: `หรือ Pre-Order ${from ? 'เริ่ม ' : ''}${baht(price)}` });
+  }
+  // รอบพิเศษเปิดขาย (published) ยังมีของ
+  let specOpt: Opt | undefined;
   for (const p of sellable) {
     for (const b of openBatchesOf(db, p.id)) {
-      if (batchLeft(b) <= 0) continue;
+      if (specOpt || batchLeft(b) <= 0) continue;
       const fullPay = b.deposit_amount >= b.price_total;
-      return fullPay
-        ? make({ kind: 'special', tone: 'green', label: 'พร้อมส่ง', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'} · จ่ายเต็ม`, cta: { label: 'ซื้อเลย', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b })
-        : make({ kind: 'special', tone: 'blue', label: 'Pre-Order', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, cta: { label: 'พรีเลย', href: `/shop/${p.id}?batch=${b.id}` }, product: p, batch: b });
+      const href = `/shop/${p.id}?batch=${b.id}`;
+      specOpt = fullPay
+        ? { kind: 'special', tone: 'green', label: 'พร้อมส่ง', detail: `${baht(b.price_total)} · ${b.label || 'รอบพิเศษ'} · จ่ายเต็ม`, cta: { label: 'ซื้อเลย', href }, product: p, batch: b, altLabel: `หรือ${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` }
+        : { kind: 'special', tone: 'blue', label: 'Pre-Order', detail: `${baht(b.price_total)} · พรี${b.label || 'รอบพิเศษ'}`, cta: { label: 'พรีเลย', href }, product: p, batch: b, altLabel: `หรือพรี${b.label || 'รอบพิเศษ'} ${baht(b.price_total)}` };
     }
   }
-  // 3 กระดานหลักเปิดรับพรี (ไม่อยู่ในกระดานที่ปิดแล้ว · ไม่ติดประมูล) — ด่านเดียวกับหน้าสินค้า/ตะกร้า/submitOrder
-  for (const p of sellable) {
-    if (!preorderOpenForOrder(db, p)) continue;
-    const { price, from } = priceOf(db, p);
-    return make({ kind: 'preorder', tone: 'blue', label: 'Pre-Order', detail: `${from ? 'เริ่ม ' : ''}${baht(price)} · Pre-Order`, cta: { label: 'พรีเลย', href: `/shop/${p.id}` }, product: p });
+  if (specOpt) opts.push(specOpt);
+  if (opts.length > 0) {
+    const { altLabel, ...first } = opts[0];
+    void altLabel;
+    const second = opts[1];
+    return make({ ...first, alt: second?.cta ? { label: `${second.altLabel} →`, href: second.cta.href } : undefined });
   }
   // 4 ติดห้องประมูล — หน้าร้านซ่อนอยู่ (ขายซ้อนไม่ได้) ห้ามตกไป "หาของ" ทั้งที่ร้านมีของ
   const inAuction = all.find((p) => inLiveAuction(db, p.id));
@@ -206,6 +221,9 @@ export function lineMemberState(db: Database, line: ProductLine, m: LineMember, 
   }
   // 7 ของออกแล้ว (ถึงไทย/ส่งมอบ/จบ หรือของในมือขายหมดจริง) และร้านไม่มีของ → ส่งเรื่องหาของ
   const ref = all.find((p) => !p.is_stock) ?? all[0];
+  //   ส่งคำขอหาของตัวนี้ไว้แล้ว (ยังไม่จบ) → บอกว่าส่งแล้ว พาไปดูคำขอ แทนปุ่ม "หาของให้" (กันส่งซ้ำ · review ลูกค้า 2026-10-16)
+  const asked = !!ctx.uid && db.sourcingRequests.some((r) => r.user_id === ctx.uid && !!r.source_product_id && ids.has(r.source_product_id) && ['requested', 'quoted', 'paid', 'working'].includes(r.status));
+  if (asked) return make({ kind: 'out', tone: 'amber', label: 'หาของ', detail: 'ส่งคำขอหาของแล้ว · รอร้านตอบ', cta: { label: 'ดูคำขอ', href: '/sourcing' }, product: ref });
   return make({ kind: 'out', tone: 'amber', label: 'หาของ', detail: 'ของออกแล้ว · ร้านไม่มีของ', cta: { label: 'หาของให้', href: sourcingHref(line, m, ref) }, product: ref });
 }
 
@@ -230,32 +248,78 @@ export function lineToneCounts(states: { state: LineMemberState }[]): Record<Exc
   return c;
 }
 
+/** เช็กลิสต์ก่อนเปิดไลน์ (เจ้าของ 2026-10-16 รอบ 1 แทนสวิตช์ 2 ชั้นที่ทำให้งงว่า "กดเปิดแล้วทำไมลูกค้ายังไม่เห็น")
+ *  ต้องครบ (required) = ชื่อ+ค่าย · รูปหมู่ · มีตัวที่ลูกค้าเห็นได้ ≥1 — ชุดเดียวกับ lineOpenToCustomers (ตัดสวิตช์ระบบออก ปุ่มเปิดให้เอง)
+ *  ป้าย = ไม่บังคับ (ตัวที่ไม่อยู่ในรูปหมู่ เช่นตัวที่ค่ายยังไม่โชว์ จะไม่มีวันวางได้) แต่นับให้เห็น และถามก่อนเปิดถ้ายังไม่ครบ
+ *  นับป้ายเฉพาะตัวที่ลูกค้าเห็น (ตัวที่ไม่มีสถานะ ลูกค้าไม่เห็นทั้งแถวและป้าย) */
+export type LineCheckKey = 'info' | 'cover' | 'members' | 'pins';
+export interface LineChecklist {
+  items: { key: LineCheckKey; ok: boolean; required: boolean }[];
+  okCount: number;
+  ready: boolean;          // ครบทุกข้อที่บังคับ → กดเปิดได้
+  live: boolean;           // ลูกค้าเห็นอยู่ตอนนี้ (= lineOpenToCustomers)
+  visible: LineMember[];   // ตัวที่ลูกค้าเห็นได้ (ลำดับเดียวกับเลขบนรูป)
+  hiddenN: number;         // ตัวที่ยังไม่ตั้งสถานะ (ลูกค้าไม่เห็น)
+  pinned: number;          // ตัวที่ลูกค้าเห็นและวางป้ายแล้ว
+  pinsMissing: LineMember[];
+  firstProblem?: LineCheckKey; // ข้อบังคับข้อแรกที่ยังไม่ผ่าน (ใช้บอกเหตุผลบนปุ่ม)
+}
+export function lineChecklist(db: Database, line: ProductLine): LineChecklist {
+  const visible = line.members.filter((m) => lineMemberState(db, line, m, { uid: '' }).visible);
+  const pinsMissing = visible.filter((m) => !hasPin(m));
+  const info = !!line.name.trim() && db.manufacturers.some((m) => m.id === line.maker_id);
+  const live = lineOpenToCustomers(db, line);
+  const items: LineChecklist['items'] = [
+    { key: 'info', ok: info, required: true },
+    { key: 'cover', ok: !!line.cover_url, required: true },
+    { key: 'members', ok: visible.length > 0, required: true },
+    { key: 'pins', ok: visible.length > 0 && pinsMissing.length === 0, required: false },
+  ];
+  const firstProblem = items.find((i) => i.required && !i.ok)?.key;
+  return {
+    items, okCount: items.filter((i) => i.ok).length, ready: !firstProblem, live, visible,
+    hiddenN: line.members.length - visible.length, pinned: visible.length - pinsMissing.length, pinsMissing, firstProblem,
+  };
+}
+
+/** วางป้ายอัตโนมัติ: กระจาย n ป้ายเท่าๆ กันซ้ายไปขวาที่ความสูง y% (รูปหมู่ของค่ายส่วนใหญ่ยืนเรียงซ้ายไปขวาตามลำดับ)
+ *  แล้วแอดมินค่อยเลื่อนทั้งชุด / แตะหัวจริงทีละตัว · คืน % 2 ตำแหน่ง อยู่ในกรอบ 0–100 เสมอ */
+export const PIN_AUTO_Y = 25;
+export function autoPinSpread(n: number, y = PIN_AUTO_Y): { x: number; y: number }[] {
+  const cy = Math.min(100, Math.max(0, y));
+  return Array.from({ length: Math.max(0, n) }, (_, i) => ({ x: Math.round(((i + 0.5) / n) * 10000) / 100, y: cy }));
+}
+
 /** แผน "พรีทั้งเซต" (เจ้าของ 2026-10-16 รอบ 1): นับตัวที่พรีแล้ว / ยังขาด / ใส่ตะกร้าได้ทีเดียว
  *  ใส่ได้ทีเดียว = พรีกระดานหลักที่เปิดอยู่ ไม่มีแบบ A/B ยังไม่พรี ยังไม่อยู่ในตะกร้า (กติกาเดียวกับปุ่ม "พรีเลย" ในแถว)
  *  ตัวที่ใส่ไม่ได้ (มีแบบ/รอบพิเศษ/ปิดพรี) อยู่ใน skipped — ปุ่มบอกจำนวนที่ใส่ได้จริงเท่านั้น */
 export interface LineSetPlan {
-  mine: number; total: number;
+  mine: number; total: number;   // นับเฉพาะตัวที่มีสินค้าในระบบ (ตัวที่ Add เองติดตามไม่ได้)
   missing: { name: string; member: LineMember; state: LineMemberState }[];
   addable: { name: string; product: Product }[];
   inCart: number;
-  skipped: string[];
+  rowOnly: string[];   // ยังขาด + สั่งได้ แต่ต้องกดที่แถว (มีแบบให้เลือก / รอบพิเศษ / พร้อมส่ง)
   deposit: number; // มัดจำรวมของตัวที่ใส่ได้ (ตัวเลขบนปุ่ม)
-  missingDeposit: number; // มัดจำรวมของทุกตัวที่ยังขาดที่มีสินค้า (ตัวเลขในการ์ด x/y)
+  missingDeposit: number; // มัดจำรวมของตัวที่ยังขาดและยังพรีกระดานหลักได้ (ตัวเลขในการ์ด x/y)
 }
-export function lineSetPlan(shown: { member: LineMember; state: LineMemberState }[], inCart: (productId: string) => boolean): LineSetPlan {
-  const vis = shown.filter((s) => s.state.visible);
+/** depositOf = มัดจำต่อชิ้น "ตามยศของคนดู" (ผู้เรียกส่ง lineDepositForRank) — ต้องตรงกับตะกร้า/checkout (DNA rank rule)
+ *  ไม่ส่ง = มัดจำป้ายของสินค้า (ใช้ในเทสต์/ที่ที่ไม่มีคนดู) */
+export function lineSetPlan(shown: { member: LineMember; state: LineMemberState }[], inCart: (productId: string) => boolean, depositOf: (p: Product) => number = (p) => p.deposit_amount): LineSetPlan {
+  const vis = shown.filter((s) => s.state.visible && !!s.state.product);
   const missing = vis.filter((s) => !s.state.mine).map((s) => ({ name: s.member.name.trim() || '?', member: s.member, state: s.state }));
   const addable: LineSetPlan['addable'] = [];
-  const skipped: string[] = [];
+  const rowOnly: string[] = [];
   let inCartN = 0;
+  let missingDeposit = 0;
   for (const m of missing) {
-    const p = m.state.product;
-    const quick = !!p && !p.has_variants && m.state.kind === 'preorder';
-    if (!quick) { skipped.push(m.name); continue; }
-    if (inCart(p!.id)) { inCartN++; continue; }
-    addable.push({ name: m.name, product: p! });
+    const p = m.state.product!;
+    const k = m.state.kind;
+    if (k === 'preorder') missingDeposit += depositOf(p);
+    if (k === 'preorder' && !p.has_variants) {
+      if (inCart(p.id)) inCartN++; else addable.push({ name: m.name, product: p });
+    } else if (k === 'preorder' || k === 'special' || k === 'stock') rowOnly.push(m.name);
   }
-  return { mine: vis.length - missing.length, total: vis.length, missing, addable, inCart: inCartN, skipped, deposit: addable.reduce((a, x) => a + x.product.deposit_amount, 0), missingDeposit: missing.reduce((a, m) => a + (m.state.product?.deposit_amount ?? 0), 0) };
+  return { mine: vis.length - missing.length, total: vis.length, missing, addable, inCart: inCartN, rowOnly, deposit: addable.reduce((a, x) => a + depositOf(x.product), 0), missingDeposit };
 }
 
 /** รายการที่ต้องถามของเหลือจริงจาก server (ของในมือ + รอบพิเศษที่เปิด) — ไม่ซ้ำ ·
@@ -298,9 +362,11 @@ export function shopLines(db: Database, uid: string, f: { makerId?: string | nul
 
 /** สินค้าที่ "อยู่ในไลน์ที่ผู้ใช้คนนี้เห็น" (ผูกตรง + ของคู่) — หน้าช็อปมุมมอง "ทั้งหมด" ยุบตัวพวกนี้ออกจากกริด
  *  ให้เหลือการ์ดไลน์ใบเดียว (เจ้าของ 2026-10-08 "เอาแบบยุบ") · ค้นหา/กรอง/หมวด ยังเห็นตัวเดี่ยวครบ (ผู้เรียกตัดสิน) */
-export function productsInVisibleLines(db: Database, uid: string): Set<string> {
+export function productsInVisibleLines(db: Database, uid: string, f: { makerId?: string | null; franchiseId?: string | null } = {}): Set<string> {
+  // ⚠ ต้องกรองเหมือนแถบไลน์ (LineStrip → shopLines ตัวกรองเดียวกัน) — ไม่งั้นกรองเรื่อง X แล้วไลน์ที่ไม่ระบุเรื่อง/เรื่องอื่น
+  //   ไม่มีการ์ดโผล่ แต่สมาชิกถูกยุบหาย = หาไม่เจอนอกจากค้นหา (review ลูกค้า 2026-10-16)
   const out = new Set<string>();
-  for (const l of shopLines(db, uid)) for (const m of l.members) for (const p of memberProducts(db, m).all) out.add(p.id);
+  for (const l of shopLines(db, uid, f)) for (const m of l.members) for (const p of memberProducts(db, m).all) out.add(p.id);
   return out;
 }
 
@@ -538,7 +604,7 @@ export function sourcingPrefill(db: Database, uid: string, q: { src?: string | n
       cname: mem.name,
       images,
       srcId: ref?.id,
-      note: `จากไลน์ ${okLine.name} · ตัวที่ ${idx + 1}`,
+      note: `จากไลน์ ${okLine.name} · ตัวที่ ${okLine.members.filter((x) => lineMemberState(db, okLine, x, { uid: '' }).visible).findIndex((x) => x.id === mem.id) + 1 || idx + 1}`,
     };
   }
   if (p) return { makerId: p.manufacturer_id, frId: p.franchise_id, cname: p.character_name ?? p.series_name, images: p.images.slice(0, 3), srcId: p.id };
