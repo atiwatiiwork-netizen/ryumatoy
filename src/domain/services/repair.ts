@@ -109,7 +109,7 @@ export const REPAIR_STATUS_LABEL: Record<RepairStatus, string> = {
   sent_to_tech: 'ส่งของให้ช่างแล้ว · กำลังซ่อม',
   returned: 'ช่างส่งคืนแล้ว · รอรับของ',
   done: 'เสร็จสิ้น',
-  rejected: 'ไม่รับเรื่อง',
+  rejected: 'ปิดเรื่อง',
 };
 /** ป้ายสั้นฝั่งแอดมิน */
 export const REPAIR_STATUS_SHORT: Record<RepairStatus, string> = {
@@ -118,7 +118,7 @@ export const REPAIR_STATUS_SHORT: Record<RepairStatus, string> = {
   sent_to_tech: 'อยู่ที่ช่าง',
   returned: 'ส่งคืนแล้ว',
   done: 'เสร็จสิ้น',
-  rejected: 'ไม่รับเรื่อง',
+  rejected: 'ปิดเรื่อง',
 };
 export const REPAIR_STEPS: { key: RepairStatus; label: string }[] = [
   { key: 'filed', label: 'ยื่นเรื่อง' },
@@ -162,8 +162,10 @@ export const repairAddressPayload = (label: string, ticketNo: string): Payload =
   ({ title: '🔧 แอดมินส่งที่อยู่ช่างให้แล้ว', body: `${label} — เปิดดูที่อยู่แล้วส่งของได้เลย`, url: repairTicketUrl(ticketNo) });
 export const repairReturnPayload = (label: string, carrier: string, tracking: string, ticketNo: string): Payload =>
   ({ title: '📦 ซ่อมเสร็จแล้ว กำลังส่งคืน', body: `${label} · ${carrier} ${tracking}`, url: repairTicketUrl(ticketNo) });
-export const repairRejectPayload = (label: string, reason: string, ticketNo: string): Payload =>
-  ({ title: '🔧 เรื่องซ่อม: ไม่รับเรื่อง', body: `${label} — ${reason}`, url: repairTicketUrl(ticketNo) });
+/** ปิดก่อนส่งที่อยู่ = "ไม่รับเรื่อง" · ปิดหลังจากนั้น = "ปิดเรื่อง" (ลูกค้าไม่ได้ถูกปฏิเสธ แค่ไม่จบตามทาง) */
+export const repairClosedWord = (c: Pick<RepairClaim, 'address_sent_at'>) => (c.address_sent_at ? 'ปิดเรื่อง' : 'ไม่รับเรื่อง');
+export const repairRejectPayload = (label: string, reason: string, ticketNo: string, word = 'ไม่รับเรื่อง'): Payload =>
+  ({ title: `🔧 เรื่องซ่อม: ${word}`, body: `${label} — ${reason}`, url: repairTicketUrl(ticketNo) });
 
 export const CARRIER_NAME: Record<Carrier, string> = { ems: 'EMS', jt: 'J&T', flash: 'Flash', kerry: 'Kerry' };
 export const CARRIERS: Carrier[] = ['jt', 'flash', 'kerry', 'ems'];

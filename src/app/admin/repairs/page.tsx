@@ -13,7 +13,7 @@ import { copyText } from '@/lib/clipboard';
 import { sendRepairAddress, setRepairOutTracking, setRepairBackTracking, markRepairReceived, rejectRepairClaim, setRepairNote, setRepairConfig } from '@/data/mutations';
 import { productLabel, lineImage } from '@/domain/services/catalog';
 import {
-  repairLive, repairQueue, repairConfig, repairLastDay, REPAIR_STATUS_SHORT, CARRIERS, CARRIER_NAME,
+  repairLive, repairQueue, repairConfig, repairLastDay, repairClosedWord, REPAIR_STATUS_SHORT, CARRIERS, CARRIER_NAME,
   REPAIR_PUSH_ADDRESS, REPAIR_PUSH_RETURN, REPAIR_PUSH_REJECT, repairAddressPayload, repairReturnPayload, repairRejectPayload,
 } from '@/domain/services/repair';
 import type { RepairClaim, Carrier, RepairStatus } from '@/domain/entities';
@@ -181,12 +181,16 @@ function ClaimCard({ claim }: { claim: RepairClaim }) {
     void run(() => dispatch(sendRepairAddress(claim.id, me, address, addrNote)), 'address_sent', 'ส่งที่อยู่ให้ลูกค้าแล้ว',
       () => pushCustomer(REPAIR_PUSH_ADDRESS, repairAddressPayload(label, ticketNo)));
   };
+  // ก่อนส่งที่อยู่ = "ไม่รับเรื่อง" · หลังจากนั้น = "ปิดเรื่อง" (ลูกค้าไม่ส่งของ / พัสดุหาย / ซ่อมไม่ได้ ตกลงกันนอกระบบ)
+  const closeWord = repairClosedWord(claim);
   const reject = () => {
-    const why = prompt('เหตุผลที่ไม่รับเรื่อง (ลูกค้าจะเห็นข้อความนี้)');
+    const why = prompt(`เหตุผลที่${closeWord} (ลูกค้าจะเห็นข้อความนี้)`);
     if (!why?.trim()) return;
-    void run(() => dispatch(rejectRepairClaim(claim.id, me, why)), 'rejected', 'ปิดเรื่องแล้ว (ไม่รับ)',
-      () => pushCustomer(REPAIR_PUSH_REJECT, repairRejectPayload(label, why.trim(), ticketNo)));
+    void run(() => dispatch(rejectRepairClaim(claim.id, me, why)), 'rejected', `${closeWord}แล้ว`,
+      () => pushCustomer(REPAIR_PUSH_REJECT, repairRejectPayload(label, why.trim(), ticketNo, closeWord)));
   };
+  // ตั๋วที่ปิดงานนอกระบบ (ไม่มีเลขพัสดุ · ไม่ได้ปิดงานรับเอง/รถเข้ารับ) วันส่งในระบบ = วันที่แอดมินกดปิด อาจช้ากว่าวันส่งจริง
+  const offlineClosed = !!ticket && !ticket.parcel_no && !ticket.delivery?.closed_at;
   const outTracking = () => {
     if (!carrier) return flash('เลือกขนส่งก่อน');
     if (!no.trim()) return flash('ใส่เลขพัสดุก่อน');
@@ -266,7 +270,8 @@ function ClaimCard({ claim }: { claim: RepairClaim }) {
           )}
           <div className="mt-2 text-[11.5px] text-ink-faint">
             ส่งของ {fmtDate(claim.shipped_out_at ?? ticket?.shipped_out_at)} · ยื่นได้ถึง {claim.deadline_at ? fmtDate(repairLastDay(claim.deadline_at)) : '—'}
-            {claim.deadline_at && claim.filed_at >= claim.deadline_at && <span className="ml-1.5 font-bold text-[#f87171]">ยื่นเกินกำหนด</span>}
+            {!ticket && <span className="ml-1.5 font-bold text-[#f87171]">ตั๋วถูกลบแล้ว</span>}
+            {offlineClosed && <span className="ml-1.5 text-[#fbbf24]">ปิดงานนอกระบบ — วันส่งจริงอาจก่อนหน้านี้</span>}
           </div>
 
           {/* ประวัติจังหวะที่ผ่านมา */}
@@ -275,7 +280,7 @@ function ClaimCard({ claim }: { claim: RepairClaim }) {
             {claim.out_sent_at && <div>📮 ลูกค้าส่งให้ช่าง {fmtTime(claim.out_sent_at)} · {claim.out_carrier ? CARRIER_NAME[claim.out_carrier] : ''} <span className="break-all font-mono">{claim.out_tracking}</span></div>}
             {claim.back_sent_at && <div>📦 ส่งคืนลูกค้า {fmtTime(claim.back_sent_at)} · {claim.back_carrier ? CARRIER_NAME[claim.back_carrier] : ''} <span className="break-all font-mono">{claim.back_tracking}</span></div>}
             {claim.received_at && <div className="text-[#4ade80]">✓ ลูกค้าได้รับของ {fmtTime(claim.received_at)}</div>}
-            {claim.rejected_at && <div className="text-[#f87171]">✕ ไม่รับเรื่อง {fmtTime(claim.rejected_at)} — {claim.reject_reason}</div>}
+            {claim.rejected_at && <div className="text-[#f87171]">✕ {closeWord} {fmtTime(claim.rejected_at)} — {claim.reject_reason}</div>}
           </div>
 
           {/* จังหวะของแอดมิน */}
@@ -297,12 +302,15 @@ function ClaimCard({ claim }: { claim: RepairClaim }) {
                 <button onClick={async () => flash((await copyText(claim.tech_address ?? '')) ? 'ก๊อปแล้ว' : 'ก๊อปไม่ได้ กดค้างเพื่อคัดลอกเอง')} className="mt-1 text-primary-soft underline">ก๊อปที่อยู่</button>
               </div>
               {trackingForm({ title: 'บันทึกเลขพัสดุแทนลูกค้า', cta: 'บันทึก', onGo: outTracking })}
-              <button disabled={busy} onClick={reject} className="mt-2 text-[12px] text-ink-faint underline disabled:opacity-50">ไม่รับเรื่อง</button>
             </>
           )}
           {claim.status === 'sent_to_tech' && trackingForm({ title: 'เลขพัสดุส่งคืนลูกค้า', cta: '📦 แจ้งเลขส่งกลับ', onGo: backTracking })}
           {claim.status === 'returned' && (
-            <button disabled={busy} onClick={close} className="mt-3 w-full rounded-lg border border-[#16a34a]/40 bg-[#16a34a]/[0.12] px-3.5 py-2 text-[12.5px] font-bold text-[#4ade80] disabled:opacity-50">✓ ปิดเรื่อง (ลูกค้าได้รับแล้ว)</button>
+            <button disabled={busy} onClick={close} className="mt-3 w-full rounded-lg border border-[#16a34a]/40 bg-[#16a34a]/[0.12] px-3.5 py-2 text-[12.5px] font-bold text-[#4ade80] disabled:opacity-50">✓ จบเรื่อง (ลูกค้าได้รับแล้ว)</button>
+          )}
+          {/* ทางออกทุกขั้นที่ยังไม่จบ: ลูกค้าไม่ส่งของ / พัสดุหาย / ซ่อมไม่ได้ — ไม่งั้นเรื่องค้างคิวตลอด */}
+          {(claim.status === 'address_sent' || claim.status === 'sent_to_tech' || claim.status === 'returned') && (
+            <button disabled={busy} onClick={reject} className="mt-2 text-[12px] text-ink-faint underline disabled:opacity-50">ปิดเรื่องโดยไม่จบตามทาง (ระบุเหตุผล)</button>
           )}
 
           <input ref={noteRef} className={cx(inputCls, 'mt-3 text-[12px]')} value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => void saveNote()} placeholder="โน้ตแอดมิน" />

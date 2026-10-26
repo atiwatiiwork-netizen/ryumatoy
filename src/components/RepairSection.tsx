@@ -14,7 +14,7 @@ import { copyText } from '@/lib/clipboard';
 import { fileRepairClaim, setRepairOutTracking, markRepairReceived } from '@/data/mutations';
 import { productLabel } from '@/domain/services/catalog';
 import {
-  repairLive, repairWindow, repairClaimsOf, repairLastDay, isOpenClaim, REPAIR_STEPS, repairStep, REPAIR_STATUS_LABEL, REPAIR_STATUS_SHORT, REPAIR_BLOCK_TEXT,
+  repairLive, repairWindow, repairClaimsOf, repairLastDay, repairClosedWord, isOpenClaim, REPAIR_STEPS, repairStep, REPAIR_STATUS_LABEL, REPAIR_STATUS_SHORT, REPAIR_BLOCK_TEXT,
   CARRIERS, CARRIER_NAME, MAX_REPAIR_IMAGES,
 } from '@/domain/services/repair';
 import type { PreorderTicket, Carrier, RepairClaim } from '@/domain/entities';
@@ -43,7 +43,8 @@ export function RepairSection({ ticket }: { ticket: PreorderTicket }) {
   // ฟอร์มต้องอยู่จนกว่าจะเซฟสำเร็จ (ถ้าเช็ค open ก่อน ฟอร์มจะหายทันทีที่ dispatch แล้วเซิร์ฟเวอร์ปฏิเสธ = ร่างหาย)
   if (filing) return <FileForm ticket={ticket} onClose={() => setFiling(false)} />;
   if (open) return <ClaimCard claim={open} ticket={ticket} />;
-  if (!w.ok && !last && w.reason !== 'expired' && w.reason !== 'no_date') return null; // ไม่ใช่เจ้าของ (แอดมินเปิดดู) — ไม่มีอะไรให้ทำ
+  // ไม่ใช่เจ้าของ (แอดมินเปิดดู) หรือใบเก่าก่อนมีวันส่ง (v13 · เกินกำหนดแน่นอน) — ไม่มีอะไรให้ทำ ไม่วาด
+  if (!w.ok && !last && w.reason !== 'expired') return null;
 
   return (
     <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 px-4 py-3">
@@ -51,19 +52,19 @@ export function RepairSection({ ticket }: { ticket: PreorderTicket }) {
         <div className={cx('mb-2 text-[12.5px]', last.status === 'done' ? 'text-[#4ade80]' : 'text-ink-muted2')}>
           {last.status === 'done'
             ? <>ซ่อมเสร็จแล้ว ✓ รับของ {fmtDate(last.received_at)}</>
-            : <>เรื่องซ่อม {fmtDate(last.filed_at)}: ไม่รับเรื่อง — {last.reject_reason}</>}
+            : <>เรื่องซ่อม {fmtDate(last.filed_at)}: {repairClosedWord(last)} — {last.reject_reason}</>}
         </div>
       )}
       {w.ok ? (
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[13px] font-bold text-ink">ของชำรุด? ยื่นเรื่องซ่อมได้</div>
-            <div className="text-[11.5px] text-ink-faint">ยื่นได้ถึง {fmtDate(repairLastDay(w.deadline!))} · เหลือ {Math.max(0, w.daysLeft ?? 0)} วัน</div>
+            <div className="text-[11.5px] text-ink-faint">ยื่นได้ถึง {fmtDate(repairLastDay(w.deadline!))} · {(w.daysLeft ?? 0) <= 1 ? 'วันนี้วันสุดท้าย' : `เหลือ ${w.daysLeft} วัน`}</div>
           </div>
           <button onClick={() => setFiling(true)} className="shrink-0 rounded-lg border border-subtle bg-surface-3 px-3 py-2 text-[12.5px] font-bold text-ink">🔧 ยื่นเรื่องซ่อม</button>
         </div>
-      ) : w.reason === 'expired' || w.reason === 'no_date' ? (
-        <div className="text-[12px] text-ink-faint">{REPAIR_BLOCK_TEXT[w.reason]}{w.reason === 'expired' ? ` (วันสุดท้าย ${fmtDate(repairLastDay(w.deadline!))})` : ''}</div>
+      ) : w.reason === 'expired' ? (
+        <div className="text-[12px] text-ink-faint">{REPAIR_BLOCK_TEXT.expired} (วันสุดท้าย {fmtDate(repairLastDay(w.deadline!))})</div>
       ) : null}
     </div>
   );
@@ -127,7 +128,7 @@ function FileForm({ ticket, onClose }: { ticket: PreorderTicket; onClose: () => 
   return (
     <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-4">
       <div className="mb-1 flex items-center gap-2 text-sm font-bold text-ink"><Icon name="warning" size={16} /> ยื่นเรื่องซ่อม</div>
-      <div className="mb-3 text-[12px] text-ink-faint">{label} · {ticket.ticket_no}</div>
+      <div className="mb-3 text-[12px] text-ink-faint">{label} · {ticket.ticket_no}{ticket.qty > 1 ? ` · ใบนี้ ${ticket.qty} ชิ้น — บอกด้วยว่าเสียกี่ชิ้น` : ''}</div>
       <label className="block">
         <span className="mb-1 block text-[12px] font-semibold text-ink-muted">อาการที่เสีย</span>
         <textarea className={cx(inputCls, 'min-h-[80px]')} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="เช่น แขนซ้ายหัก ฐานร้าว สีถลอกตรงไหน" />
@@ -192,12 +193,12 @@ function ClaimCard({ claim, ticket }: { claim: RepairClaim; ticket: PreorderTick
     const c = carrier;
     void run(() => dispatch(setRepairOutTracking(claim.id, c, no)), 'sent_to_tech', 'บันทึกแล้ว รอช่างซ่อม', () => {
       const name = db.users.find((u) => u.id === me)?.display_name ?? 'ลูกค้า';
-      notifyAdminLine(`📮 ลูกค้าส่งของให้ช่างแล้ว: ${name} · ${label} · ${CARRIER_NAME[c]} ${no.trim()}`);
+      notifyAdminLine(`📮 ลูกค้าส่งของให้ช่างแล้ว: ${name} · ${label} · ${ticket.ticket_no} · ${CARRIER_NAME[c]} ${no.trim()}`);
     });
   };
   const received = () => {
     if (!confirm('ได้รับของที่ซ่อมแล้วใช่ไหม?')) return;
-    void run(() => dispatch(markRepairReceived(claim.id)), 'done', 'จบเรื่องซ่อมแล้ว ขอบคุณครับ');
+    void run(() => dispatch(markRepairReceived(claim.id)), 'done', 'จบเรื่องซ่อมแล้ว ✓');
   };
 
   return (
@@ -216,7 +217,7 @@ function ClaimCard({ claim, ticket }: { claim: RepairClaim; ticket: PreorderTick
                 <div className={cx('h-3 w-3 rounded-full border-2', done ? 'border-[#fbbf24] bg-[#fbbf24]' : 'border-white/20 bg-transparent', i === step && 'animate-pulse')} />
                 <div className={cx('h-[2px] flex-1', i === REPAIR_STEPS.length - 1 ? 'bg-transparent' : i < step ? 'bg-[#fbbf24]' : 'bg-white/10')} />
               </div>
-              <div className={cx('mt-1 text-center text-[10px] leading-tight', done ? 'text-ink' : 'text-ink-faint')}>{s.label}</div>
+              <div className={cx('mt-1 break-words px-0.5 text-center text-[10px] leading-tight', done ? 'text-ink' : 'text-ink-faint')}>{s.label}</div>
             </div>
           );
         })}

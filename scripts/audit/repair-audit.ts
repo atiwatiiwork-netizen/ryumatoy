@@ -3,7 +3,7 @@
 import { SEED_DATABASE } from '../../src/data/seed';
 import type { Database, PreorderTicket, RepairClaim } from '../../src/domain/entities';
 import { repairWindow, repairDeadline, repairLastDay, repairLive, repairConfig, repairQueue, repairAdminTodo, openRepairClaim, repairStep, repairNextActor, REPAIR_CONFIG_KEY } from '../../src/domain/services/repair';
-import { fileRepairClaim, sendRepairAddress, setRepairOutTracking, setRepairBackTracking, markRepairReceived, rejectRepairClaim, setRepairConfig, setRepairNote } from '../../src/data/mutations';
+import { fileRepairClaim, sendRepairAddress, setRepairOutTracking, setRepairBackTracking, markRepairReceived, rejectRepairClaim, setRepairConfig, setRepairNote, deleteTicket } from '../../src/data/mutations';
 
 let p = 0, f = 0;
 const ok = (n: string, c: boolean) => { if (c) p++; else { f++; console.log('FAIL', n); } };
@@ -120,7 +120,11 @@ const base = (): Database => {
   const d3a = setRepairOutTracking('c1', 'flash', 'FL123', 'adm')(d2);
   ok('sent_to_tech by admin logs', d3a.activityLogs[0]?.action === 'repair_out');
   ok('out tracking twice no-op', setRepairOutTracking('c1', 'jt', 'X')(d3) === d3);
-  ok('reject after sent no-op', rejectRepairClaim('c1', 'adm', 'late')(d3) === d3);
+  // ปิดได้ทุกขั้นที่ยังไม่จบ (review รอบ 2 #1: พัสดุหาย/ซ่อมไม่ได้ ไม่งั้นค้างคิวตลอด) — log ใช้คำ "ปิดเรื่อง" เมื่อส่งที่อยู่ไปแล้ว
+  const r3 = rejectRepairClaim('c1', 'adm', 'พัสดุหาย')(d3);
+  ok('close from sent_to_tech allowed', get(r3).status === 'rejected' && get(r3).reject_reason === 'พัสดุหาย' && /^ปิดเรื่องซ่อม/.test(r3.activityLogs[0]?.summary ?? ''));
+  ok('deleteTicket blocked while claim open', deleteTicket('t1')(d3) === d3);
+  ok('deleteTicket allowed after close', deleteTicket('t1')(r3).tickets.every((t) => t.id !== 't1'));
 
   const d4 = setRepairBackTracking('c1', 'adm', 'kerry', 'KR77')(d3);
   ok('returned', get(d4).status === 'returned' && get(d4).back_carrier === 'kerry' && get(d4).back_tracking === 'KR77' && get(d4).back_sent_by === 'adm');
@@ -138,7 +142,8 @@ const base = (): Database => {
   // ปฏิเสธ: ได้จาก filed / address_sent เท่านั้น · ต้องมีเหตุผล
   ok('reject needs reason', rejectRepairClaim('c1', 'adm', ' ')(d1) === d1);
   const r1 = rejectRepairClaim('c1', 'adm', ' เกินกำหนด ')(d1);
-  ok('rejected from filed', get(r1).status === 'rejected' && get(r1).reject_reason === 'เกินกำหนด' && get(r1).rejected_by === 'adm' && r1.activityLogs[0]?.action === 'repair_reject');
+  ok('rejected from filed', get(r1).status === 'rejected' && get(r1).reject_reason === 'เกินกำหนด' && get(r1).rejected_by === 'adm' && r1.activityLogs[0]?.action === 'repair_reject' && /^ไม่รับเรื่องซ่อม/.test(r1.activityLogs[0]?.summary ?? ''));
+  ok('reject on done/rejected no-op', rejectRepairClaim('c1', 'adm', 'x')(d5) === d5 && rejectRepairClaim('c1', 'adm', 'x')(r1) === r1);
   ok('rejected from address_sent', get(rejectRepairClaim('c1', 'adm', 'x')(d2)).status === 'rejected');
   ok('rejected → claimable again', repairWindow(r1, r1.tickets[0], 'u1', at(5)).ok);
   ok('unknown claim no-op', sendRepairAddress('zzz', 'adm', 'x')(d1) === d1);

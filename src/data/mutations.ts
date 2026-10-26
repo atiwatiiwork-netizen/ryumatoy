@@ -2120,6 +2120,8 @@ export const deleteTicket = (ticketId: string) => (db: Database): Database => {
   // ตลาดใบพรี: ตั๋วที่เคยผ่านตลาด (ขาย/แตกขาย/เป็นตั๋วลูก) ลบไม่ได้ — หลักฐานว่าใครขายให้ใคร + เงินที่
   //   แบ่งไปตั๋วลูกจะหายไปด้วย (เดิมลบ ticket_transfers ทิ้งพ่วง) → ตัวเรียกต้อง read-back แล้วบอกเหตุผล
   if (gone && hasMarketHistory(db, gone)) return db;
+  // เรื่องซ่อมค้างอยู่ (v89): ลบตั๋วแล้วเรื่องจะลอย (การ์ดแอดมินไม่มีชื่อสินค้า · ลูกค้าหาเรื่องไม่เจอ) → ปิดเรื่องก่อน
+  if (gone && db.repairClaims.some((c) => c.ticket_id === ticketId && c.status !== 'done' && c.status !== 'rejected')) return db;
   const rest = db.tickets.filter((t) => t.id !== ticketId);
   let voided = false;
   const orders = !gone ? db.orders : db.orders.map((o) => {
@@ -2655,17 +2657,19 @@ export const markRepairReceived = (claimId: string, actorId?: string) => (db: Da
   return logActivity(actorId, 'repair_done', `ปิดเรื่องซ่อม ${claimLabel(db, c)}`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
 };
 
-/** แอดมินไม่รับเรื่อง (ต้องมีเหตุผล) — ทำได้ก่อนของจะถูกส่งไปช่างเท่านั้น */
+/** แอดมินปิดเรื่องโดยไม่จบตามทาง (ต้องมีเหตุผล) — ได้ทุกขั้นที่ยังไม่จบ: ยังไม่ส่งที่อยู่ = "ไม่รับเรื่อง" ·
+ *  หลังจากนั้น = "ปิดเรื่อง" (ลูกค้าไม่ส่งของ / พัสดุหาย / ซ่อมไม่ได้ ตกลงกันนอกระบบ) — ไม่งั้นเรื่องค้างในคิวตลอด (review รอบ 2 #1) */
 export const rejectRepairClaim = (claimId: string, actorId: string, reason: string) => (db: Database): Database => {
   const why = reason.trim();
   if (!why) return db;
   const now = new Date().toISOString();
-  const next = patchRepair(db, claimId, (c) => (c.status === 'filed' || c.status === 'address_sent'
+  const next = patchRepair(db, claimId, (c) => (c.status !== 'done' && c.status !== 'rejected'
     ? { ...c, status: 'rejected', rejected_at: now, rejected_by: actorId, reject_reason: why }
     : null));
   if (next === db) return db;
   const c = next.repairClaims.find((x) => x.id === claimId)!;
-  return logActivity(actorId, 'repair_reject', `ไม่รับเรื่องซ่อม ${claimLabel(db, c)}: ${why}`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+  const verb = c.address_sent_at ? 'ปิดเรื่องซ่อม' : 'ไม่รับเรื่องซ่อม';
+  return logActivity(actorId, 'repair_reject', `${verb} ${claimLabel(db, c)}: ${why}`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
 };
 
 /** โน้ตของแอดมิน (หน้าลูกค้าไม่วาด — แต่แถวทั้งแถวอ่านได้โดยเจ้าของเรื่องตาม RLS จึงไม่ใช่ที่เก็บความลับ) */

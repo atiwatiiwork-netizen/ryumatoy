@@ -223,7 +223,9 @@ export const supabaseAdapter: PersistenceAdapter = {
       // ⚠ ตารางที่ migration รันบน production แล้ว และ "ว่างเพราะโหลดพัง" อันตรายกว่า "โหลดไม่ขึ้น" (audit 2026-09-23):
       //   point_ledger ว่าง → ลบตั๋วไม่ดึงแต้มคืน / เปิดตัวให้แต้มซ้ำ · sourcing_requests ว่าง → ตั๋วหาของได้แต้ม
       //   campaign_awards / coupon_grants ว่าง → แจกรางวัล Event ซ้ำ · app_config ว่าง → ปิดเดือนเขียนทับ snapshot เดือนเก่า
-      couponGrants, campaigns, campaignAwards, sourcingRequests, appConfig, pointLedger];
+      couponGrants, campaigns, campaignAwards, sourcingRequests, appConfig, pointLedger,
+      // repair_claims (v89 รันแล้ว 2026-10-26): ว่างเพราะโหลดพัง → หน้าตั๋วเสนอ "ยื่นเรื่องซ่อม" ทับเรื่องที่ค้างอยู่ / คิวแอดมินโล่งปลอม
+      repairClaims];
     const failed = results.find((r) => r.error);
     if (failed?.error) throw failed.error;
 

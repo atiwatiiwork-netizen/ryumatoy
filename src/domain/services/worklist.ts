@@ -7,6 +7,7 @@ import { orphanUsedGrants } from './coupons';
 import { unmatchedApprovedItems } from './tickets';
 import { needsClose, payOverdue } from './auctions';
 import { marketQueue } from './market';
+import { repairAdminTodo } from './repair';
 
 /**
  * "งานค้างของฉันวันนี้" — รวมงานที่ต้องลงมือ จากทุกโมดูล มาไว้ที่เดียว (2026-07-25).
@@ -112,6 +113,8 @@ export function worklist(db: Database): WorkItem[] {
   add({ key: 'ranks', urgency: 'soon', icon: '🏅', title: 'คำขอเลื่อนขั้นรอตรวจ', detail: '', count: db.rankRequests.filter((r) => r.status === 'pending').length, href: '/admin/ranks' });
   add({ key: 'sourcing', urgency: 'now', icon: '🔎', title: 'งานหาของรอดำเนินการ', detail: 'เสนอราคา / เริ่มงานหลังลูกค้าจ่ายมัดจำ', count: db.sourcingRequests.filter((r) => ['requested', 'paid'].includes(r.status)).length, href: '/admin/sourcing' });
   add({ key: 'mission', urgency: 'soon', icon: '🎯', title: 'ภารกิจรอตรวจ', detail: '', count: db.missionSubmissions.filter((m) => m.status === 'pending').length, href: '/admin/events' });
+  // เรื่องซ่อม (v89): ลูกค้าเพิ่งยื่น / ของอยู่ที่ช่างรอแจ้งเลขส่งกลับ
+  add({ key: 'repair', urgency: 'now', icon: '🔧', title: 'เรื่องซ่อมรอแอดมิน', detail: 'ส่งที่อยู่ช่าง / แจ้งเลขส่งกลับ', count: repairAdminTodo(db), href: '/admin/repairs' });
 
   const order: Record<Urgency, number> = { now: 0, today: 1, soon: 2 };
   return out.sort((a, b) => order[a.urgency] - order[b.urgency] || b.count - a.count);

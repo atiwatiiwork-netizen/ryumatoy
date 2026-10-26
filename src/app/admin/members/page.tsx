@@ -16,6 +16,7 @@ import { updateUser, removeUser, setSuspended, editTicketDeposit, syncOrderDepos
 import { useCurrentUserId } from '@/state/AuthProvider';
 import { unmatchedApprovedItems, ticketPayer, TRANSFER_DONE } from '@/domain/services/tickets';
 import { marketLocked, hasMarketHistory, isActiveTransfer, ticketTransferred } from '@/domain/services/market';
+import { openRepairClaim } from '@/domain/services/repair';
 import { store } from '@/data/store';
 import { persistFailText, isTransientPersistError, friendlyPersistError } from '@/data/persistErrors';
 import { releaseReservation } from '@/lib/reserve';
@@ -332,6 +333,8 @@ function TicketManagerModal({ userId, onClose }: { userId: string; onClose: () =
     const cur = nowDb.tickets.find((x) => x.id === t.id);
     if (!cur) return flash(`ตั๋ว ${t.ticket_no} ไม่อยู่แล้ว`);
     if (cur.owner_id !== t.owner_id || hasMarketHistory(nowDb, cur)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — ใบนี้เพิ่งลงขาย/เปลี่ยนมือ (ต้องเก็บเป็นหลักฐาน)`);
+    // เรื่องซ่อมค้าง (v89): mutation ปัดตกอยู่แล้ว — บอกเหตุผลให้ไปปิดเรื่องก่อน
+    if (openRepairClaim(nowDb, cur.id)) return flash(`ลบ ${t.ticket_no} ไม่ได้ — มีเรื่องซ่อมค้างอยู่ ปิดเรื่องที่ "เรื่องซ่อม" ก่อน`);
     // return stock for in-stock items by releasing a matching confirmed/paid hold
     if (product?.is_stock) {
       const res = db.stockReservations.find((r) => r.product_id === t.product_id && r.user_id === userId && (t.batch_id ? r.batch_id === t.batch_id : true) && ['confirmed', 'paid', 'active'].includes(r.status));

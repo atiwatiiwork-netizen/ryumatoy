@@ -99,8 +99,16 @@ async function main() {
   ok('U2 filed: ลูกค้าแก้อาการ/รูปได้ · ช่อง server ถูกตรึง (user_id/filed_at ไม่เปลี่ยน)', u2.ok && c1b.description === 'แขนหัก ฐานร้าว' && c1b.user_id === 'uC' && String(c1b.filed_at) === String(c1.filed_at), { err: u2.err, c1b: { d: c1b?.description, u: c1b?.user_id, f: c1b?.filed_at, f0: c1?.filed_at } });
   const u3 = await run(db, 'C', `update repair_claims set tech_address = 'ME' where id = 'c1'`);
   ok('U3 ลูกค้าใส่ที่อยู่ช่างเองไม่ได้', !u3.ok && /เฉพาะแอดมิน/.test(u3.err ?? ''), u3.err);
+  // v90: แอดมินข้ามขั้น / ย้อนขั้น ไม่ได้
+  const g1 = await run(db, 'X', `update repair_claims set status = 'returned', back_tracking = 'X', back_sent_at = now() where id = 'c1'`);
+  ok('G1 [v90] แอดมินข้ามขั้น filed → returned ไม่ได้', !g1.ok && /ถูกแก้จากเครื่องอื่น/.test(g1.err ?? ''), g1.err);
   const a1 = await run(db, 'X', `update repair_claims set status = 'address_sent', tech_address = 'ช่าง A', address_sent_at = now(), address_sent_by = 'uX' where id = 'c1'`);
   ok('A1 แอดมินส่งที่อยู่ช่าง', a1.ok && (await claim(db, 'c1')).status === 'address_sent', a1.err);
+  // v90: เครื่องที่สอง (หน้าจอเก่า) ส่งที่อยู่ซ้ำ — patch เดียวกับเครื่องแรก (status + ที่อยู่ + เวลา) → ตีกลับ ไม่ทับ ไม่ push ซ้ำ
+  const g2 = await run(db, 'X', `update repair_claims set status = 'address_sent', tech_address = 'ช่าง B', address_sent_at = now(), address_sent_by = 'uX' where id = 'c1'`);
+  ok('G2 [v90] แอดมินเครื่องที่สองส่งที่อยู่ซ้ำ → ตีกลับ ที่อยู่เดิมคงอยู่', !g2.ok && (await claim(db, 'c1')).tech_address === 'ช่าง A', g2.err);
+  const g3 = await run(db, 'X', `update repair_claims set admin_note = 'โน้ต', address_note = 'แพ็คดีๆ' where id = 'c1'`);
+  ok('G3 [v90] แอดมินแก้โน้ต/ข้อความ (สถานะเดิม) ได้', g3.ok && (await claim(db, 'c1')).admin_note === 'โน้ต', g3.err);
   const u4 = await run(db, 'C', `update repair_claims set status = 'sent_to_tech', out_carrier = 'jt', out_tracking = '' where id = 'c1'`);
   ok('U4 แจ้งเลขว่างไม่ได้', !u4.ok && /ใส่เลขพัสดุ/.test(u4.err ?? ''), u4.err);
   const u5 = await run(db, 'C', `update repair_claims set status = 'sent_to_tech', out_carrier = 'jt', out_tracking = 'JT1', out_sent_at = now(), tech_address = 'X' where id = 'c1'`);
@@ -113,6 +121,10 @@ async function main() {
   const u8 = await run(db, 'C', `update repair_claims set status = 'rejected', rejected_at = now() where id = 'c1'`);
   ok('U8 ลูกค้าปิดเรื่องเองเป็น rejected ไม่ได้', !u8.ok, u8.err);
   const a2 = await run(db, 'X', `update repair_claims set status = 'returned', back_carrier = 'kerry', back_tracking = 'KR1', back_sent_at = now(), back_sent_by = 'uX' where id = 'c1'`);
+  const g4 = await run(db, 'X', `update repair_claims set status = 'returned', back_carrier = 'jt', back_tracking = 'JT9', back_sent_at = now() where id = 'c1'`);
+  ok('G4 [v90] แจ้งเลขส่งกลับซ้ำจากเครื่องที่สอง → ตีกลับ เลขเดิมคงอยู่', !g4.ok && (await claim(db, 'c1')).back_tracking === 'KR1', g4.err);
+  const g5 = await run(db, 'X', `update repair_claims set status = 'sent_to_tech' where id = 'c1'`);
+  ok('G5 [v90] แอดมินย้อนขั้น returned → sent_to_tech ไม่ได้', !g5.ok, g5.err);
   ok('A2 แอดมินแจ้งเลขส่งกลับ', a2.ok && (await claim(db, 'c1')).status === 'returned', a2.err);
   const u9 = await run(db, 'C', `update repair_claims set status = 'done', received_at = now() where id = 'c1'`);
   ok('U9 ลูกค้ากดได้รับของ = จบ', u9.ok && (await claim(db, 'c1')).status === 'done', u9.err);
@@ -126,6 +138,19 @@ async function main() {
   ok('U12 ลูกค้าลบเรื่องไม่ได้', (await claim(db, 'c12')) !== undefined, del.err);
   const a3 = await run(db, 'X', `update repair_claims set status = 'rejected', rejected_at = now(), rejected_by = 'uX', reject_reason = 'เกินกำหนด', admin_note = 'n' where id = 'c12'`);
   ok('A3 แอดมินไม่รับเรื่อง + โน้ต', a3.ok && (await claim(db, 'c12')).status === 'rejected', a3.err);
+  const g6 = await run(db, 'X', `update repair_claims set status = 'done', received_at = now() where id = 'c12'`);
+  ok('G6 [v90] เรื่องที่ปิดแล้ว แอดมินเปลี่ยนสถานะต่อไม่ได้', !g6.ok, g6.err);
+  // v90: ส่งแถวซ้ำ (upsert ทั้งแถว) ตอนเรื่องไม่ได้อยู่ขั้นยื่นแล้ว → ต้อง error ไม่ใช่เงียบ (บัญชีถูกระงับ: update โดน 0 แถว แอปถอยมา upsert)
+  const g7 = await run(db, 'C', `insert into repair_claims (id, ticket_id, user_id, status, description, images) values ('c1','t1','uC','filed','แขนหัก','["a.jpg"]') on conflict (id) do update set description = excluded.description`);
+  ok('G7 [v90] upsert ซ้ำบนเรื่องที่จบแล้ว → ryuma: error ไม่ใช่สำเร็จปลอม', !g7.ok && /ryuma:/.test(g7.err ?? ''), g7.err);
+  await db.exec(`set session_replication_role = replica;`);
+  await db.query(`update users set suspended = true where id = 'uC'`);
+  await db.exec(`set session_replication_role = origin;`);
+  const g8 = await run(db, 'C', `insert into repair_claims (id, ticket_id, user_id, status, description, images) values ('c12','t1','uC','filed','x','[]') on conflict (id) do update set description = excluded.description`);
+  ok('G8 [v90] บัญชีถูกระงับ upsert แถวเดิม → error (ไม่เงียบ)', !g8.ok, g8.err);
+  await db.exec(`set session_replication_role = replica;`);
+  await db.query(`update users set suspended = false where id = 'uC'`);
+  await db.exec(`set session_replication_role = origin;`);
 
   // ── ตั้งค่า + fingerprint ──
   const cfg = await run(db, 'X', `update app_config set value = '{"days":20,"transit_days":0,"address":"ช่าง B","v":89}' where key = 'repair_config' returning key`);
@@ -140,6 +165,9 @@ async function main() {
     (select count(*)::int from pg_trigger where tgname = 'repair_guard' and not tgisinternal) as trig,
     (select count(*)::int from app_config where key = 'repair_config' and (value->>'v')::int = 89) as cfg_v89`)).rows[0];
   ok('F1 fingerprint cols 26 · policies 4 · trig 1 · cfg_v89 1', fp.cols === 26 && fp.policies === 4 && fp.trig === 1 && fp.cfg_v89 === 1, fp);
+  const fp90 = (await db.query<Record<string, any>>(`select (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'ryuma_guard_repair' and p.prosrc like '%ถูกแก้จากเครื่องอื่นแล้ว%') as fn_v90`)).rows[0];
+  ok('F2 [v90] fingerprint fn_v90 = 1', fp90.fn_v90 === 1, fp90);
 
   console.log(`repair89-audit: ${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
