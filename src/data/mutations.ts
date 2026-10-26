@@ -1,4 +1,5 @@
-import type { ProductLine, LineMember, ExternalParcel } from '../domain/entities';
+import type { ProductLine, LineMember, ExternalParcel, RepairClaim } from '../domain/entities';
+import { repairWindow, REPAIR_CONFIG_KEY, MAX_REPAIR_IMAGES, type RepairConfig } from '../domain/services/repair';
 import type { Database, Order, OrderItem, Category, Manufacturer, Franchise, Series, Product, PaymentAccount, ProductStatus, Carrier, RankName, PreorderTicket, Coupon, CouponGrant, CouponScope, PointLedgerEntry, WcfType, Campaign, CampaignAward, MissionSubmission, PushSubscription as PushSubscriptionRow, SourcingTransport, SourcingMemo, StockCond, AuctionCond, DeliveryMethod, PaymentPlan, PayoutAccount, PayoutInfo, RemainingPayment } from '../domain/entities';
 import { NEW_STOCK_COND } from '../domain/entities';
 import type { CartLine } from '../state/CartProvider';
@@ -2580,6 +2581,106 @@ export const editExternalParcel = (id: string, patch: { name?: string; phone?: s
   ...db,
   externalParcels: db.externalParcels.map((p) => (p.id === id ? { ...p, ...patch } : p)),
 });
+
+// ── 🔧 เรื่องซ่อม (v89) — ด่านทุกจังหวะอยู่ใน mutation (ไม่ใช่แค่ปุ่ม) · trigger ฝั่ง DB คุมซ้ำ ─────
+const patchRepair = (db: Database, id: string, fn: (c: RepairClaim) => RepairClaim | null): Database => {
+  const c = db.repairClaims.find((x) => x.id === id);
+  if (!c) return db;
+  const next = fn(c);
+  if (!next) return db; // ด่านไม่ผ่าน = no-op (หน้าจออ่านกลับแล้วจะเห็นว่าไม่เปลี่ยน)
+  return { ...db, repairClaims: db.repairClaims.map((x) => (x.id === id ? next : x)) };
+};
+const claimLabel = (db: Database, c: RepairClaim) => db.tickets.find((t) => t.id === c.ticket_id)?.ticket_no ?? c.ticket_id;
+
+/** ลูกค้ายื่นเรื่อง — ด่าน: เจ้าของใบ · ส่งแล้ว · ในกำหนด · ไม่มีเรื่องค้าง (repairWindow) */
+export const fileRepairClaim = (input: { id: string; ticketId: string; userId: string; description: string; images: string[] }, now: Date = new Date()) => (db: Database): Database => {
+  const t = db.tickets.find((x) => x.id === input.ticketId);
+  if (!t) return db;
+  if (db.repairClaims.some((c) => c.id === input.id)) return db; // กดซ้ำ
+  const w = repairWindow(db, t, input.userId, now);
+  if (!w.ok) return db;
+  const claim: RepairClaim = {
+    id: input.id, ticket_id: t.id, user_id: input.userId, status: 'filed',
+    description: input.description.trim(), images: input.images.filter(Boolean).slice(0, MAX_REPAIR_IMAGES),
+    shipped_out_at: t.shipped_out_at, deadline_at: w.deadline, filed_at: now.toISOString(),
+  };
+  return { ...db, repairClaims: [claim, ...db.repairClaims] };
+};
+
+/** แอดมินส่งที่อยู่ช่าง (snapshot ลงเรื่อง — แก้ค่าตั้งต้นทีหลังไม่กระทบเรื่องเก่า) */
+export const sendRepairAddress = (claimId: string, actorId: string, address: string, note?: string) => (db: Database): Database => {
+  const addr = address.trim();
+  if (!addr) return db;
+  const now = new Date().toISOString();
+  const next = patchRepair(db, claimId, (c) => (c.status === 'filed'
+    ? { ...c, status: 'address_sent', tech_address: addr, address_note: note?.trim() || undefined, address_sent_at: now, address_sent_by: actorId }
+    : null));
+  if (next === db) return db;
+  const c = next.repairClaims.find((x) => x.id === claimId)!;
+  return logActivity(actorId, 'repair_address', `ส่งที่อยู่ช่างให้ลูกค้า (เรื่องซ่อม ${claimLabel(db, c)})`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+};
+
+/** ลูกค้า (หรือแอดมินแทน) แจ้งเลขพัสดุที่ส่งไปช่าง → จดวันที่ส่ง */
+export const setRepairOutTracking = (claimId: string, carrier: Carrier, tracking: string, actorId?: string) => (db: Database): Database => {
+  const no = tracking.trim();
+  if (!no) return db;
+  const now = new Date().toISOString();
+  const next = patchRepair(db, claimId, (c) => (c.status === 'address_sent'
+    ? { ...c, status: 'sent_to_tech', out_carrier: carrier, out_tracking: no, out_sent_at: now }
+    : null));
+  if (next === db || !actorId) return next;
+  const c = next.repairClaims.find((x) => x.id === claimId)!;
+  return logActivity(actorId, 'repair_out', `บันทึกเลขพัสดุส่งไปช่างแทนลูกค้า ${carrier.toUpperCase()} ${no} (เรื่องซ่อม ${claimLabel(db, c)})`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+};
+
+/** แอดมินแจ้งเลขพัสดุที่ช่างส่งคืนลูกค้า */
+export const setRepairBackTracking = (claimId: string, actorId: string, carrier: Carrier, tracking: string) => (db: Database): Database => {
+  const no = tracking.trim();
+  if (!no) return db;
+  const now = new Date().toISOString();
+  const next = patchRepair(db, claimId, (c) => (c.status === 'sent_to_tech'
+    ? { ...c, status: 'returned', back_carrier: carrier, back_tracking: no, back_sent_at: now, back_sent_by: actorId }
+    : null));
+  if (next === db) return db;
+  const c = next.repairClaims.find((x) => x.id === claimId)!;
+  return logActivity(actorId, 'repair_back', `แจ้งเลขพัสดุส่งคืน ${carrier.toUpperCase()} ${no} (เรื่องซ่อม ${claimLabel(db, c)})`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+};
+
+/** ลูกค้ากดได้รับของ (หรือแอดมินปิดเรื่องแทน) = จบ */
+export const markRepairReceived = (claimId: string, actorId?: string) => (db: Database): Database => {
+  const now = new Date().toISOString();
+  const next = patchRepair(db, claimId, (c) => (c.status === 'returned' ? { ...c, status: 'done', received_at: now } : null));
+  if (next === db || !actorId) return next;
+  const c = next.repairClaims.find((x) => x.id === claimId)!;
+  return logActivity(actorId, 'repair_done', `ปิดเรื่องซ่อม ${claimLabel(db, c)}`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+};
+
+/** แอดมินไม่รับเรื่อง (ต้องมีเหตุผล) — ทำได้ก่อนของจะถูกส่งไปช่างเท่านั้น */
+export const rejectRepairClaim = (claimId: string, actorId: string, reason: string) => (db: Database): Database => {
+  const why = reason.trim();
+  if (!why) return db;
+  const now = new Date().toISOString();
+  const next = patchRepair(db, claimId, (c) => (c.status === 'filed' || c.status === 'address_sent'
+    ? { ...c, status: 'rejected', rejected_at: now, rejected_by: actorId, reject_reason: why }
+    : null));
+  if (next === db) return db;
+  const c = next.repairClaims.find((x) => x.id === claimId)!;
+  return logActivity(actorId, 'repair_reject', `ไม่รับเรื่องซ่อม ${claimLabel(db, c)}: ${why}`, { targetId: c.ticket_id, targetLabel: claimLabel(db, c) })(next);
+};
+
+/** โน้ตของแอดมิน (หน้าลูกค้าไม่วาด — แต่แถวทั้งแถวอ่านได้โดยเจ้าของเรื่องตาม RLS จึงไม่ใช่ที่เก็บความลับ) */
+export const setRepairNote = (claimId: string, note: string) => (db: Database): Database =>
+  patchRepair(db, claimId, (c) => ({ ...c, admin_note: note.trim() || undefined }));
+
+/** ตั้งค่า: ที่อยู่ช่างตั้งต้น + จำนวนวันเคลม/วันเผื่อขนส่ง */
+export const setRepairConfig = (actorId: string, cfg: RepairConfig) => (db: Database): Database => {
+  // ตรา v (ใส่โดย SQL v89 = ตารางพร้อม) ต้องติดไปด้วยทุกครั้งที่เซฟ ไม่งั้นระบบปิดตัวเองหลังแก้ที่อยู่
+  const prev = db.appConfig.find((c) => c.key === REPAIR_CONFIG_KEY)?.value ?? {};
+  const value: Record<string, unknown> = { days: Math.max(0, Math.floor(cfg.days)), transit_days: Math.max(0, Math.floor(cfg.transit_days)), address: cfg.address.trim() };
+  if (prev.v !== undefined) value.v = prev.v;
+  const next: Database = { ...db, appConfig: [{ key: REPAIR_CONFIG_KEY, value }, ...db.appConfig.filter((c) => c.key !== REPAIR_CONFIG_KEY)] };
+  return logActivity(actorId, 'repair_config', `ตั้งค่าเรื่องซ่อม: เคลมได้ ${value.days} วัน + เผื่อขนส่ง ${value.transit_days} วัน`)(next);
+};
 
 export const upsertProductLine = (line: ProductLine) => (db: Database): Database => ({
   ...db,

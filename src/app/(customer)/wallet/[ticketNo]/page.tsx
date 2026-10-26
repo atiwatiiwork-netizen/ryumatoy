@@ -30,6 +30,7 @@ import { shippingInfoOf, composeAddress, addressProblem, splitComposed } from '@
 import type { ProductStatus, PreorderTicket, DeliveryMethod, ShippingInfo } from '@/domain/entities';
 import Link from 'next/link';
 import { SellSheet } from '@/components/market/SellSheet';
+import { RepairSection } from '@/components/RepairSection';
 import { marketVisibleTo, directVisibleTo, activeListingOf, boughtFromMarket, dealStatusLabel, isDirect, sellBlockedForGood, marketLocked } from '@/domain/services/market';
 import type { SellMode } from '@/components/market/SellSheet';
 
@@ -215,6 +216,9 @@ export default function TicketDetailPage() {
           <div className="text-[13px] text-[#4ade80]"><b>รับของเรียบร้อยแล้ว ✓</b> · {DELIVERY_METHOD_LABEL[ticket.delivery.method]}</div>
         </div>
       )}
+
+      {/* 🔧 เรื่องซ่อม (v89): ใบที่ส่งแล้ว — ยื่นเรื่อง / ติดตาม / แจ้งเลขพัสดุ / กดได้รับ */}
+      {isShipped && <RepairSection ticket={ticket} />}
 
       <div className="mb-3.5 rounded-card border border-subtle bg-surface-2 p-4">
         <div className="mb-2 flex justify-between text-[13px]"><span className="text-[#4ade80]">มัดจำที่จ่ายแล้ว ✓</span><span className="font-bold">{baht(ticket.deposit_paid)}</span></div>

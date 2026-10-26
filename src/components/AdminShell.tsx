@@ -9,6 +9,7 @@ import { useToast } from '@/state/ToastProvider';
 import { store } from '@/data/store';
 import { deliveryRequests, parcelQueue, handoffQueue, awaitingChoice } from '@/domain/services/delivery';
 import { worklist, plansDue, dataIssues, collectableTickets } from '@/domain/services/worklist';
+import { repairAdminTodo } from '@/domain/services/repair';
 import { needsClose } from '@/domain/services/auctions';
 import { marketQueue } from '@/domain/services/market';
 import { pendingRpGroups } from '@/domain/services/payments';
@@ -142,6 +143,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const marketJobs = marketQueue(db).jobs;
   // ตามของ (เจ้าของ 2026-10-10): ของถึงไทยแล้วแต่ลูกค้ายังค้างส่วนต่าง — ทวงได้เลย
   const collectJobs = collectableTickets(db).length;
+  // เรื่องซ่อม (v89): ลูกค้าเพิ่งยื่น / ของอยู่ที่ช่างรอแจ้งเลขส่งกลับ
+  const repairJobs = repairAdminTodo(db);
 
   type NavItem = { href: string; icon: IconName; label: string; active: boolean; badge?: number; sub?: string };
   const it = (href: string, icon: IconName, label: string, badge?: number, sub?: string): NavItem =>
@@ -159,6 +162,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       it('/admin/today', 'bolt', 'งานค้างวันนี้', todayJobs, 'เปิดมาดูอันนี้ก่อน'),
       it('/admin/orders', 'ticket', 'สลิป / ออเดอร์', pending.length + pendingRP, 'ตรวจเงินเข้า'),
       it('/admin/shipping', 'truck', 'จัดส่ง', shippingJobs, 'แพ็ค → เลขพัสดุ'),
+      it('/admin/repairs', 'wrench', 'เรื่องซ่อม', repairJobs, 'ของชำรุด → ที่อยู่ช่าง → เลขพัสดุ'),
       it('/admin/sourcing', 'search', 'หาของ', sourcingJobs, 'ตามของให้ลูกค้า'),
     ] },
     { title: 'ของ & รอบขาย', items: [

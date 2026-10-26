@@ -158,7 +158,7 @@ async function fetchAll(sb: SupabaseClient, table: string): Promise<{ data: unkn
 export const supabaseAdapter: PersistenceAdapter = {
   async load(): Promise<Database> {
     const sb = client();
-    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, productLines, externalParcels, settings] =
+    const [users, categories, manufacturers, franchises, series, products, boards, boardLogs, batches, stockAdditions, variants, orders, orderItems, tickets, remainingPayments, rankRequests, stockReservations, transfers, coupons, couponGrants, campaigns, campaignAwards, pushSubscriptions, pushPrefs, pushConfig, sourcingRequests, sourcingMemos, missionSubmissions, appConfig, rankTiers, paymentAccounts, activityLogs, paymentPlans, auctions, auctionBids, auctionWatch, auctionEntries, pointLedger, productLines, externalParcels, repairClaims, settings] =
       await Promise.all([
         fetchAll(sb, 'users'),
         fetchAll(sb, 'categories'),
@@ -209,6 +209,8 @@ export const supabaseAdapter: PersistenceAdapter = {
         fetchAll(sb, 'product_lines'),
         // ลูกค้านอกระบบ (v82) — ตารางยังไม่มี = [] · RLS แอดมินเท่านั้น
         fetchAll(sb, 'external_parcels'),
+        // เรื่องซ่อม (v89) — ตารางยังไม่มี = [] · RLS ลูกค้าเห็นเฉพาะของตัวเอง
+        fetchAll(sb, 'repair_claims'),
         fetchAll(sb, 'shop_settings'),
       ]);
 
@@ -291,6 +293,10 @@ export const supabaseAdapter: PersistenceAdapter = {
           : [],
       })) as unknown as Database['productLines'],
       externalParcels: (externalParcels.data ?? []) as Database['externalParcels'],
+      repairClaims: ((repairClaims.data ?? []) as Array<Row & { images?: unknown }>).map((c) => ({
+        ...c,
+        images: Array.isArray(c.images) ? (c.images as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+      })) as unknown as Database['repairClaims'],
       settings: s
         ? {
             bank_name: String(s.bank_name ?? ''),
@@ -403,6 +409,9 @@ export const supabaseAdapter: PersistenceAdapter = {
     await step('remaining_payments', () => syncTable(sb, 'remaining_payments', next.remainingPayments as unknown as Row[], base.remainingPayments as unknown as Row[]));
     // market_rev = เลขรุ่นของตั๋ว (v74) ส่งค่าที่โหลดมาไปด้วยทุกครั้ง — เซิร์ฟเวอร์ปฏิเสธการแก้เงิน/สถานะจากหน้าจอที่เก่ากว่าไฟนอล
     await step('preorder_tickets', () => syncTablePatch(sb, 'preorder_tickets', next.tickets as unknown as Row[], base.tickets as unknown as Row[], 'id', ['market_rev']));
+    // เรื่องซ่อม (v89): ลูกค้ากับแอดมินเขียนคนละช่องของแถวเดียวกัน (ลูกค้า = เลขส่งไปช่าง · แอดมิน = ที่อยู่/เลขส่งกลับ)
+    //   → ส่งเฉพาะช่องที่เปลี่ยน ไม่งั้นหน้าจอลูกค้าที่โหลดค้างไว้จะ upsert ทั้งแถวทับที่อยู่ที่แอดมินเพิ่งส่ง · trigger คุมสิทธิ์ต่อช่อง
+    await step('repair_claims', () => syncTablePatch(sb, 'repair_claims', next.repairClaims as unknown as Row[], base.repairClaims as unknown as Row[]));
 
     await step('rank_requests', () => syncTable(sb, 'rank_requests', next.rankRequests as unknown as Row[], base.rankRequests as unknown as Row[]));
     // ticket_transfers (ตลาดใบพรี v71): **ไม่ sync โดยตั้งใจ** — ทุกการเปลี่ยนสถานะผ่าน RPC ryuma_market_* เท่านั้น

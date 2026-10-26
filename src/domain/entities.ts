@@ -171,6 +171,39 @@ export interface ExternalParcel {
   notified_by?: string;
   dropped_at?: string;
 }
+/** เรื่องซ่อม (v89 · เจ้าของ 2026-10-26): ลูกค้าได้รับของแล้วชำรุด → ยื่นเรื่อง → แอดมินส่งที่อยู่ช่าง →
+ *  ลูกค้าส่งของ+แจ้งเลขพัสดุ → ช่างส่งคืน → แอดมินแจ้งเลขส่งกลับ → ลูกค้ากดได้รับ = จบ
+ *  กฎเคลม: นับจาก "วันที่ส่งของ" (ticket.shipped_out_at — ระบบไม่มีวันรับจริง) + days + transit_days (repair_config)
+ *  ลูกค้าเขียนได้แค่ 3 จังหวะ (ยื่น / แจ้งเลขส่งไปช่าง / กดได้รับ) — trigger ryuma_guard_repair คุมฝั่ง DB */
+export type RepairStatus = 'filed' | 'address_sent' | 'sent_to_tech' | 'returned' | 'done' | 'rejected';
+export interface RepairClaim {
+  id: string;
+  ticket_id: string;
+  user_id: string;          // เจ้าของตั๋ว ณ ตอนยื่น (owner_id)
+  status: RepairStatus;
+  description: string;
+  images: string[];
+  shipped_out_at?: string;  // snapshot จากตั๋ว
+  deadline_at?: string;     // snapshot กำหนดยื่น (server คำนวณทับตอน insert)
+  filed_at: string;
+  tech_address?: string;    // ที่อยู่ช่างที่ส่งให้ (snapshot)
+  address_note?: string;
+  address_sent_at?: string;
+  address_sent_by?: string;
+  out_carrier?: Carrier;    // ลูกค้า → ช่าง
+  out_tracking?: string;
+  out_sent_at?: string;
+  back_carrier?: Carrier;   // ช่าง → ลูกค้า
+  back_tracking?: string;
+  back_sent_at?: string;
+  back_sent_by?: string;
+  received_at?: string;
+  rejected_at?: string;
+  rejected_by?: string;
+  reject_reason?: string;
+  admin_note?: string;
+  updated_at?: string;
+}
 export interface ProductLine {
   id: string;
   maker_id: string;            // ค่าย (บังคับ — แยกค่ายแยกไลน์)
@@ -794,6 +827,7 @@ export interface Database {
   pointLedger: PointLedgerEntry[]; // สมุดคะแนนสะสม (v66) — บวก/ลบ ไม่แก้แถวเก่า
   productLines: ProductLine[];     // ไลน์ (พรียกไลน์ · v81) — ยังไม่รัน migration = [] (ไม่ทำให้แอปโหลดพัง)
   externalParcels: ExternalParcel[]; // ลูกค้านอกระบบ รอแจ้ง/แจ้งแล้ว (v82) — ยังไม่รัน = []
+  repairClaims: RepairClaim[];       // เรื่องซ่อม (v89) — ยังไม่รัน = []
   settings: ShopSettings;
 }
 
