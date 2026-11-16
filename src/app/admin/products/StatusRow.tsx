@@ -54,7 +54,7 @@ export function StatusRow({ product: p }: { product: Product }) {
   const target = lagTarget(p);
   const [catching, setCatching] = useState(false);
   const doCatchUp = async () => {
-    if (!target || behind.length === 0 || catching) return;
+    if (target !== 'arrived' || behind.length === 0 || catching) return;
     const label = STATUS[target as StatusKey].label;
     const names = behind.map((t) => `· ${userName(t.owner_id)} (${t.ticket_no})`).join('\n');
     if (!confirm(`ดึงตั๋ว ${behind.length} ใบนี้ให้เป็น "${label}" ตามสินค้า?\n${names}\n\nกดเมื่อของใบเหล่านี้มากับล็อตนี้จริง — ลูกค้าจะเห็นใบในแท็บ "รอชำระ" และจ่ายส่วนต่างได้ทันที\nถ้าเป็นล็อตใหม่ที่ของยังไม่มา ไม่ต้องกด`)) return;
@@ -69,8 +69,7 @@ export function StatusRow({ product: p }: { product: Product }) {
       // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า
       { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ')); }
       let note = '';
-      const key = target === 'shipping' ? 'lot_shipping' : 'lot_arrived';
-      if (pushEnabled(db, key)) {
+      if (pushEnabled(db, 'lot_arrived')) {
         const targets = subsForUsers(db, owners);
         if (targets.length > 0) {
           try { const { sent } = await sendPush(targets, statusPushPayload(target, p.series_name), dispatch); if (sent > 0) note = ` · 🔔 แจ้งเตือนลูกค้า ${sent} เครื่องแล้ว`; }
@@ -147,7 +146,10 @@ export function StatusRow({ product: p }: { product: Product }) {
           <span className="min-w-0 flex-1 text-[12px] leading-snug text-[#fbbf24]">
             ⚠ มี {behind.length} ตั๋วที่ยังไม่เป็น "{STATUS[target as StatusKey].label}" ({[...new Set(behind.map((t) => userName(t.owner_id)))].join(', ')}) — ลูกค้ากลุ่มนี้ยังไม่เห็นใบในแท็บรอชำระ
           </span>
-          <button onClick={doCatchUp} disabled={catching} className="whitespace-nowrap rounded-lg bg-[#d97706] px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">ดึงสถานะให้ทัน</button>
+          {target === 'arrived'
+            ? <button onClick={doCatchUp} disabled={catching} className="whitespace-nowrap rounded-lg bg-[#d97706] px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">ดึงสถานะให้ทัน</button>
+            /* เป้า "เดินทาง" ต้องใส่วันเข้าโกดัง/ขนส่ง (เริ่มนับ ETA) — ทำที่หน้าสต๊อก */
+            : <Link href="/admin/stock" className="whitespace-nowrap rounded-lg border border-[#d97706]/50 px-3 py-1.5 text-[12px] font-bold text-[#fbbf24]">ไปหน้าสต๊อก →</Link>}
         </div>
       )}
 

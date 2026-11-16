@@ -94,8 +94,9 @@ ok('P1e ส่งของแล้วแต่ยังค้าง (ผิด�
     mk({ id: 't-batch', ticket_no: 'LG-2', product_id: p.id, batch_id: 'b-lag', product_status: 'production' }),
     mk({ id: 't-sent', ticket_no: 'LG-3', product_id: p.id, batch_id: 'b-lag', product_status: 'production', status: 'shipped' }),
   );
+  ok('P5g สินค้ายัง "เดินทาง": เตือนได้แต่ไม่ขยับ (ต้องใส่วันเข้าโกดังที่หน้าสต๊อก)', ticketsBehindProduct(db, p.id).some((t) => t.id === 't-batch') && catchUpTickets(p.id, ['t-batch'])(db) === db);
   db = setProductStatus(p.id, 'arrived')(db);
-  const get = (id: string) => db.tickets.find((t) => t.id === id)!;
+  const get =(id: string) => db.tickets.find((t) => t.id === id)!;
   ok('P5a กระดานหลักไปถึงไทย · ใบรอบพิเศษยังค้าง (ไม่ cascade ข้ามรอบ)', get('t-main').product_status === 'arrived' && get('t-batch').product_status === 'production' && !ticketPayable(get('t-batch')));
   const lag = ticketsBehindProduct(db, p.id);
   ok('P5b ตัวจับ "ค้างสถานะ" เจอใบรอบพิเศษ ไม่นับใบที่ส่งของแล้ว/ใบที่ทันแล้ว', lag.some((t) => t.id === 't-batch') && !lag.some((t) => t.id === 't-sent' || t.id === 't-main'), lag.map((t) => t.id));

@@ -1716,10 +1716,12 @@ export const setProductStatus = (productId: string, status: ProductStatus, extra
  * ไม่ cascade อัตโนมัติ: รอบพิเศษบางรอบเป็นของ "คนละล็อต" ที่ยังไม่มาจริง (บทเรียน F1/D1 + Kimimaro) คนเท่านั้นที่รู้
  * · เดินหน้าอย่างเดียว · ไม่แตะใบที่ส่งของแล้ว · ไม่แตะตัวสินค้า/รอบ/สต๊อก (ไม่มีผลข้างเคียงแปลงเป็น In-Stock)
  * · ticketIds = ใบที่แอดมินเห็นตอนกด (ใบที่โผล่มาทีหลังไม่ถูกลากไปด้วย) → ตัวเรียกต้อง read-back
+ * · เฉพาะเป้า "ถึงไทย" — เป้า "เดินทาง" ต้องมีวันเข้าโกดัง/ขนส่ง (จุดเริ่มนับ ETA) ซึ่งตั้งได้ที่หน้าสต๊อกเท่านั้น
+ *   ถ้าขยับตรงนี้ ใบจะหลุดคิวยืนยันโกดังและไม่มีวันคาดถึงถาวร
  */
 export const catchUpTickets = (productId: string, ticketIds: string[]) => (db: Database): Database => {
   const target = lagTarget(db.products.find((p) => p.id === productId));
-  if (!target) return db;
+  if (target !== 'arrived') return db;
   const ids = new Set(ticketsBehindProduct(db, productId).filter((t) => ticketIds.includes(t.id)).map((t) => t.id));
   if (ids.size === 0) return db;
   return { ...db, tickets: db.tickets.map((t) => (ids.has(t.id) ? { ...t, product_status: target } : t)) };
