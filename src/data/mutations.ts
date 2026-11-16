@@ -32,7 +32,7 @@ import { earnRowForTicket, reverseRowForTicket, ticketsMissingEarn, clampRedeem,
 import { MONTHLY_KEY, MONTHLY_CLOSED_KEY, closedMonths, computeMonthSnapshot, pendingBonusDiscount, bonusRows, ticketBuyer, ymLabel, type MonthlyConfig } from '../domain/services/monthly';
 import { ticketDue as ticketDueOf } from '../domain/services/money';
 import { marketLocked, hasMarketHistory, depositGap, ticketTransferred } from '../domain/services/market';
-import { ticketPayer } from '../domain/services/tickets';
+import { ticketPayer, lagTarget, ticketsBehindProduct } from '../domain/services/tickets';
 import { LINES_PUBLIC_KEY, cleanLineRow } from '../domain/services/lines';
 
 /** A coupon redemption passed in from the UI (grant id + baht discounted at that moment). */
@@ -1709,6 +1709,20 @@ export const setProductStatus = (productId: string, status: ProductStatus, extra
     return closed;
   }
   return base;
+};
+
+/**
+ * ดึงตั๋วที่สถานะ "ตามหลังสินค้า" ให้ทันสถานะสินค้า (เคส Pain 2026-11-16) — แอดมินกดเองรายสินค้าหลังเห็นคำเตือน
+ * ไม่ cascade อัตโนมัติ: รอบพิเศษบางรอบเป็นของ "คนละล็อต" ที่ยังไม่มาจริง (บทเรียน F1/D1 + Kimimaro) คนเท่านั้นที่รู้
+ * · เดินหน้าอย่างเดียว · ไม่แตะใบที่ส่งของแล้ว · ไม่แตะตัวสินค้า/รอบ/สต๊อก (ไม่มีผลข้างเคียงแปลงเป็น In-Stock)
+ * · ticketIds = ใบที่แอดมินเห็นตอนกด (ใบที่โผล่มาทีหลังไม่ถูกลากไปด้วย) → ตัวเรียกต้อง read-back
+ */
+export const catchUpTickets = (productId: string, ticketIds: string[]) => (db: Database): Database => {
+  const target = lagTarget(db.products.find((p) => p.id === productId));
+  if (!target) return db;
+  const ids = new Set(ticketsBehindProduct(db, productId).filter((t) => ticketIds.includes(t.id)).map((t) => t.id));
+  if (ids.size === 0) return db;
+  return { ...db, tickets: db.tickets.map((t) => (ids.has(t.id) ? { ...t, product_status: target } : t)) };
 };
 
 /**

@@ -2,7 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 process.env.TZ = 'Asia/Bangkok';
 import { SEED_DATABASE } from '../../src/data/seed';
-import { submitRemainingPayment, approveRemainingPayment, rejectRemainingPayment } from '../../src/data/mutations';
+import { submitRemainingPayment, approveRemainingPayment, rejectRemainingPayment, setProductStatus, catchUpTickets } from '../../src/data/mutations';
+import { ticketsBehindProduct } from '../../src/domain/services/tickets';
 import { ticketPayable, ticketSelectable, pendingRpGroups, payableTickets, walletTabOf, type WalletTab } from '../../src/domain/services/payments';
 import { ticketDone } from '../../src/domain/services/delivery';
 import type { Database, PreorderTicket } from '../../src/domain/entities';
@@ -81,6 +82,28 @@ ok('P1e ส่งของแล้วแต่ยังค้าง (ผิด�
     ['ส่งของแล้วแต่ค้าง (ผิดปกติ) → เรียบร้อย ไม่ให้จ่ายซ้ำ', mk({ product_id: pre, product_status: 'delivered', status: 'shipped' }), 'done'],
   ];
   for (const [name, t, want] of cases) ok(`P4 ${name}`, walletTabOf(db, t) === want, walletTabOf(db, t));
+}
+
+// ── P5: ตั๋วรอบพิเศษค้างสถานะหลังกระดานหลักกด "ถึงไทย" (เคส Pain 2026-11-16) ─────────────
+{
+  let db: Database = structuredClone(SEED_DATABASE);
+  const p = db.products.find((x) => !x.is_stock && x.status === 'shipping')!;
+  db.batches = [{ id: 'b-lag', product_id: p.id, label: 'ไล่เก็บ', price_total: 1000, deposit_amount: 300, stock_qty: 2, status: 'open', created_at: '2026-08-09T05:00:00.000Z' } as any, ...db.batches];
+  db.tickets.push(
+    mk({ id: 't-main', ticket_no: 'LG-1', product_id: p.id, product_status: 'shipping' }),
+    mk({ id: 't-batch', ticket_no: 'LG-2', product_id: p.id, batch_id: 'b-lag', product_status: 'production' }),
+    mk({ id: 't-sent', ticket_no: 'LG-3', product_id: p.id, batch_id: 'b-lag', product_status: 'production', status: 'shipped' }),
+  );
+  db = setProductStatus(p.id, 'arrived')(db);
+  const get = (id: string) => db.tickets.find((t) => t.id === id)!;
+  ok('P5a กระดานหลักไปถึงไทย · ใบรอบพิเศษยังค้าง (ไม่ cascade ข้ามรอบ)', get('t-main').product_status === 'arrived' && get('t-batch').product_status === 'production' && !ticketPayable(get('t-batch')));
+  const lag = ticketsBehindProduct(db, p.id);
+  ok('P5b ตัวจับ "ค้างสถานะ" เจอใบรอบพิเศษ ไม่นับใบที่ส่งของแล้ว/ใบที่ทันแล้ว', lag.some((t) => t.id === 't-batch') && !lag.some((t) => t.id === 't-sent' || t.id === 't-main'), lag.map((t) => t.id));
+  ok('P5c ไม่ได้เลือกใบ = ไม่ขยับ', catchUpTickets(p.id, ['t-nope'])(db) === db);
+  db = catchUpTickets(p.id, ['t-batch', 't-sent'])(db);
+  ok('P5d ดึงให้ทัน → ถึงไทย + เข้าแท็บรอชำระ', get('t-batch').product_status === 'arrived' && ticketPayable(get('t-batch')) && walletTabOf(db, get('t-batch')) === 'pay');
+  ok('P5e ใบที่ส่งของแล้วไม่ถูกแตะ · ใบนั้นไม่ค้างแล้ว', get('t-sent').product_status === 'production' && !ticketsBehindProduct(db, p.id).some((t) => t.id === 't-batch'));
+  ok('P5f กดซ้ำ = no-op', catchUpTickets(p.id, ['t-batch'])(db) === db);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

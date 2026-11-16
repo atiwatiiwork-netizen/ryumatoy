@@ -19,6 +19,27 @@ export function ticketRoot(db: Database, t: PreorderTicket): PreorderTicket | un
   return cur && !cur.split_from ? cur : undefined;
 }
 
+/**
+ * ตั๋วที่ "สถานะตามหลังตัวสินค้า" (เคส Pain 2026-11-16 · Madara 2026-09-28):
+ * ปุ่มสถานะของกระดานหลัก (setProductStatus) ขยับเฉพาะตั๋วที่ไม่ผูกรอบ — ตั๋วรอบพิเศษ/ไล่เก็บของ SKU เดียวกัน
+ * ที่ของมาล็อตเดียวกันจึงค้าง "ผลิต/เปิดจอง" ทั้งที่สินค้าขึ้น "ถึงไทย" แล้ว → ลูกค้าไม่เห็นใบในแท็บรอชำระ จ่ายไม่ได้
+ * และแอดมินมองไม่เห็นเพราะรายชื่อใต้สินค้าโชว์ทุกใบปนกัน. ตัวนี้คือแหล่งความจริงเดียวของ "ใบไหนค้าง"
+ * (StatusRow ใช้เตือน + mutation catchUpTickets ใช้ขยับ) · เป้า = สถานะสินค้า (delivered นับเป็นถึงไทย)
+ */
+const LAG_ORDER = ['open', 'production', 'shipping', 'arrived', 'delivered', 'closed'];
+export function lagTarget(product: { status: string; is_stock?: boolean } | undefined): 'shipping' | 'arrived' | null {
+  if (!product || product.is_stock) return null;
+  if (product.status === 'shipping') return 'shipping';
+  if (product.status === 'arrived' || product.status === 'delivered') return 'arrived';
+  return null;
+}
+export function ticketsBehindProduct(db: Database, productId: string): PreorderTicket[] {
+  const target = lagTarget(db.products.find((p) => p.id === productId));
+  if (!target) return [];
+  const goal = LAG_ORDER.indexOf(target);
+  return db.tickets.filter((t) => t.product_id === productId && t.status !== 'shipped' && LAG_ORDER.indexOf(t.product_status) < goal);
+}
+
 /** สถานะดีลที่ "ปิดการขายแล้ว" (ตั๋วเปลี่ยนมือจริง) — รวมชื่อเก่า 'approved' ของ scaffold ก่อน v71 */
 export const TRANSFER_DONE = new Set(['done', 'approved']);
 

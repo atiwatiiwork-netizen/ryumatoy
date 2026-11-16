@@ -13,13 +13,15 @@ import { useDatabase, useDispatch } from '@/state/DataProvider';
 import { useToast } from '@/state/ToastProvider';
 import { STATUS } from '@/lib/theme';
 import type { StatusKey } from '@/lib/theme';
-import { TicketQr, cx } from '@/components/ui';
+import { TicketQr, StatusBadge, cx } from '@/components/ui';
+import { ticketBadgeKey } from '@/domain/services/delivery';
+import { ticketsBehindProduct, lagTarget } from '@/domain/services/tickets';
 import { franchiseOf, orderedQtyOf } from '@/domain/services/catalog';
 import { productAwaitingWarehouse } from '@/domain/services/warehouse';
 import { store } from '@/data/store';
 import { persistFailText } from '@/data/persistErrors';
-import { sendPush, subsForProductOwners, statusPushPayload, pushEnabled } from '@/lib/push';
-import { setProductStatus, closeProduction } from '@/data/mutations';
+import { sendPush, subsForProductOwners, subsForUsers, statusPushPayload, pushEnabled } from '@/lib/push';
+import { setProductStatus, closeProduction, catchUpTickets } from '@/data/mutations';
 import type { Product, ProductStatus } from '@/domain/entities';
 
 const LOT_STEPS: ProductStatus[] = ['open', 'production', 'shipping', 'arrived', 'delivered'];
@@ -46,8 +48,44 @@ export function StatusRow({ product: p }: { product: Product }) {
   const userName = (uid: string) => db.users.find((u) => u.id === uid)?.display_name ?? '—';
   const ticketUrl = (no: string) => (typeof window !== 'undefined' ? `${window.location.origin}/wallet/${encodeURIComponent(no)}` : no);
 
+  // ตั๋วที่สถานะตามหลังสินค้า (รอบพิเศษ/ไล่เก็บที่ปุ่มกระดานหลักไม่ได้พาไป) — ลูกค้ากลุ่มนี้ยังจ่ายส่วนต่างไม่ได้
+  const behind = ticketsBehindProduct(db, p.id);
+  const behindIds = new Set(behind.map((t) => t.id));
+  const target = lagTarget(p);
+  const [catching, setCatching] = useState(false);
+  const doCatchUp = async () => {
+    if (!target || behind.length === 0 || catching) return;
+    const label = STATUS[target as StatusKey].label;
+    const names = behind.map((t) => `· ${userName(t.owner_id)} (${t.ticket_no})`).join('\n');
+    if (!confirm(`ดึงตั๋ว ${behind.length} ใบนี้ให้เป็น "${label}" ตามสินค้า?\n${names}\n\nกดเมื่อของใบเหล่านี้มากับล็อตนี้จริง — ลูกค้าจะเห็นใบในแท็บ "รอชำระ" และจ่ายส่วนต่างได้ทันที\nถ้าเป็นล็อตใหม่ที่ของยังไม่มา ไม่ต้องกด`)) return;
+    setCatching(true);
+    try {
+      const ids = behind.map((t) => t.id);
+      const owners = [...new Set(behind.map((t) => t.owner_id))];
+      dispatch(catchUpTickets(p.id, ids));
+      let left = 0;
+      dispatch((d) => { left = ticketsBehindProduct(d, p.id).filter((t) => ids.includes(t.id)).length; return d; });
+      if (left > 0) return flash('เปลี่ยนสถานะไม่สำเร็จ — ลองรีเฟรชแล้วกดใหม่');
+      // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า
+      { const pf = await store.flush(); if (pf) return flash(persistFailText(pf, 'บันทึกไม่สำเร็จ — ยังไม่ได้แจ้งลูกค้า ระบบลองใหม่ให้เอง รอสักครู่แล้วรีเฟรชเช็คสถานะ')); }
+      let note = '';
+      const key = target === 'shipping' ? 'lot_shipping' : 'lot_arrived';
+      if (pushEnabled(db, key)) {
+        const targets = subsForUsers(db, owners);
+        if (targets.length > 0) {
+          try { const { sent } = await sendPush(targets, statusPushPayload(target, p.series_name), dispatch); if (sent > 0) note = ` · 🔔 แจ้งเตือนลูกค้า ${sent} เครื่องแล้ว`; }
+          catch { note = ' · ⚠ ส่งแจ้งเตือนไม่สำเร็จ — สถานะบันทึกแล้ว'; }
+        }
+      }
+      flash(`${p.series_name}: ดึง ${ids.length} ตั๋วเป็น "${label}" แล้ว ✓${note}`);
+    } finally { setCatching(false); }
+  };
+
   const advance = async (extra?: { tracking_no?: string; shipped_at?: string }) => {
     if (!next) return;
+    // นับเฉพาะใบที่ปุ่มนี้ขยับจริง (กระดานหลัก) — เดิมโชว์จำนวนตั๋วทั้ง SKU ทำให้เข้าใจว่ารอบพิเศษไปด้วย
+    const movedN = db.tickets.filter((t) => t.product_id === p.id && !t.batch_id && t.status !== 'shipped'
+      && LOT_STEPS.includes(t.product_status) && LOT_STEPS.indexOf(t.product_status) < LOT_STEPS.indexOf(next)).length;
     dispatch(setProductStatus(p.id, next, extra));
     // DNA save: เซฟให้ผ่านก่อนค่อยแจ้งลูกค้า/ขึ้น ✓ — push "ถึงไทย มาจ่ายส่วนต่าง" ที่ออกไปทั้งที่
     // สถานะยังไม่ถูกบันทึก = ลูกค้าเปิดตั๋วมายังเป็นสถานะเดิม กดจ่ายไม่ได้ (audit 2026-08-08)
@@ -70,7 +108,7 @@ export function StatusRow({ product: p }: { product: Product }) {
         }
       }
     }
-    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${count} ตั๋ว${note}`);
+    flash(`${p.series_name} → ${STATUS[next as StatusKey].label} · ${movedN} ตั๋ว${note}`);
     setOpen(false);
   };
   // ปิดใบพรี = เปิดจอง → ผลิต ผ่าน closeProduction (โค้ดเดียวกับหน้า ปิดรอบสั่งผลิต)
@@ -104,6 +142,15 @@ export function StatusRow({ product: p }: { product: Product }) {
         )}
       </div>
 
+      {behind.length > 0 && target && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-[#d97706]/40 bg-[#d97706]/[0.1] px-3 py-2">
+          <span className="min-w-0 flex-1 text-[12px] leading-snug text-[#fbbf24]">
+            ⚠ มี {behind.length} ตั๋วที่ยังไม่เป็น "{STATUS[target as StatusKey].label}" ({[...new Set(behind.map((t) => userName(t.owner_id)))].join(', ')}) — ลูกค้ากลุ่มนี้ยังไม่เห็นใบในแท็บรอชำระ
+          </span>
+          <button onClick={doCatchUp} disabled={catching} className="whitespace-nowrap rounded-lg bg-[#d97706] px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">ดึงสถานะให้ทัน</button>
+        </div>
+      )}
+
       {open && p.status === 'open' && (
         <div className="mt-2 flex items-center gap-2">
           <span className="text-[12px] text-ink-muted">สั่งไฟนอล</span>
@@ -135,6 +182,7 @@ export function StatusRow({ product: p }: { product: Product }) {
                     <div className="truncate text-[13px] font-semibold">{userName(t.owner_id)}</div>
                     <div className="text-[11px] text-ink-faint">{new Date(t.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })} · <span className="font-mono">{t.ticket_no}</span></div>
                   </div>
+                  <StatusBadge status={ticketBadgeKey(t) as StatusKey} className={cx(behindIds.has(t.id) && 'ring-1 ring-[#d97706]')} />
                   <span className="whitespace-nowrap text-[11px] font-bold text-primary-soft">ดูตั๋ว →</span>
                 </Link>
               ))}
